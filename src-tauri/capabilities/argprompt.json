@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "argprompt",
+  "description": "Capability for the snippet argument prompt window",
+  "windows": ["argprompt"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "core:event:allow-listen",
+    "core:event:allow-emit"
+  ]
+}
