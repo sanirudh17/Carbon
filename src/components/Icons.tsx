@@ -43,6 +43,20 @@ export const CodeIcon: React.FC<{ className?: string }> = ({ className = 'icon' 
   </svg>
 );
 
+export const ChevronDownIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="m6 9.5 6 5.5 6-5.5" />
+  </svg>
+);
+
+export const HelpIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M9.7 9.3a2.4 2.4 0 0 1 4.66.8c0 1.5-2.36 1.9-2.36 3.15" />
+    <path d="M12 16.6h.01" strokeWidth="2.2" />
+  </svg>
+);
+
 export const RichTextIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
     <path d="M4 5h16" />
@@ -321,9 +335,11 @@ export const MoreIcon: React.FC<{ className?: string }> = ({ className = 'icon' 
 
 export const SnippetIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M8 5.5 3.5 12 8 18.5" />
-    <path d="M16 5.5 20.5 12 16 18.5" />
-    <path d="M13 4.5 11 19.5" />
+    {/* Scissors — "snip"-pets; deliberately unrelated to the Code type glyph */}
+    <circle cx="6" cy="6" r="2.6" />
+    <circle cx="6" cy="18" r="2.6" />
+    <path d="M8.25 7.55 20 19.25" />
+    <path d="M20 4.75 8.25 16.45" />
   </svg>
 );
 

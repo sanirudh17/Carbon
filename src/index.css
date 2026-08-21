@@ -3934,25 +3934,11 @@ section:last-child {
   flex-direction: column;
 }
 
-.sn-tag-select {
+/* Tag filter uses the shared custom dropdown */
+.sn-tag-dd {
   height: 36px;
-  border-radius: var(--r-btn);
-  background: var(--elev);
-  border: 1px solid var(--line);
-  color: var(--text-2);
-  font-size: 12px;
-  font-family: var(--font);
-  padding: 0 8px;
-  outline: none;
-  cursor: pointer;
-  max-width: 150px;
+  max-width: 170px;
   flex-shrink: 0;
-}
-
-.sn-tag-select:hover,
-.sn-tag-select:focus {
-  border-color: var(--line);
-  color: var(--text);
 }
 
 .snippets-list {
@@ -4229,33 +4215,40 @@ section:last-child {
   color: var(--text-3);
 }
 
-/* Confirmation pill */
+/* Confirmation pill — a quiet, momentary acknowledgment, centered in the
+   window so it can never collide with corner action buttons. */
 .sn-confirm-pill {
   position: fixed;
-  right: 22px;
-  bottom: 22px;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   z-index: 1200;
   display: flex;
   align-items: center;
-  gap: 7px;
-  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 70%, #312E81));
-  color: #fff;
+  gap: 8px;
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  box-shadow: 0 14px 36px -12px rgba(0, 0, 0, 0.55);
+  color: var(--text);
   font-size: 12.5px;
   font-weight: 550;
-  padding: 9px 16px;
+  padding: 9px 15px;
   border-radius: 999px;
-  box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.55), 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
-  animation: snPillIn 180ms var(--ease-out);
+  animation: snPillIn 170ms var(--ease-out);
 }
 
 .sn-confirm-pill svg {
   width: 13px;
   height: 13px;
+  color: var(--accent);
+  flex-shrink: 0;
 }
 
 @keyframes snPillIn {
-  from { opacity: 0; transform: translateY(8px) scale(0.92); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.94); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 
 /* ── Create/Edit modal ── */
@@ -4267,7 +4260,7 @@ section:last-child {
 
 .sn-modal-body {
   display: grid;
-  grid-template-columns: 1fr 260px;
+  grid-template-columns: 1fr 272px;
   gap: 16px;
   overflow-y: auto;
   padding: 14px 16px;
@@ -4343,55 +4336,300 @@ section:last-child {
 .sn-tok-cursor { color: var(--sn-tok-cursor); font-weight: 700; }
 .sn-tok-bad { color: var(--sn-tok-bad); font-weight: 700; text-decoration: underline wavy color-mix(in srgb, var(--sn-tok-bad) 55%, transparent) 1px; }
 
-/* ── Snippet editor placeholder tray ─────────────────── */
-.sn-legend-tray {
+/* ── Snippets UI polish: shared dropdown ─────────────────────────────── */
+.c-dropdown {
+  position: relative;
+  display: inline-flex;
+}
+
+.c-dropdown-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: 34px;
+  padding: 0 9px;
+  border-radius: var(--r-btn);
+  border: 1px solid var(--line-soft);
+  background: var(--elev);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 80ms ease, background 80ms ease;
+}
+
+.c-dropdown-trigger:hover {
+  border-color: var(--line);
+  background: var(--elev-hover);
+}
+
+.c-dropdown[data-open] .c-dropdown-trigger {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.c-dropdown-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.c-dropdown-value-ic {
+  display: inline-flex;
+  color: var(--text-2);
+}
+
+.c-dropdown-value-ic svg {
+  width: 14px;
+  height: 14px;
+}
+
+.c-dropdown-chev {
+  width: 13px !important;
+  height: 13px !important;
+  color: var(--text-3);
+  flex-shrink: 0;
+  transition: transform 130ms var(--ease-out);
+}
+
+.c-dropdown[data-open] .c-dropdown-chev {
+  transform: rotate(180deg);
+}
+
+.c-dropdown-list {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  z-index: 1300;
+  min-width: max(100%, 150px);
+  max-height: 264px;
+  overflow-y: auto;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--elev);
+  box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.55), 0 3px 10px rgba(0, 0, 0, 0.35);
+  transform-origin: top left;
+  animation: cDropdownIn 120ms var(--ease-out);
+}
+
+.c-dropdown-list.end {
+  left: auto;
+  right: 0;
+  transform-origin: top right;
+}
+
+.c-dropdown-list.up {
+  top: auto;
+  bottom: calc(100% + 5px);
+  transform-origin: bottom left;
+}
+
+@keyframes cDropdownIn {
+  from { opacity: 0; transform: translateY(-3px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.c-dropdown-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 8px;
-  background: var(--bg0);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--r-btn);
-  flex-wrap: wrap;
-}
-
-.sn-legend-tray-label {
-  font-size: 11px;
-  font-weight: 550;
-  color: var(--text-3);
-  letter-spacing: 0.2px;
-  flex-shrink: 0;
-}
-
-.sn-legend-chips {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-
-.sn-chip-btn {
-  font-family: var(--mono, monospace);
-  font-size: 11px;
-  padding: 2px 7px;
-  border-radius: 4px;
-  border: 1px solid var(--line-soft);
-  background: var(--elev);
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
   color: var(--text-2);
+  font-family: var(--font);
+  font-size: 12px;
+  text-align: left;
   cursor: pointer;
-  transition: all 80ms ease;
-  line-height: 1.4;
-  user-select: none;
 }
 
-.sn-chip-btn:hover {
+.c-dropdown-item.active {
   background: var(--elev-hover);
-  border-color: var(--line);
   color: var(--text);
 }
 
-.sn-chip-btn:active {
-  transform: scale(0.97);
+.c-dropdown-item.selected {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.c-dropdown-item-ic {
+  display: inline-flex;
+  width: 16px;
+  justify-content: center;
+  color: var(--text-2);
+  flex-shrink: 0;
+}
+
+.c-dropdown-item.selected .c-dropdown-item-ic {
+  color: var(--accent-text);
+}
+
+.c-dropdown-item-ic svg {
+  width: 14px;
+  height: 14px;
+}
+
+.c-dropdown-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-dropdown-check {
+  width: 13px !important;
+  height: 13px !important;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+/* Icon-picker variant — the trigger carries the chosen glyph */
+.sn-icon-dd {
+  width: 100%;
+}
+
+/* ── Snippet editor: content header + placeholder reference popover ── */
+.sn-content-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sn-content-head .modal-label {
+  margin: 0;
+}
+
+.sn-help-btn {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color 80ms ease, background 80ms ease;
+}
+
+.sn-help-btn:hover,
+.sn-help-btn.on {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.sn-help-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sn-help-pop {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  z-index: 1350;
+  width: 330px;
+  padding: 12px 12px 11px;
+  border-radius: var(--r-panel);
+  border: 1px solid var(--line);
+  background: var(--elev);
+  box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.55), 0 3px 10px rgba(0, 0, 0, 0.35);
+  transform-origin: top right;
+  animation: cDropdownIn 120ms var(--ease-out);
+}
+
+.sn-help-title {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: -0.1px;
+  color: var(--text);
+}
+
+.sn-help-sub {
+  font-size: 10.5px;
+  color: var(--text-3);
+  margin: 2px 0 8px;
+}
+
+.sn-help-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sn-help-row {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background 70ms ease;
+}
+
+.sn-help-row:hover {
+  background: var(--elev-hover);
+}
+
+.sn-help-row code {
+  font-family: var(--mono, monospace);
+  font-size: 10.5px;
+  color: var(--sn-tok-dyn);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.sn-help-row span {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.sn-help-mods {
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.sn-help-mods-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+
+.sn-help-mods code {
+  font-family: var(--mono, monospace);
+  font-size: 10px;
+  color: var(--sn-tok);
+  display: block;
+  line-height: 1.5;
+}
+
+.sn-help-ex {
+  font-family: var(--mono, monospace);
+  font-size: 10px;
+  color: var(--text-3);
+  margin-top: 3px;
 }
 
 /* ── Minimal Expansion Consent Modal ─────────────────── */
@@ -4428,43 +4666,6 @@ section:last-child {
 
 .sn-keyword-input {
   font-family: var(--mono, monospace);
-}
-
-.sn-icon-picker {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 5px;
-}
-
-.sn-icon-option {
-  width: 100%;
-  aspect-ratio: 1;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  border: 1px solid var(--line-soft);
-  background: var(--elev);
-  color: var(--text-2);
-  cursor: pointer;
-  transition: all 90ms ease;
-}
-
-.sn-icon-option svg {
-  width: 15px;
-  height: 15px;
-}
-
-.sn-icon-option:hover {
-  border-color: var(--line);
-  color: var(--text);
-  transform: translateY(-1px);
-}
-
-.sn-icon-option.on {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent-text);
-  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .sn-tag-edit {
@@ -4547,6 +4748,9 @@ section:last-child {
 }
 
 .sn-arg-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   text-align: left;
   font-family: var(--font);
@@ -4566,9 +4770,22 @@ section:last-child {
 }
 
 .sn-arg-option.on {
-  border-color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
   background: var(--accent-soft);
-  color: var(--accent-text);
+  color: var(--text);
+}
+
+.sn-arg-option-check {
+  display: inline-flex;
+  justify-content: center;
+  width: 13px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.sn-arg-option-check svg {
+  width: 12px;
+  height: 12px;
 }
 
 .sn-arg-hint {
@@ -4587,11 +4804,14 @@ section:last-child {
   gap: 6px;
 }
 
-/* Error variant of the confirmation pill */
+/* Error variant of the confirmation pill — same quiet treatment, danger accent */
 .sn-confirm-pill.error {
-  background: linear-gradient(135deg, #DC2626, #991B1B);
-  box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(220, 38, 38, 0.45);
-  max-width: 380px;
+  border-color: color-mix(in srgb, #F87171 45%, var(--line));
+}
+
+.sn-confirm-pill.error svg,
+.sn-confirm-pill.error .sn-pill-x {
+  color: #F87171;
 }
 
 .sn-pill-x {
@@ -4649,22 +4869,10 @@ section:last-child {
   padding-right: 4px;
 }
 
-.sn-searchbar .sn-tag-select-overlay {
+.sn-searchbar .sn-tag-dd-overlay {
   height: 28px;
-  max-width: 116px;
+  max-width: 118px;
   margin-left: auto;
-  border: none;
-  border-left: 1px solid var(--line);
-  border-radius: 0;
-  background: none;
-  font-size: 10.5px;
-  color: var(--text-3);
-  padding: 0 6px;
-}
-
-.sn-searchbar .sn-tag-select-overlay:hover,
-.sn-searchbar .sn-tag-select-overlay:focus {
-  color: var(--text-2);
 }
 
 /* Snippets preview inside the overlay pane */

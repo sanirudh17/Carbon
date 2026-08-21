@@ -12,6 +12,7 @@ import {
 import { useSnippetFlow } from '../utils/useSnippetFlow';
 import { SnippetArgPrompt } from './SnippetArgPrompt';
 import { SnippetEditorModal } from './SnippetEditorModal';
+import { Dropdown } from './Dropdown';
 import { snippetIconFor, SearchIcon,
   CopyIcon,
   PasteIcon,
@@ -414,17 +415,17 @@ export const SnippetsView: React.FC<{ createSignal: number }> = ({ createSignal 
               </button>
             )}
           </div>
-          <select
-            className="sn-tag-select"
+          <Dropdown
+            className="sn-tag-dd"
             value={tagFilter}
-            onChange={(e) => setTagFilter(e.target.value)}
+            onChange={setTagFilter}
             title="Filter by tag"
-          >
-            <option value="__all__">All Tags</option>
-            {allTags.map((t) => (
-              <option key={t} value={t}>{t}</option>
-            ))}
-          </select>
+            align="end"
+            options={[
+              { value: '__all__', label: 'All Tags' },
+              ...allTags.map((t) => ({ value: t, label: t })),
+            ]}
+          />
           <div className="total">
             {filtered.length} {filtered.length === 1 ? 'snippet' : 'snippets'}
           </div>

@@ -30,6 +30,7 @@ import {
   getTypeColor,
 } from './Icons';
 import { SnippetEditorModal } from './SnippetEditorModal';
+import { Dropdown } from './Dropdown';
 
 declare global {
   interface Window {
@@ -1296,17 +1297,17 @@ export const QuickOverlay: React.FC = () => {
                 ✕
               </button>
             )}
-            <select
-              className="sn-tag-select sn-tag-select-overlay"
+            <Dropdown
+              className="sn-tag-dd sn-tag-dd-overlay"
               value={snTagFilter}
-              onChange={(e) => setSnTagFilter(e.target.value)}
+              onChange={setSnTagFilter}
               title="Filter by tag"
-            >
-              <option value="__all__">All Tags</option>
-              {snAllTags.map((t) => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-            </select>
+              align="end"
+              options={[
+                { value: '__all__', label: 'All Tags' },
+                ...snAllTags.map((t) => ({ value: t, label: t })),
+              ]}
+            />
           </div>
 
         {tab === 'clips' && pasteQueue.length > 0 && (

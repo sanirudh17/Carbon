@@ -2,7 +2,22 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Snippet } from '../types';
 import { highlightSnippetTokens } from '../utils/snippets';
-import { SnippetIcon, SNIPPET_ICONS } from './Icons';
+import { SnippetIcon, SNIPPET_ICONS, HelpIcon } from './Icons';
+import { Dropdown } from './Dropdown';
+
+/** Accurate per the expansion engine in utils/snippets.ts. */
+const TOKEN_DOCS: { token: string; insert?: string; desc: string }[] = [
+  { token: '{clipboard}', desc: 'Clipboard text — {clipboard offset=1} reaches further back' },
+  { token: '{selection}', desc: 'Text selected when the snippet fires' },
+  { token: '{date}', insert: '{date format="yyyy-MM-dd"}', desc: 'Today — supports format="…" / locale' },
+  { token: '{time}', insert: '{time format="HH:mm"}', desc: 'Time now — optional offset="+3h"' },
+  { token: '{datetime}', desc: 'Date and time together' },
+  { token: '{day}', desc: 'Weekday name' },
+  { token: '{uuid}', desc: 'Random UUID' },
+  { token: '{argument}', insert: '{argument name="Input" default=""}', desc: 'Asks for a value each use — name / default / options' },
+  { token: '{snippet:Name}', desc: 'Inline another snippet by its exact name' },
+  { token: '{cursor}', desc: 'Where the caret lands after pasting' },
+];
 
 /**
  * Shared create/edit snippet dialog (enlarged window + Quick Overlay).
@@ -20,8 +35,10 @@ export const SnippetEditorModal: React.FC<{
   const [draftIcon, setDraftIcon] = useState(snippet?.icon || 'snippet');
   const [draftTags, setDraftTags] = useState<string[]>(snippet?.tags || []);
   const [tagInput, setTagInput] = useState('');
-  const [draftConfirm, setDraftConfirm] = useState(snippet?.show_confirmation ?? false);
+  // Out-of-the-box snippets confirm their use; authors can opt out per snippet.
+  const [draftConfirm, setDraftConfirm] = useState(snippet?.show_confirmation ?? true);
   const [draftError, setDraftError] = useState('');
+  const [helpOpen, setHelpOpen] = useState(false);
   const backdropRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
@@ -101,6 +118,24 @@ export const SnippetEditorModal: React.FC<{
 
   const highlighted = useMemo(() => highlightSnippetTokens(draftContent), [draftContent]);
 
+  // Close the placeholder reference on Escape / outside click.
+  useEffect(() => {
+    if (!helpOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setHelpOpen(false);
+    };
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (!t.closest?.('.sn-help-pop') && !t.closest?.('.sn-help-btn')) setHelpOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onDown);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onDown);
+    };
+  }, [helpOpen]);
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-card sn-modal" onClick={(e) => e.stopPropagation()}>
@@ -118,7 +153,43 @@ export const SnippetEditorModal: React.FC<{
           <div className="modal-body sn-modal-body">
             {/* Left: content editor with inline token highlighting */}
             <div className="sn-edit-col">
-              <label className="modal-label">Content — {`{placeholders}`} highlight as you type</label>
+              <div className="sn-content-head">
+                <label className="modal-label">Content</label>
+                <button
+                  type="button"
+                  className={`sn-help-btn ${helpOpen ? 'on' : ''}`}
+                  title="Placeholder reference"
+                  aria-label="Placeholder reference"
+                  aria-expanded={helpOpen}
+                  onClick={() => setHelpOpen((v) => !v)}
+                >
+                  <HelpIcon />
+                </button>
+                {helpOpen && (
+                  <div className="sn-help-pop" role="dialog" aria-label="Placeholder reference">
+                    <div className="sn-help-title">Dynamic placeholders</div>
+                    <div className="sn-help-sub">Click one to insert it at the caret.</div>
+                    <div className="sn-help-rows">
+                      {TOKEN_DOCS.map((tok) => (
+                        <button
+                          key={tok.token}
+                          type="button"
+                          className="sn-help-row"
+                          onClick={() => insertPlaceholder(tok.insert ?? tok.token)}
+                        >
+                          <code>{tok.token}</code>
+                          <span>{tok.desc}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="sn-help-mods">
+                      <div className="sn-help-mods-title">Modifiers — chain after any token</div>
+                      <code>uppercase · lowercase · trim · percent-encode · json-stringify · raw</code>
+                      <div className="sn-help-ex">{'{clipboard | lowercase}'}</div>
+                    </div>
+                  </div>
+                )}
+              </div>
               <div className="sn-editor-wrap">
                 <div className="sn-editor-backdrop" ref={backdropRef} aria-hidden="true">
                   {highlighted.map((seg, i) =>
@@ -136,19 +207,8 @@ export const SnippetEditorModal: React.FC<{
                   value={draftContent}
                   onChange={(e) => setDraftContent(e.target.value)}
                   onScroll={syncBackdropScroll}
-                  placeholder="Type the snippet content here. Everything inside {…} becomes a dynamic placeholder."
+                  placeholder="Write your snippet — anything in {braces} becomes a live placeholder."
                 />
-              </div>
-              <div className="sn-legend-tray">
-                <span className="sn-legend-tray-label">Insert:</span>
-                <div className="sn-legend-chips">
-                  <button type="button" className="sn-chip-btn" onClick={() => insertPlaceholder('{date}')} title="Insert current date">{'{date}'}</button>
-                  <button type="button" className="sn-chip-btn" onClick={() => insertPlaceholder('{clipboard}')} title="Insert clipboard content">{'{clipboard}'}</button>
-                  <button type="button" className="sn-chip-btn" onClick={() => insertPlaceholder('{selection}')} title="Insert selected text">{'{selection}'}</button>
-                  <button type="button" className="sn-chip-btn" onClick={() => insertPlaceholder('{uuid}')} title="Insert random UUID">{'{uuid}'}</button>
-                  <button type="button" className="sn-chip-btn" onClick={() => insertPlaceholder('{argument name="input"}')} title="Insert interactive prompt">{'{argument}'}</button>
-                  <button type="button" className="sn-chip-btn" onClick={() => insertPlaceholder('{cursor}')} title="Set final caret position">{'{cursor}'}</button>
-                </div>
               </div>
             </div>
 
@@ -177,19 +237,17 @@ export const SnippetEditorModal: React.FC<{
               </div>
               <div className="modal-field">
                 <label className="modal-label">Icon</label>
-                <div className="sn-icon-picker">
-                  {SNIPPET_ICONS.map(({ key, label, icon: I }) => (
-                    <button
-                      key={key}
-                      type="button"
-                      className={`sn-icon-option ${draftIcon === key ? 'on' : ''}`}
-                      title={label}
-                      onClick={() => setDraftIcon(key)}
-                    >
-                      <I />
-                    </button>
-                  ))}
-                </div>
+                <Dropdown
+                  className="sn-icon-dd"
+                  value={draftIcon}
+                  onChange={setDraftIcon}
+                  title="Snippet icon"
+                  options={SNIPPET_ICONS.map(({ key, label, icon: I }) => ({
+                    value: key,
+                    label,
+                    icon: <I />,
+                  }))}
+                />
               </div>
               <div className="modal-field">
                 <label className="modal-label">Tags</label>

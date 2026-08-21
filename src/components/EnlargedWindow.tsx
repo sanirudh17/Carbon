@@ -1455,7 +1455,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
               onClick={() => setViewMode('snippets')}
           title="Snippets"
         >
-          <span className="side-ic" style={{ color: 'var(--tint-code)' }}>
+          <span className="side-ic" style={{ color: 'var(--accent-text)' }}>
             <SnippetIcon />
           </span>
           <span className="hide-when-collapsed">Snippets</span>

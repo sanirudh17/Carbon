@@ -352,7 +352,7 @@ impl DbState {
                 icon TEXT,
                 use_count INTEGER DEFAULT 0,
                 last_used_at TEXT,
-                show_confirmation INTEGER DEFAULT 0,
+                show_confirmation INTEGER DEFAULT 1,
                 created_at TEXT DEFAULT (datetime('now', 'localtime')),
                 updated_at TEXT DEFAULT (datetime('now', 'localtime'))
             );",
@@ -395,10 +395,10 @@ impl DbState {
         if sn_count == 0 {
             let _ = conn.execute(
                 "INSERT INTO snippets (id, name, keyword, content, tags, icon, show_confirmation) VALUES
-                ('snip_select', 'Quote Selection', '/select', '> {selection}', '[\"quote\"]', '💬', 0),
-                ('snip_note', 'Meeting Note', '/note', 'Date: {date format=\"YYYY-MM-DD\"}\nTo: {argument name=\"who\" default=\"Team\"}\n\nNotes:\n- {cursor}', '[\"work\"]', '📝', 0),
-                ('snip_date', 'Current Date', '/date', '{date format=\"YYYY-MM-DD\"}', '[\"util\"]', '📅', 0),
-                ('snip_inner', 'Greeting', '/inner', 'Hello {argument name=\"name\" default=\"there\"}!', '[\"greeting\"]', '👋', 0);",
+                ('snip_select', 'Quote Selection', '/select', '> {selection}', '[\"quote\"]', '💬', 1),
+                ('snip_note', 'Meeting Note', '/note', 'Date: {date format=\"YYYY-MM-DD\"}\nTo: {argument name=\"who\" default=\"Team\"}\n\nNotes:\n- {cursor}', '[\"work\"]', '📝', 1),
+                ('snip_date', 'Current Date', '/date', '{date format=\"YYYY-MM-DD\"}', '[\"util\"]', '📅', 1),
+                ('snip_inner', 'Greeting', '/inner', 'Hello {argument name=\"name\" default=\"there\"}!', '[\"greeting\"]', '👋', 1);",
                 [],
             );
         }
