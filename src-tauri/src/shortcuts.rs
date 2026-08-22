@@ -159,3 +159,26 @@ fn bind_shortcut(combo: &str) -> Result<Shortcut, String> {
 pub fn get_hotkey_status() -> Option<HotkeyStatus> {
     LAST_STATUS.lock().unwrap().clone()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bind_shortcut() {
+        let cases = [
+            "Ctrl+Alt+X",
+            "Ctrl+Shift+Z",
+            "Alt+Win+X",
+            "Ctrl+Alt+Space",
+            "Ctrl+Shift+F1",
+            "Alt+Ctrl+X",
+        ];
+        for c in cases {
+            let res = bind_shortcut(c);
+            println!("Testing {}: {:?}", c, res);
+            assert!(res.is_ok(), "Failed to bind shortcut {}", c);
+        }
+    }
+}
+

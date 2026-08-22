@@ -32,9 +32,10 @@ interface HotkeyStatusInfo {
 
 // Physical-key (e.code) → display token for non-alphanumeric keys.
 const CODE_KEY: Record<string, string> = {
-  Space: 'Space',
-  Tab: 'Tab',
-  Enter: 'Enter',
+  Minus: '-', Equal: '=', Comma: ',', Period: '.', Slash: '/', Backslash: '\\',
+  Semicolon: ';', Quote: "'", BracketLeft: '[', BracketRight: ']', Backquote: '`',
+  Space: 'Space', Tab: 'Tab', Enter: 'Enter',
+  ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
 };
 
 // Convert a KeyboardEvent into a Carbon combo string using e.code — the
@@ -124,12 +125,15 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     };
   }, []);
 
+  const committedRef = useRef(false);
+
   // Key recorder: while recording, capture the next non-modifier key press
   // together with its modifiers and commit it as the new hotkey. A combo is
   // only accepted if it has at least one modifier (a bare key can't be a
   // global hotkey) and doesn't duplicate Carbon's other global hotkey.
   useEffect(() => {
     if (!recording) return;
+    committedRef.current = false;
 
     // Suspend Carbon's own global shortcuts for the duration of the recording
     // session: registered combos are grabbed by the OS-level hook before the
@@ -142,6 +146,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       e.stopPropagation();
 
       if (e.key === 'Escape') {
+        committedRef.current = false;
         setRecording(null);
         setDraftCombo('');
         setHotkeyError(null);
@@ -176,6 +181,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
         return;
       }
 
+      committedRef.current = true;
       setHotkeyError(null);
       setRecording(null);
       setDraftCombo('');
@@ -185,11 +191,12 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     window.addEventListener('keydown', onKeyDown, true);
     return () => {
       window.removeEventListener('keydown', onKeyDown, true);
-      // Re-arm whatever the current settings say. When the session ended
-      // because a combo was accepted, save_settings re-applies strictly with
-      // the NEW binding right after; this tolerant resume is idempotent and
-      // only matters for Esc / Backspace / toggle-off paths.
-      invoke('resume_global_shortcuts').catch(() => {});
+      // Re-arm shortcuts ONLY if recording was canceled or toggled off without
+      // committing a new hotkey. When a combo was accepted, updateSetting ->
+      // save_settings re-arms shortcuts with the NEW binding atomically.
+      if (!committedRef.current) {
+        invoke('resume_global_shortcuts').catch(() => {});
+      }
     };
   }, [recording, settings]);
 

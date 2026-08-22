@@ -421,7 +421,7 @@ impl DbState {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
 
         let mut stmt = conn
-            .prepare("SELECT id, content_type, title, text_content FROM entries")
+            .prepare("SELECT id, content_type, title, text_content, html_content, rtf_content, source_app FROM entries")
             .map_err(|e| e.to_string())?;
 
         let rows = stmt
@@ -431,6 +431,9 @@ impl DbState {
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
                 ))
             })
             .map_err(|e| e.to_string())?;
@@ -438,7 +441,8 @@ impl DbState {
         let mut to_update: Vec<(String, String, String)> = Vec::new(); // (id, clean_title, content_type)
         let mut to_delete: Vec<String> = Vec::new();
         for r in rows {
-            let (id, content_type, title, text_content) = r.map_err(|e| e.to_string())?;
+            let (id, content_type, title, text_content, html_content, rtf_content, source_app) =
+                r.map_err(|e| e.to_string())?;
 
             if content_type == "image" && (title.contains(" × ") || title.starts_with("PNG image")) {
                 if title != "Image" {
@@ -460,9 +464,9 @@ impl DbState {
                     let source = text_content.as_deref().unwrap_or(&title);
                     let detected_type = crate::clipboard_watcher::classify_text_content(
                         source,
-                        None,
-                        None,
-                        None,
+                        html_content.as_deref(),
+                        rtf_content.as_deref(),
+                        source_app.as_deref(),
                     );
 
                     // Legacy rows force-typed "code" by the old heuristic:
@@ -479,7 +483,10 @@ impl DbState {
                         continue;
                     }
 
-                    let target_type = if content_type == "text" && (detected_type == "link" || detected_type == "email" || detected_type == "color" || detected_type == "file") {
+                    // Fix misclassified rich_text that is actually plain text/code/link/email/color
+                    let target_type = if content_type == "rich_text" && detected_type != "rich_text" {
+                        detected_type
+                    } else if content_type == "text" && (detected_type == "link" || detected_type == "email" || detected_type == "color" || detected_type == "file") {
                         detected_type
                     } else {
                         content_type.clone()
