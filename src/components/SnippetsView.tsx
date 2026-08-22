@@ -482,20 +482,18 @@ export const SnippetsView: React.FC<{
                       }}
                     >
                       <span className="sn-row-ic"><Icon /></span>
-                      <span className="sn-row-main">
-                        <span className="sn-row-titlerow">
-                          <span className="sn-row-name">{s.name}</span>
-                          <span className="sn-keyword-badge">{s.keyword || '/'}</span>
-                        </span>
-                        {(s.tags || []).length > 0 && (
-                          <span className="sn-row-tags">
-                            {(s.tags || []).slice(0, 2).map((t) => (
-                              <span key={t} className="sn-mini-tag">#{t}</span>
-                            ))}
-                            {(s.tags || []).length > 2 && <span className="sn-mini-tag">+{(s.tags || []).length - 2}</span>}
-                          </span>
-                        )}
-                      </span>
+                      <div className="sn-row-title-area">
+                        <span className="sn-row-name">{s.name}</span>
+                        <span className="sn-keyword-badge">{s.keyword || '/'}</span>
+                      </div>
+                      {(s.tags || []).length > 0 && (
+                        <div className="sn-row-tags">
+                          {(s.tags || []).slice(0, 2).map((t) => (
+                            <span key={t} className="sn-mini-tag">#{t}</span>
+                          ))}
+                          {(s.tags || []).length > 2 && <span className="sn-mini-tag">+{(s.tags || []).length - 2}</span>}
+                        </div>
+                      )}
                       <span className="sn-row-time">{formatSnippetLastUsed(s.last_used_at)}</span>
                     </div>
                   );

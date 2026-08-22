@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ClipItem, HotkeyStatus, AppSettings, Collection, Snippet } from '../types';
-import { ClipPreview, ClipMetaStrip, getSpecificTypeLabel, appDisplayName } from './ClipPreview';
+import { ClipPreview, ClipMetaStrip, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
 import { getActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
 import { collectionColorFor } from '../utils/collections';
 import {
@@ -455,7 +455,8 @@ export const QuickOverlay: React.FC = () => {
       setEditingContent(item.text_content || '');
       setRenderMode(
         item.content_type === 'rich_text' ||
-          Boolean(item.html_content)
+          Boolean(item.html_content) ||
+          (Boolean(item.text_content) && isMarkdownContent(item.text_content || ''))
       );
     }
     return () => cancelAnimationFrame(raf);
@@ -1492,62 +1493,67 @@ export const QuickOverlay: React.FC = () => {
                 <div className="sn-overlay-empty">Select a snippet to inspect it.</div>
               )
             ) : (
-              selectedItem && (
-              <>
-                <div className="overlay-preview-head">
-                  <span
-                    className="preview-kind"
-                    style={{ color: getTypeColor(selectedItem.content_type) }}
-                  >
-                    {getTypeIcon(selectedItem.content_type)}
-                    {getSpecificTypeLabel(selectedItem)}
-                  </span>
-                  {selectedItem.content_type !== 'image' && selectedItem.content_type !== 'file' &&
-                    (selectedItem.content_type === 'rich_text' || Boolean(selectedItem.html_content)) && (
-                    <div className="seg" style={{ marginLeft: 'auto' }}>
-                      <button
-                        className={`seg-btn ${renderMode ? 'active' : ''}`}
-                        onClick={() => setRenderMode(true)}
+              selectedItem && (() => {
+                const hasRenderedVersion =
+                  selectedItem.content_type === 'rich_text' ||
+                  Boolean(selectedItem.html_content) ||
+                  (Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!));
+
+                return (
+                  <>
+                    <div className="overlay-preview-head">
+                      <span
+                        className="preview-kind"
+                        style={{ color: getTypeColor(selectedItem.content_type) }}
                       >
-                        Render
-                      </button>
-                      <button
-                        className={`seg-btn ${!renderMode ? 'active' : ''}`}
-                        onClick={() => setRenderMode(false)}
-                      >
-                        Raw
-                      </button>
-                    </div>
-                  )}
-                </div>
-                <div className="overlay-preview-content">
-                  {selectedItem.content_type === 'image' || selectedItem.content_type === 'file' ? (
-                    <ClipPreview item={selectedItem} />
-                  ) : (selectedItem.content_type === 'rich_text' || Boolean(selectedItem.html_content)) &&
-                    renderMode ? (
-                    <div className="preview-render">
-                      <ClipPreview item={selectedItem} forceRaw={false} />
-                    </div>
-                  ) : (
-                    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                      {selectedItem.content_type === 'color' && (
-                        <div className="color-swatch-box" style={{ background: selectedItem.title }}>
-                          {selectedItem.title}
+                        {getTypeIcon(selectedItem.content_type)}
+                        {getSpecificTypeLabel(selectedItem)}
+                      </span>
+                      {selectedItem.content_type !== 'image' && selectedItem.content_type !== 'file' && hasRenderedVersion && (
+                        <div className="seg" style={{ marginLeft: 'auto' }}>
+                          <button
+                            className={`seg-btn ${renderMode ? 'active' : ''}`}
+                            onClick={() => setRenderMode(true)}
+                          >
+                            Render
+                          </button>
+                          <button
+                            className={`seg-btn ${!renderMode ? 'active' : ''}`}
+                            onClick={() => setRenderMode(false)}
+                          >
+                            Raw
+                          </button>
                         </div>
                       )}
-                      <textarea
-                        className="preview-edit"
-                        spellCheck={false}
-                        value={editingContent}
-                        onChange={(e) => handleContentEdit(e.target.value)}
-                        placeholder="Edit clip text..."
-                      />
                     </div>
-                  )}
-                </div>
-                <ClipMetaStrip item={selectedItem} onFilterByApp={(app) => setSourceAppFilter(app)} />
-              </>
-              )
+                    <div className="overlay-preview-content">
+                      {selectedItem.content_type === 'image' || selectedItem.content_type === 'file' ? (
+                        <ClipPreview item={selectedItem} />
+                      ) : hasRenderedVersion && renderMode ? (
+                        <div className="preview-render">
+                          <ClipPreview item={selectedItem} forceRaw={false} />
+                        </div>
+                      ) : (
+                        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                          {selectedItem.content_type === 'color' && (
+                            <div className="color-swatch-box" style={{ background: selectedItem.title }}>
+                              {selectedItem.title}
+                            </div>
+                          )}
+                          <textarea
+                            className="preview-edit"
+                            spellCheck={false}
+                            value={editingContent}
+                            onChange={(e) => handleContentEdit(e.target.value)}
+                            placeholder="Edit clip text..."
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <ClipMetaStrip item={selectedItem} onFilterByApp={(app) => setSourceAppFilter(app)} />
+                  </>
+                );
+              })()
             )}
           </div>
         </div>
