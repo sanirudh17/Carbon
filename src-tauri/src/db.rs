@@ -465,6 +465,10 @@ impl DbState {
                     );
                     let target_type = if content_type == "text" && (detected_type == "link" || detected_type == "email" || detected_type == "color" || detected_type == "file") {
                         detected_type
+                    } else if content_type == "code" && detected_type == "text" && text_content.as_deref().map_or(false, crate::clipboard_watcher::looks_like_prose) {
+                        // Legacy rows force-typed "code" by the old terminal
+                        // heuristic — prose reads as plain text, demote it.
+                        "text".to_string()
                     } else {
                         content_type.clone()
                     };

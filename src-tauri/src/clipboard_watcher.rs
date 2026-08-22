@@ -785,10 +785,16 @@ pub fn classify_text_content(
         return "rich_text".to_string();
     }
 
-    // 5. Code detection
+    // 5. Code detection — content signals are authoritative; the source app is
+    // only a weak hint. A prose guard keeps the two detections separate:
+    // copying plain English from a terminal or editor must not become "code".
+    let prose = looks_like_prose(trimmed);
+
     let is_code_app = source_app.map_or(false, |app| {
         let app_l = app.to_lowercase();
-        app_l.contains("code") || app_l.contains("devenv") || app_l.contains("idea") || app_l.contains("sublime") || app_l.contains("wt.exe")
+        // NOTE: terminals (wt.exe, powershell, cmd) are intentionally excluded —
+        // they carry prose, commands and shell output, not just source code.
+        app_l.contains("code") || app_l.contains("devenv") || app_l.contains("idea") || app_l.contains("sublime")
     });
 
     let code_keywords = [
@@ -801,11 +807,47 @@ pub fn classify_text_content(
     let has_braces_and_semis = (trimmed.contains('{') && trimmed.contains('}'))
         || (trimmed.contains(';') && trimmed.lines().count() > 1);
 
-    if is_code_app || contains_code_keyword || has_braces_and_semis {
+    // Strong content signal wins outright (real code with comments still
+    // contains keywords/braces). The app hint only applies to non-prose text.
+    if contains_code_keyword || has_braces_and_semis {
+        return "code".to_string();
+    }
+    if is_code_app && !prose {
         return "code".to_string();
     }
 
     "text".to_string()
+}
+
+/// Heuristic: does this text read like natural-language prose (sentences built
+/// from common English words) rather than code? Used so plain-text and code
+/// detection stay separate — prose copied from a terminal or IDE stays text.
+pub fn looks_like_prose(s: &str) -> bool {
+    let words: Vec<&str> = s.split_whitespace().collect();
+    if words.len() < 4 {
+        return false;
+    }
+    let common = [
+        "the", "and", "is", "to", "of", "a", "in", "that", "it", "for", "on", "with", "as", "at",
+        "be", "this", "are", "or", "by", "from", "not", "you", "an", "was", "can", "has", "have",
+        "but", "we", "they", "if", "more", "when", "your", "what", "only", "should", "make",
+        "like", "just", "into", "than", "then", "them", "its", "over", "also", "our", "who", "so",
+        "no", "do", "my", "one", "all", "would", "there", "their", "will", "other", "about",
+        "get", "which", "keep", "low", "light", "dark", "mode", "view", "box", "more",
+    ];
+    let hits = words
+        .iter()
+        .filter(|w| common.contains(&w.to_lowercase().as_str()))
+        .count();
+    if hits < 2 {
+        return false;
+    }
+    // Low density of code-significant symbols — prose rarely carries these.
+    let symbols = s
+        .chars()
+        .filter(|c| matches!(c, '{' | '}' | '[' | ']' | ';' | '=' | '<' | '>' | '|' | '\\' | '*' | '$' | '#' | '~' | '^' | '`'))
+        .count();
+    (symbols as f32) / (s.chars().count().max(1) as f32) < 0.03
 }
 
 fn get_foreground_app_name() -> Option<String> {
