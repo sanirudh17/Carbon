@@ -6,8 +6,8 @@ export const COLLECTION_COLORS = [
   '#0EA5E9', // Sky
   '#06B6D4', // Cyan
   '#14B8A6', // Teal
-  '#10B981', // Emerald
-  '#22C55E', // Green
+  '#2BAAAD', // Glint Teal
+  '#128083', // Deep Teal
   '#84CC16', // Lime
   '#EAB308', // Yellow
   '#F59E0B', // Amber
@@ -39,4 +39,12 @@ export function collectionColorFor(name: string): string {
   }
   const index = Math.abs(h >>> 0) % COLLECTION_COLORS.length;
   return COLLECTION_COLORS[index];
+}
+
+// Collections created before the Glint-teal alignment may have legacy green
+// shades persisted in the DB; remap them so the sidebar renders consistently.
+const LEGACY_GREENS = new Set(['#10B981', '#22C55E', '#84CC16']);
+export function normalizeCollectionColor(color?: string | null): string | null {
+  if (!color) return null;
+  return LEGACY_GREENS.has(color.toUpperCase()) ? '#2BAAAD' : color;
 }

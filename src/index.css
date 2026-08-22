@@ -9,22 +9,25 @@
   --text: #ECECEF;
   --text-2: #8F94A0;
   --text-3: #585D68;
-  --accent: #5B7CFA;
-  --accent-hover: #6D8BFA;
+  --accent-base: #5B7CFA;
+  --accent: var(--accent-base);
+  --accent-hover: color-mix(in srgb, var(--accent-base) 82%, white);
   --accent-fg: #ffffff;
   --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
   --accent-ring: color-mix(in srgb, var(--accent) 28%, transparent);
   --accent-text: color-mix(in srgb, var(--accent) 80%, white);
   --tooltip-bg: rgba(12, 13, 16, 0.97);
   --tooltip-text: #F4F4F6;
+  --nav-hover-bg: #21252D;
+  --nav-hover-text: #D9DDE5;
   --tint-alpha: 12%;
-  --tint-text: #94A3B8;
+  --tint-text: #B6C2CF;
   --tint-code: #7E96F8;
   --tint-rich: #F59E0B;
   --tint-image: #EC4899;
   --tint-files: #3B82F6;
   --tint-link: #06B6D4;
-  --tint-email: #10B981;
+  --tint-email: #2BAAAD;
   --tint-color: #93A8FA;
   --danger: #F87171;
   /* Snippet placeholder token colors (inline syntax highlighting) */
@@ -55,22 +58,23 @@
   --text: #0F172A;
   --text-2: #334155;
   --text-3: #64748B;
-  --accent: #5B7CFA;
-  --accent-hover: #4A69E8;
+  --accent: color-mix(in srgb, var(--accent-base, #5B7CFA) 84%, black);
+  --accent-hover: color-mix(in srgb, var(--accent-base, #5B7CFA) 72%, black);
   --accent-fg: #ffffff;
   --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
   --accent-ring: color-mix(in srgb, var(--accent) 30%, transparent);
   --accent-text: color-mix(in srgb, var(--accent) 90%, black);
   --tooltip-bg: rgba(255, 255, 255, 0.96);
   --tooltip-text: #0F172A;
+  --nav-hover-bg: #DFE5EE;
   --tint-alpha: 12%;
-  --tint-text: #334155;
+  --tint-text: #26334A;
   --tint-code: #3D5BD9;
   --tint-rich: #D97706;
   --tint-image: #DB2777;
   --tint-files: #2563EB;
   --tint-link: #0891B2;
-  --tint-email: #059669;
+  --tint-email: #178285;
   --tint-color: #4A69E8;
   --danger: #DC2626;
   /* Snippet placeholder token colors (inline syntax highlighting) */
@@ -757,8 +761,8 @@ input, textarea, select, button {
 }
 
 .side-item:hover {
-  background: var(--elev-hover);
-  color: var(--text);
+  background: var(--nav-hover-bg, var(--elev-hover));
+  color: var(--nav-hover-text, var(--text));
 }
 
 .side-item:hover .side-ic {

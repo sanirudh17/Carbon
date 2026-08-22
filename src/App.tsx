@@ -28,7 +28,7 @@ export function App() {
 
   const applySettingsData = (settings: { accent_color?: string; theme?: string }) => {
     if (settings?.accent_color) {
-      document.documentElement.style.setProperty('--accent', settings.accent_color);
+      document.documentElement.style.setProperty('--accent-base', settings.accent_color);
     }
     if (settings?.theme === 'light') {
       setTheme('light');

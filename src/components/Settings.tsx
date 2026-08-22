@@ -12,8 +12,7 @@ interface SettingsProps {
 
 const ACCENT_SWATCHES = [
   { name: 'Periwinkle', color: '#5B7CFA' },
-  { name: 'Sapphire', color: '#3B82F6' },
-  { name: 'Violet', color: '#8B5CF6' },
+  { name: 'Amethyst', color: '#8B5CF6' },
   { name: 'Lagoon', color: '#14B8A6' },
   { name: 'Emerald', color: '#10B981' },
   { name: 'Amber', color: '#F59E0B' },
@@ -184,7 +183,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   };
 
   const applyAccentColor = (color: string) => {
-    document.documentElement.style.setProperty('--accent', color);
+    document.documentElement.style.setProperty('--accent-base', color);
   };
 
   const handleSave = async () => {

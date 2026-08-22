@@ -5,7 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ClipItem, HotkeyStatus, AppSettings, Collection, Snippet } from '../types';
 import { ClipPreview, ClipMetaStrip, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
 import { getActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
-import { collectionColorFor } from '../utils/collections';
+import { collectionColorFor, normalizeCollectionColor } from '../utils/collections';
 import {
   filterSnippets,
   snippetBucketFor,
@@ -1663,7 +1663,7 @@ export const QuickOverlay: React.FC = () => {
                   <div className="col-empty-hint">No collections yet. Create your first collection below:</div>
                 ) : (
                   collections.map((col) => {
-                    const colColor = col.color || collectionColorFor(col.name);
+                    const colColor = normalizeCollectionColor(col.color) || collectionColorFor(col.name);
                     return (
                       <button
                         key={col.id}

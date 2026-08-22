@@ -3,7 +3,7 @@ import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ClipItem, Collection, DbStats, AppSettings, Snippet } from '../types';
-import { collectionColorFor } from '../utils/collections';
+import { collectionColorFor, normalizeCollectionColor } from '../utils/collections';
 import { ClipPreview, ClipMetaStrip, getQrCopyLabel, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
 import { getActionsForClip, getPasteActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
 import { SnippetsView } from './SnippetsView';
@@ -1600,7 +1600,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                 }}
                 title={col.name}
               >
-                <span className={`side-ic col-side-ic ${col.is_locked ? 'has-lock-state' : ''}`} style={{ color: col.color || collectionColorFor(col.name) }}>
+                <span className={`side-ic col-side-ic ${col.is_locked ? 'has-lock-state' : ''}`} style={{ color: normalizeCollectionColor(col.color) || collectionColorFor(col.name) }}>
                   {col.is_locked ? (
                     isColLocked ? (
                       <>
