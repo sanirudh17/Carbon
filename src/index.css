@@ -6,8 +6,8 @@
   --elev-hover: #1C1E24;
   --line: #23252C;
   --line-soft: #1B1D22;
-  --well-bg: #13151A;
-  --well-line: #2F333E;
+  --well-bg: #14171D;
+  --well-line: #454D5E;
   --text: #ECECEF;
   --text-2: #8F94A0;
   --text-3: #585D68;
@@ -1822,7 +1822,16 @@ section:last-child {
   padding: 16px 18px;
 }
 
-/* Rendered rich text (headers, lists, bold — not raw source) */
+/* Rendered rich text (headers, lists, bold — not raw source).
+   Dark mode gives the document a clearly visible card so the rendered
+   section reads as distinct content; light mode leaves it bare. */
+:root:not([data-theme="light"]) .rich-doc {
+  background: #161924;
+  border: 1px solid #3A4150;
+  border-radius: var(--r-panel);
+  padding: 14px 18px;
+}
+
 .rich-doc {
   font-family: var(--font);
   font-size: 13.5px;
@@ -4977,6 +4986,55 @@ section:last-child {
   height: 28px;
   max-width: 118px;
   margin-left: auto;
+}
+
+/* The trigger hard-codes 34px elsewhere; inside the compact overlay bar it
+   must fill the 28px wrapper instead of overflowing ~6px low. */
+.sn-tag-dd-overlay .c-dropdown-trigger {
+  height: 100%;
+}
+
+/* ═══ Raycast-style compact filter controls (overlay searchbars) ═══ */
+
+/* Boxed filter prefix icon shared by snippet tag filters */
+.filter-box {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.filter-box .filter-box-ic {
+  position: absolute;
+  left: 10px;
+  width: 13px !important;
+  height: 13px !important;
+  color: var(--text-3);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.filter-box .c-dropdown-trigger {
+  padding-left: 29px;
+}
+
+/* App-category filter box riding the right edge of the CLIPS searchbar
+   (Quick Overlay only — the main window intentionally has none) */
+.app-filter-dd {
+  height: 28px;
+  max-width: 132px;
+  flex-shrink: 0;
+}
+
+.app-filter-dd .c-dropdown-trigger {
+  height: 28px;
+  gap: 5px;
+  padding: 0 7px 0 9px;
+  border-radius: var(--r-btn);
+}
+
+.overlay > .searchbar.has-app-filter {
+  padding-right: 4px;
 }
 
 /* Snippets preview inside the overlay pane */

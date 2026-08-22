@@ -21,6 +21,7 @@ import { snippetIconFor, SearchIcon,
   PlusIcon,
   MoreIcon,
   CheckIcon,
+  FilterIcon,
 } from './Icons';
 
 interface ActionEntry {
@@ -422,17 +423,20 @@ export const SnippetsView: React.FC<{
               </button>
             )}
           </div>
-          <Dropdown
-            className="sn-tag-dd"
-            value={tagFilter}
-            onChange={setTagFilter}
-            title="Filter by tag"
-            align="end"
-            options={[
-              { value: '__all__', label: 'All Tags' },
-              ...allTags.map((t) => ({ value: t, label: t })),
-            ]}
-          />
+          <span className="filter-box" title="Filter by tag">
+            <FilterIcon className="filter-box-ic" />
+            <Dropdown
+              className="sn-tag-dd"
+              value={tagFilter}
+              onChange={setTagFilter}
+              align="end"
+              ariaLabel="Filter by tag"
+              options={[
+                { value: '__all__', label: 'All Tags' },
+                ...allTags.map((t) => ({ value: t, label: t })),
+              ]}
+            />
+          </span>
           <div className="total">
             {filtered.length} {filtered.length === 1 ? 'snippet' : 'snippets'}
           </div>

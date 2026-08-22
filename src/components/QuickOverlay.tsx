@@ -25,6 +25,7 @@ import {
   PasteIcon,
   EditIcon,
   DeleteIcon,
+  FilterIcon,
   snippetIconFor,
   getTypeIcon,
   getTypeColor,
@@ -272,6 +273,18 @@ export const QuickOverlay: React.FC = () => {
     for (const s of snSnippets) for (const t of s.tags || []) set.add(t);
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [snSnippets]);
+
+  // Distinct source applications present in the clipboard history — feeds the
+  // Raycast-style "All Apps" filter box in the overlay's clips searchbar.
+  const appFilterOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const i of items) {
+      if (i.source_app && !seen.has(i.source_app)) seen.set(i.source_app, appDisplayName(i.source_app));
+    }
+    return Array.from(seen.entries())
+      .sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([raw, label]) => ({ value: raw, label }));
+  }, [items]);
 
   const snFiltered = useMemo(
     () => filterSnippets(snSnippets, snSearch, snTagFilter),
@@ -1270,7 +1283,7 @@ export const QuickOverlay: React.FC = () => {
             view you left (clips or snippets, preview open or closed). The
             placeholder announces the active tab; Left/Right in an empty
             bar toggle focus to the other tab's bar. */}
-        <div className={`searchbar ${tab === 'snippets' ? 'inactive-tab' : ''}`}>
+        <div className={`searchbar has-app-filter ${tab === 'snippets' ? 'inactive-tab' : ''}`}>
             <span className="search-ic">
               <SearchIcon />
             </span>
@@ -1309,6 +1322,15 @@ export const QuickOverlay: React.FC = () => {
                 ✕
               </button>
             )}
+            <Dropdown
+              className="app-filter-dd"
+              value={sourceAppFilter ?? '__all__'}
+              onChange={(v) => setSourceAppFilter(v === '__all__' ? null : v)}
+              align="end"
+              ariaLabel="Filter by application"
+              title="Filter by application"
+              options={[{ value: '__all__', label: 'All Apps' }, ...appFilterOptions]}
+            />
           </div>
           <div className={`searchbar sn-searchbar ${tab === 'clips' ? 'inactive-tab' : ''}`}>
             <span className="search-ic">
@@ -1332,17 +1354,20 @@ export const QuickOverlay: React.FC = () => {
                 ✕
               </button>
             )}
-            <Dropdown
-              className="sn-tag-dd sn-tag-dd-overlay"
-              value={snTagFilter}
-              onChange={setSnTagFilter}
-              title="Filter by tag"
-              align="end"
-              options={[
-                { value: '__all__', label: 'All Tags' },
-                ...snAllTags.map((t) => ({ value: t, label: t })),
-              ]}
-            />
+            <span className="filter-box" title="Filter by tag">
+              <FilterIcon className="filter-box-ic" />
+              <Dropdown
+                className="sn-tag-dd sn-tag-dd-overlay"
+                value={snTagFilter}
+                onChange={setSnTagFilter}
+                align="end"
+                ariaLabel="Filter by tag"
+                options={[
+                  { value: '__all__', label: 'All Tags' },
+                  ...snAllTags.map((t) => ({ value: t, label: t })),
+                ]}
+              />
+            </span>
           </div>
 
         {tab === 'clips' && pasteQueue.length > 0 && (

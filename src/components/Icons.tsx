@@ -49,6 +49,12 @@ export const ChevronDownIcon: React.FC<{ className?: string }> = ({ className = 
   </svg>
 );
 
+export const FilterIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M22 4H2l8 9.09V19l4 2v-7.91L22 4z" />
+  </svg>
+);
+
 export const HelpIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="8.5" />
