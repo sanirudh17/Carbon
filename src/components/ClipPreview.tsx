@@ -744,12 +744,20 @@ export const ClipMetaStrip: React.FC<{ item: ClipItem; onFilterByApp?: (app: str
   } else if (item.content_type === 'text' || item.content_type === 'code') {
     const text = item.text_content || '';
     const chars = text.length;
-    const bytes =
-      item.file_size > 0
-        ? item.file_size
-        : new TextEncoder().encode(text).length;
+    if (item.content_type === 'code') {
+      // Detected programming language — the most useful code-specific fact.
+      const lang = text ? detectCodeLanguage(text) : null;
+      extra.push({ label: 'Language', value: lang || 'Plain' });
+    } else {
+      // Reading time at ~200 wpm — how long the clip takes to read through.
+      const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+      const secs = Math.round(words / (200 / 60));
+      extra.push({
+        label: 'Reading time',
+        value: words === 0 ? '—' : secs < 60 ? `${Math.max(secs, 1)} sec` : `${Math.round(secs / 60)} min`,
+      });
+    }
     extra.push({ label: 'Characters', value: chars.toLocaleString() });
-    extra.push({ label: 'Size', value: formatBytes(bytes) });
   } else if (item.content_type === 'color') {
     extra.push({ label: 'Hex value', value: item.title });
   } else if (item.content_type === 'link' && item.text_content) {
