@@ -25,9 +25,9 @@
   --tint-code: #7E96F8;
   --tint-rich: #F59E0B;
   --tint-image: #EC4899;
-  --tint-files: #3B82F6;
-  --tint-link: #06B6D4;
-  --tint-email: #2BAAAD;
+  --tint-files: #5B9DFF;
+  --tint-link: #29D3EC;
+  --tint-email: #38C7CA;
   --tint-color: #93A8FA;
   --danger: #F87171;
   /* Snippet placeholder token colors (inline syntax highlighting) */
@@ -58,8 +58,8 @@
   --text: #0F172A;
   --text-2: #334155;
   --text-3: #64748B;
-  --accent: color-mix(in srgb, var(--accent-base, #5B7CFA) 84%, black);
-  --accent-hover: color-mix(in srgb, var(--accent-base, #5B7CFA) 72%, black);
+  --accent: color-mix(in srgb, var(--accent-base, #5B7CFA) 90%, black);
+  --accent-hover: color-mix(in srgb, var(--accent-base, #5B7CFA) 78%, black);
   --accent-fg: #ffffff;
   --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
   --accent-ring: color-mix(in srgb, var(--accent) 30%, transparent);
@@ -67,14 +67,15 @@
   --tooltip-bg: rgba(255, 255, 255, 0.96);
   --tooltip-text: #0F172A;
   --nav-hover-bg: #DFE5EE;
+  --nav-hover-text: #1B2432;
   --tint-alpha: 12%;
   --tint-text: #26334A;
   --tint-code: #3D5BD9;
   --tint-rich: #D97706;
   --tint-image: #DB2777;
   --tint-files: #2563EB;
-  --tint-link: #0891B2;
-  --tint-email: #178285;
+  --tint-link: #0E7490;
+  --tint-email: #116E71;
   --tint-color: #4A69E8;
   --danger: #DC2626;
   /* Snippet placeholder token colors (inline syntax highlighting) */
@@ -1012,8 +1013,8 @@ input, textarea, select, button {
   flex: 1;
   min-height: 260px;
   resize: none;
-  background: var(--bg0);
-  border: 1px solid var(--line-soft);
+  background: var(--elev);
+  border: 1px solid var(--line);
   border-radius: var(--r-panel);
   outline: none;
   font-family: var(--mono);
@@ -1802,8 +1803,8 @@ section:last-child {
   font-size: 12.5px;
   letter-spacing: 0;
   line-height: 1.7;
-  background: var(--bg0);
-  border: 1px solid var(--line-soft);
+  background: var(--elev);
+  border: 1px solid var(--line);
   border-radius: var(--r-panel);
   padding: 16px 18px;
   max-height: 100%;
@@ -1811,8 +1812,8 @@ section:last-child {
 }
 
 .preview-text.plain {
-  background: var(--bg0);
-  border: 1px solid var(--line-soft);
+  background: var(--elev);
+  border: 1px solid var(--line);
   border-radius: var(--r-panel);
   padding: 16px 18px;
 }

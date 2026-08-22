@@ -752,6 +752,31 @@ pub fn classify_text_content(
         }
     }
 
+    // 3.5 Absolute Windows/UNC paths (one or more lines) pointing to items
+    // that exist on disk -> treat as file captures ("Copy as path" flows,
+    // terminal path copies). Checked before rich/code so paths copied from
+    // terminals are not swallowed by the code-app heuristic.
+    {
+        let lines: Vec<&str> = trimmed
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .collect();
+        if !lines.is_empty() && lines.len() <= 32 {
+            let path_re =
+                Regex::new(r#"^(?:[A-Za-z]:[\\/].+|\\\\[^\\\r\n]+\\.*)$"#).unwrap();
+            if lines.iter().all(|l| path_re.is_match(l)) {
+                let all_exist = lines.iter().all(|l| {
+                    let normalized = l.replace('/', "\\");
+                    std::fs::metadata(&normalized).is_ok() || std::fs::metadata(l).is_ok()
+                });
+                if all_exist {
+                    return "file".to_string();
+                }
+            }
+        }
+    }
+
     // 4. Rich text: If genuine HTML or RTF was captured
     let has_rich_html = html.map_or(false, is_rich_html);
     let has_rich_rtf = rtf.map_or(false, |r| r.contains("\\b") || r.contains("\\i") || r.contains("\\ul") || r.contains("\\par"));

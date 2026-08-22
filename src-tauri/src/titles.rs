@@ -21,6 +21,21 @@ pub fn format_clean_title(text: &str, content_type: &str) -> String {
         "code" => truncate_str(sanitized, 40),
         "link" => truncate_str(sanitized, 45),
         "image" => "Image".to_string(),
+        "file" => {
+            let lines: Vec<&str> = text
+                .lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .collect();
+            if lines.len() > 1 {
+                format!("{} files", lines.len())
+            } else {
+                let path = std::path::Path::new(lines.first().copied().unwrap_or(sanitized));
+                path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| sanitized.to_string())
+            }
+        }
         _ => truncate_str(sanitized, 40),
     }
 }

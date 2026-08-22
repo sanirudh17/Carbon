@@ -463,7 +463,7 @@ impl DbState {
                         None,
                         None,
                     );
-                    let target_type = if content_type == "text" && (detected_type == "link" || detected_type == "email" || detected_type == "color") {
+                    let target_type = if content_type == "text" && (detected_type == "link" || detected_type == "email" || detected_type == "color" || detected_type == "file") {
                         detected_type
                     } else {
                         content_type.clone()
