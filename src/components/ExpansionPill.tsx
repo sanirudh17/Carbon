@@ -99,7 +99,7 @@ export const ExpansionPill: React.FC = () => {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            background: 'var(--accent, #5B7CFA)',
+            background: 'color-mix(in srgb, var(--accent) 72%, transparent)',
             color: '#ffffff',
             flexShrink: 0,
             boxShadow: '0 2px 8px var(--accent-ring, rgba(91,124,250,0.4))',

@@ -131,7 +131,7 @@ export function App() {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div className="brand-mark" style={{ width: 28, height: 28, borderRadius: 6, display: 'grid', placeItems: 'center', background: 'var(--accent)', color: '#fff', fontWeight: 700 }}>
+          <div className="brand-mark" style={{ width: 28, height: 28, borderRadius: 6, display: 'grid', placeItems: 'center', background: 'color-mix(in srgb, var(--accent) 16%, transparent)', color: 'var(--accent-text)', border: '1px solid color-mix(in srgb, var(--accent) 30%, transparent)', fontWeight: 700 }}>
             C
           </div>
           <h1 style={{ fontSize: 16, fontWeight: 650 }}>
