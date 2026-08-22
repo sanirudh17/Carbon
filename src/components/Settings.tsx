@@ -13,7 +13,7 @@ interface SettingsProps {
 const ACCENT_SWATCHES = [
   { name: 'Periwinkle', color: '#5B7CFA' },
   { name: 'Sky', color: '#0EA5E9' },
-  { name: 'Sapphire', color: '#3B82F6' },
+  { name: 'Violet', color: '#8B5CF6' },
   { name: 'Emerald', color: '#10B981' },
   { name: 'Amber', color: '#F59E0B' },
   { name: 'Rose', color: '#F43F5E' },
