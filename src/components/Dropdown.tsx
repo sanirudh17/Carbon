@@ -48,8 +48,9 @@ export const Dropdown: React.FC<{
     const style: React.CSSProperties = {
       position: 'fixed',
       maxHeight: height,
-      // Match the trigger/text-box width exactly (grow only for long labels)
-      minWidth: rect.width,
+      // Match the trigger/text-box width exactly (grow only for long labels);
+      // never narrower than the icon+label options need.
+      minWidth: Math.max(rect.width, 172),
     };
     if (align === 'end') {
       style.right = Math.max(8, window.innerWidth - rect.right);

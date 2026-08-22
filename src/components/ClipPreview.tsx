@@ -744,9 +744,9 @@ export const ClipMetaStrip: React.FC<{ item: ClipItem; onFilterByApp?: (app: str
   } else if (item.content_type === 'text' || item.content_type === 'code') {
     const text = item.text_content || '';
     const chars = text.length;
-    const lines = text ? text.split('\n').length : 0;
+    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
     extra.push({ label: 'Characters', value: chars.toLocaleString() });
-    extra.push({ label: 'Lines', value: lines.toLocaleString() });
+    extra.push({ label: 'Words', value: words.toLocaleString() });
   } else if (item.content_type === 'color') {
     extra.push({ label: 'Hex value', value: item.title });
   } else if (item.content_type === 'link' && item.text_content) {

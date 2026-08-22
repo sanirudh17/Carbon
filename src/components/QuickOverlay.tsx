@@ -30,6 +30,7 @@ import {
   getTypeIcon,
   getTypeColor,
 } from './Icons';
+import type { ContentType } from '../types';
 import { SnippetEditorModal } from './SnippetEditorModal';
 import { Dropdown } from './Dropdown';
 
@@ -292,7 +293,15 @@ export const QuickOverlay: React.FC = () => {
       color: 'Color',
     };
     const present = new Set<string>(items.map((i) => String(i.content_type)));
-    return ORDER.filter((t) => present.has(t)).map((t) => ({ value: t, label: LABELS[t] }));
+    return ORDER.filter((t) => present.has(t)).map((t) => ({
+      value: t,
+      label: LABELS[t],
+      icon: (
+        <span style={{ color: getTypeColor(t as ContentType), display: 'inline-flex' }}>
+          {getTypeIcon(t as ContentType)}
+        </span>
+      ),
+    }));
   }, [items]);
 
   const snFiltered = useMemo(
@@ -1277,6 +1286,11 @@ export const QuickOverlay: React.FC = () => {
         const next = e.relatedTarget as HTMLElement | null;
         if (!next) return; // focus left the overlay entirely
         if (next.closest('input, textarea, select, [contenteditable="true"]')) return;
+        // Custom dropdowns portal their option lists to document.body, so
+        // focus legitimately lands outside this container while a picker is
+        // open. Stealing caret focus back closed the list instantly (first
+        // click on the trigger did nothing, choosing an option exited).
+        if (next.closest('.c-dropdown, .c-dropdown-list')) return;
         const input =
           tabRef.current === 'snippets' ? snSearchInputRef.current : searchInputRef.current;
         if (input) setTimeout(() => input.focus(), 0);
