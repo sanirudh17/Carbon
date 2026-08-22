@@ -96,17 +96,27 @@ export const ExpansionPill: React.FC = () => {
             width: 20,
             height: 20,
             borderRadius: '50%',
-            display: 'grid',
-            placeItems: 'center',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
             background: 'var(--accent, #6366f1)',
-            color: '#fff',
-            fontSize: 11,
-            fontWeight: 700,
+            color: '#ffffff',
             flexShrink: 0,
             boxShadow: '0 2px 8px var(--accent-ring, rgba(99,102,241,0.4))',
           }}
         >
-          ✓
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="m4.5 12.5 5 5 10-11" />
+          </svg>
         </span>
         <span
           style={{
