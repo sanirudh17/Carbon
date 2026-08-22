@@ -30,39 +30,36 @@ interface HotkeyStatusInfo {
   enlarged_conflict: boolean;
 }
 
-// Small "i" badge that toggles an inline guidance panel. The panel expands in
-// normal document flow (no absolute positioning, no hover reveal), so it can
-// never float over other content or get clipped by container edges — the
-// settings body simply grows and scrolls.
-const HelpHint: React.FC<{ title: string; lines: string[] }> = ({ title, lines }) => {
-  const [open, setOpen] = useState(false);
-  return (
-    <span className={`help-hint-wrap${open ? ' open' : ''}`}>
-      <button
-        type="button"
-        className="help-hint"
-        aria-expanded={open}
-        aria-label={title}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-          <circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" strokeWidth="1.3" />
-          <circle cx="8" cy="5.1" r="0.9" fill="currentColor" />
-          <path d="M8 7.4v3.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-        </svg>
-      </button>
-      {open && (
-        <span className="help-pop" role="note">
-          <span className="help-pop-title">{title}</span>
-          {lines.map((line, i) => (
-            <span key={i} className="help-pop-line">
-              {line}
-            </span>
-          ))}
-        </span>
-      )}
-    </span>
-  );
+// Physical-key (e.code) → display token for non-alphanumeric keys.
+const CODE_KEY: Record<string, string> = {
+  Space: 'Space',
+  Tab: 'Tab',
+  Enter: 'Enter',
+};
+
+// Convert a KeyboardEvent into a Carbon combo string using e.code — the
+// PHYSICAL key — rather than e.key. With Ctrl+Alt held (AltGr on many
+// layouts) e.key can turn into a different character or symbol, which is why
+// Ctrl+Alt combos previously failed to record; e.code is layout-independent
+// and always identifies the key that was pressed. Returns null while only
+// modifiers are held or the physical key isn't usable as a hotkey.
+const keyEventToCombo = (e: KeyboardEvent): string | null => {
+  const mods: string[] = [];
+  if (e.ctrlKey) mods.push('Ctrl');
+  if (e.altKey) mods.push('Alt');
+  if (e.shiftKey) mods.push('Shift');
+  if (e.metaKey) mods.push('Win');
+
+  const code = e.code;
+  let key: string | null = null;
+  if (/^Key[A-Z]$/.test(code)) key = code.slice(3);
+  else if (/^Digit[0-9]$/.test(code)) key = code.slice(5);
+  else if (/^Numpad[0-9]$/.test(code)) key = code.slice(6);
+  else if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) key = code;
+  else if (code in CODE_KEY) key = CODE_KEY[code];
+  if (!key || mods.length === 0) return null;
+
+  return [...mods, key].join('+');
 };
 
 
@@ -144,40 +141,30 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       e.preventDefault();
       e.stopPropagation();
 
-      const key = e.key;
-      if (key === 'Escape') {
+      if (e.key === 'Escape') {
         setRecording(null);
         setDraftCombo('');
         setHotkeyError(null);
         return;
       }
-      if (key === 'Backspace') {
+      if (e.key === 'Backspace' && !e.ctrlKey && !e.altKey && !e.metaKey) {
         setDraftCombo('');
         setHotkeyError(null);
         return;
       }
-      if (['Control', 'Shift', 'Alt', 'Meta'].includes(key)) {
-        return; // wait for the actual key
-      }
 
-      const mods: string[] = [];
-      if (e.ctrlKey) mods.push('Ctrl');
-      if (e.shiftKey) mods.push('Shift');
-      if (e.altKey) mods.push('Alt');
-      if (e.metaKey) mods.push('Win');
-
-      const keyLabel = key === ' ' ? 'Space' : key.length === 1 ? key.toUpperCase() : key;
+      const combo = keyEventToCombo(e);
+      if (!combo) return; // only modifiers held, or an unsupported physical key
 
       // Reject bare keys with an explicit reason instead of silently waiting.
-      if (mods.length === 0) {
+      const keyLabel = combo.split('+').pop() as string;
+      if (!e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
         setDraftCombo(keyLabel);
         setHotkeyError(
           `"${keyLabel}" needs at least one modifier (Ctrl/Alt/Shift/Win) — a bare key can't be a global hotkey.`,
         );
         return;
       }
-
-      const combo = [...mods, keyLabel].join('+');
 
       // Reject duplicates of Carbon's own other global hotkey — that conflict
       // is internal, so Carbon catches it before even trying to register.
@@ -416,29 +403,28 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       <div className="settings-body">
         {/* Shortcuts */}
         <section>
-          <div className="sec-title">
-            Shortcuts
-            <HelpHint
-              title="How global hotkeys work"
-              lines={[
-                "Combos must include at least one modifier (Ctrl / Alt / Shift / Win) plus a key — letters, F1–F24, Space, Tab or Enter all work.",
-                "Carbon owns exactly these two shortcuts and swaps them atomically on rebind — no phantom conflicts with itself.",
-                "Changes register system-wide the moment you record them; only if another app genuinely owns a combo does Carbon keep your current binding and flag it here.",
-              ]}
-            />
+          <div className="sec-title">Shortcuts</div>
+          <div className="hotkey-guide">
+            <div className="hotkey-guide-title">How to change a shortcut</div>
+            <ol>
+              <li>Click a key chip, then press the key combination you want.</li>
+              <li>
+                Every shortcut needs <kbd>Ctrl</kbd>, <kbd>Alt</kbd>, or <kbd>Win</kbd> plus one more key (
+                <kbd>Shift</kbd> is optional). Letters, numbers and F-keys all work.
+              </li>
+              <li>
+                Press <kbd>Esc</kbd> to cancel, or <kbd>Backspace</kbd> to start over.
+              </li>
+            </ol>
+            <p>
+              Changes apply instantly and survive restarts. If another app already owns the combo you picked, Carbon
+              keeps your previous shortcut and tells you right here.
+            </p>
           </div>
           <div className="set-row">
             <div className="set-label">
               Quick paste hotkey
               <div className="set-hint">Opens the overlay anywhere. Click the key to change it.</div>
-              <HelpHint
-                title="Quick paste hotkey setup"
-                lines={[
-                  "Click the key chip, then press the combo you want — Esc cancels, Backspace clears.",
-                  "Carbon's own hotkeys are paused while recording, so even the current combo is captured cleanly.",
-                  "The binding is swapped in place instantly and persisted, so it survives restarts.",
-                ]}
-              />
             </div>
             <div className="set-control hotkey-control">
               <button
@@ -462,14 +448,6 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
             <div className="set-label">
               Enlarged window hotkey
               <div className="set-hint">Opens full library and settings. Click the key to change it.</div>
-              <HelpHint
-                title="Enlarged window hotkey setup"
-                lines={[
-                  "Click the key chip, then press the combo you want — Esc cancels, Backspace clears.",
-                  "Carbon's own hotkeys are paused while recording, and duplicates of the other hotkey are rejected on the spot.",
-                  "If another app genuinely owns the combo, Carbon keeps your current binding and shows the conflict here instead of silently failing.",
-                ]}
-              />
             </div>
             <div className="set-control hotkey-control">
               <button
