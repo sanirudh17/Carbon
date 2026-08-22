@@ -9,6 +9,7 @@ import { getActionsForClip, getPasteActionsForClip, handleClipKeyDown, ClipActio
 import { SnippetsView } from './SnippetsView';
 import {
   SearchIcon,
+  CarbonMarkIcon,
   AllIcon,
   TextIcon,
   CodeIcon,
@@ -1324,7 +1325,9 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
         }}
       >
         <div className="brand">
-          <div className="brand-mark">C</div>
+          <div className="brand-mark" title="Carbon">
+            <CarbonMarkIcon className="brand-ic" />
+          </div>
           <span className="brand-name hide-when-collapsed">Carbon</span>
         </div>
 

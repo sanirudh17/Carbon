@@ -433,3 +433,16 @@ export const SNIPPET_ICONS: SnippetIconsEntry[] = [
 export function snippetIconFor(key: string | null): React.FC<{ className?: string }> {
   return SNIPPET_ICONS.find((i) => i.key === (key || 'snippet'))?.icon ?? SnippetIcon;
 }
+
+// Carbon brand mark: a simplified clipboard glyph distilled from the full
+// layered-clipboard illustration — just the board and its latch, bold enough
+// to stay legible at the small sidebar-header size (~24px), where the full
+// illustration's gradients and fine text lines would turn to noise. Stroke
+// uses currentColor so the mark inherits the active accent theme via the
+// .brand-mark CSS color (var(--accent)) instead of a hardcoded hex.
+export const CarbonMarkIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M15.5 4H17a2.5 2.5 0 0 1 2.5 2.5v12A2.5 2.5 0 0 1 17 21H7a2.5 2.5 0 0 1-2.5-2.5v-12A2.5 2.5 0 0 1 7 4h1.5" />
+    <rect x="8.5" y="2" width="7" height="4.5" rx="1.4" />
+  </svg>
+);

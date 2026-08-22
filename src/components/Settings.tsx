@@ -10,6 +10,26 @@ interface SettingsProps {
   currentTheme: string;
 }
 
+// Canonical form for comparing hotkey combos regardless of modifier order or
+// casing: "shift+ctrl+x" and "Ctrl+Shift+X" compare equal.
+const normalizeCombo = (combo: string): string => {
+  const parts = combo.split('+').map((p) => p.trim()).filter(Boolean);
+  if (parts.length <= 1) return parts.join('').toLowerCase();
+  const key = parts[parts.length - 1].toLowerCase();
+  const mods = parts.slice(0, -1).map((m) => m.toLowerCase()).sort();
+  return [...mods, key].join('+');
+};
+
+// Mirrors hotkey::HotkeyStatus on the Rust side.
+interface HotkeyStatusInfo {
+  overlay: string;
+  enlarged: string;
+  overlay_preferred: string;
+  enlarged_preferred: string;
+  overlay_conflict: boolean;
+  enlarged_conflict: boolean;
+}
+
 const ACCENT_SWATCHES = [
   { name: 'Periwinkle', color: '#5B7CFA' },
   { name: 'Amethyst', color: '#8B5CF6' },
@@ -48,6 +68,8 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   const [savedMessage, setSavedMessage] = useState(false);
   const [recording, setRecording] = useState<'quick' | 'enlarged' | null>(null);
   const [draftCombo, setDraftCombo] = useState('');
+  const [hotkeyError, setHotkeyError] = useState<string | null>(null);
+  const [hotkeyStatus, setHotkeyStatus] = useState<HotkeyStatusInfo | null>(null);
   const [expansionStatus, setExpansionStatus] = useState<'off' | 'not_yet_active' | 'active'>('off');
   const [showExpansionConsent, setShowExpansionConsent] = useState(false);
 
@@ -70,7 +92,9 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   }, []);
 
   // Key recorder: while recording, capture the next non-modifier key press
-  // together with its modifiers and commit it as the new hotkey.
+  // together with its modifiers and commit it as the new hotkey. A combo is
+  // only accepted if it has at least one modifier (a bare key can't be a
+  // global hotkey) and doesn't duplicate Carbon's other global hotkey.
   useEffect(() => {
     if (!recording) return;
 
@@ -82,10 +106,12 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       if (key === 'Escape') {
         setRecording(null);
         setDraftCombo('');
+        setHotkeyError(null);
         return;
       }
       if (key === 'Backspace') {
         setDraftCombo('');
+        setHotkeyError(null);
         return;
       }
       if (['Control', 'Shift', 'Alt', 'Meta'].includes(key)) {
@@ -99,12 +125,29 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       if (e.metaKey) mods.push('Win');
 
       const keyLabel = key === ' ' ? 'Space' : key.length === 1 ? key.toUpperCase() : key;
+
+      // Reject bare keys with an explicit reason instead of silently waiting.
       if (mods.length === 0) {
-        setDraftCombo(keyLabel); // show, but don't commit — needs a modifier
+        setDraftCombo(keyLabel);
+        setHotkeyError(
+          `"${keyLabel}" needs at least one modifier (Ctrl/Alt/Shift/Win) — a bare key can't be a global hotkey.`,
+        );
         return;
       }
 
       const combo = [...mods, keyLabel].join('+');
+
+      // Reject duplicates of Carbon's own other global hotkey — that conflict
+      // is internal, so Carbon catches it before even trying to register.
+      const other = recording === 'quick' ? settings.enlarged_hotkey : settings.quick_hotkey;
+      const otherName = recording === 'quick' ? 'Enlarged Window' : 'Quick Overlay';
+      if (other && normalizeCombo(combo) === normalizeCombo(other)) {
+        setDraftCombo(combo);
+        setHotkeyError(`“${combo}” is already the ${otherName} hotkey — pick a different combination.`);
+        return;
+      }
+
+      setHotkeyError(null);
       setRecording(null);
       setDraftCombo('');
       updateSetting(recording === 'quick' ? 'quick_hotkey' : 'enlarged_hotkey', combo);
@@ -112,7 +155,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [recording]);
+  }, [recording, settings]);
 
   const fetchSettings = async () => {
     try {
@@ -235,6 +278,31 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     }, duration);
   };
 
+  // Mirror the backend hotkey manager's registration status: after every
+  // settings save it re-registers both global hotkeys and emits the result.
+  // A conflict flag means Windows refused the preferred combo (another app
+  // already holds it) and Carbon fell back to a free one — surface that
+  // clearly instead of pretending the rebind succeeded.
+  useEffect(() => {
+    invoke<HotkeyStatusInfo | null>('get_hotkey_status')
+      .then((s) => {
+        if (s) setHotkeyStatus(s);
+      })
+      .catch(() => {});
+    let unlistenStatus: (() => void) | undefined;
+    let unlistenError: (() => void) | undefined;
+    listen<HotkeyStatusInfo>('hotkey-status', (e) => setHotkeyStatus(e.payload)).then((fn) => {
+      unlistenStatus = fn;
+    });
+    listen<string>('hotkey-error', (e) => showToast('error', e.payload, 8000)).then((fn) => {
+      unlistenError = fn;
+    });
+    return () => {
+      unlistenStatus?.();
+      unlistenError?.();
+    };
+  }, []);
+
   const handleExportBackup = async () => {
     if (isExporting) return;
     setIsExporting(true);
@@ -311,12 +379,18 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                 onClick={() => {
                   setRecording(recording === 'quick' ? null : 'quick');
                   setDraftCombo('');
+                  setHotkeyError(null);
                 }}
               >
                 {recording === 'quick' ? draftCombo || 'Press keys…' : settings.quick_hotkey}
               </button>
             </div>
           </div>
+          {recording === 'quick' && hotkeyError && (
+            <div className="hotkey-error" role="alert">
+              {hotkeyError}
+            </div>
+          )}
           <div className="set-row">
             <div className="set-label">
               Enlarged window hotkey
@@ -328,12 +402,34 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                 onClick={() => {
                   setRecording(recording === 'enlarged' ? null : 'enlarged');
                   setDraftCombo('');
+                  setHotkeyError(null);
                 }}
               >
                 {recording === 'enlarged' ? draftCombo || 'Press keys…' : settings.enlarged_hotkey}
               </button>
             </div>
           </div>
+          {recording === 'enlarged' && hotkeyError && (
+            <div className="hotkey-error" role="alert">
+              {hotkeyError}
+            </div>
+          )}
+          {(hotkeyStatus?.overlay_conflict || hotkeyStatus?.enlarged_conflict) && (
+            <div className="hotkey-conflict-note">
+              {hotkeyStatus.overlay_conflict && (
+                <div>
+                  Windows couldn’t register “{hotkeyStatus.overlay_preferred}” for the Quick Overlay — another
+                  application is likely already using it. Carbon fell back to “{hotkeyStatus.overlay}”.
+                </div>
+              )}
+              {hotkeyStatus.enlarged_conflict && (
+                <div>
+                  Windows couldn’t register “{hotkeyStatus.enlarged_preferred}” for the Enlarged Window — another
+                  application is likely already using it. Carbon fell back to “{hotkeyStatus.enlarged}”.
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         {/* Behavior */}

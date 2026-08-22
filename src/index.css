@@ -704,13 +704,19 @@ input, textarea, select, button {
   height: 24px;
   border-radius: 6px;
   flex-shrink: 0;
-  font-size: 13px;
   display: grid;
   place-items: center;
   background: color-mix(in srgb, var(--accent) 22%, transparent);
-  color: var(--accent-text);
+  /* The mark is a live brand glyph, not fixed lettering: it picks up whichever
+     accent theme is active, same as the other themed elements in the sidebar. */
+  color: var(--accent);
   border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
-  font-weight: 700;
+}
+
+.brand .brand-mark svg {
+  width: 15px;
+  height: 15px;
+  display: block;
 }
 
 .brand-name {
@@ -1229,6 +1235,30 @@ section:last-child {
   color: var(--text-3);
   margin-top: 1px;
   line-height: 1.35;
+}
+
+/* Inline rejection reason shown while recording a new global hotkey. */
+.hotkey-error {
+  font-size: 10.5px;
+  color: var(--danger);
+  line-height: 1.45;
+  padding: 0 12px 8px;
+}
+
+/* Persistent notice when Windows refused a configured hotkey and Carbon
+   fell back to a free combo (registration conflict with another app). */
+.hotkey-conflict-note {
+  margin: 2px 12px 4px;
+  padding: 7px 9px;
+  border-radius: var(--r-btn);
+  background: color-mix(in srgb, #F59E0B 12%, transparent);
+  border: 1px solid color-mix(in srgb, #F59E0B 35%, transparent);
+  color: color-mix(in srgb, #F59E0B 75%, var(--text));
+  font-size: 10.5px;
+  line-height: 1.45;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
 .set-control {
