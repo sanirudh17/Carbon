@@ -102,7 +102,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   const [savedMessage, setSavedMessage] = useState(false);
   const [recording, setRecording] = useState<'quick' | 'enlarged' | null>(null);
   const [draftCombo, setDraftCombo] = useState('');
-  const [hotkeyError, setHotkeyError] = useState<string | null>(null);
+  const [hotkeyError, setHotkeyError] = useState<{ field: 'quick' | 'enlarged'; message: string } | null>(null);
   const [hotkeyStatus, setHotkeyStatus] = useState<HotkeyStatusInfo | null>(null);
   const [expansionStatus, setExpansionStatus] = useState<'off' | 'not_yet_active' | 'active'>('off');
   const [showExpansionConsent, setShowExpansionConsent] = useState(false);
@@ -178,9 +178,10 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       const keyLabel = combo.split('+').pop() as string;
       if (!e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
         setDraftCombo(keyLabel);
-        setHotkeyError(
-          `"${keyLabel}" needs at least one modifier (Ctrl/Alt/Shift/Win) — a bare key can't be a global hotkey.`,
-        );
+        setHotkeyError({
+          field: recording,
+          message: `"${keyLabel}" needs at least one modifier (Ctrl/Alt/Shift/Win) — a bare key can't be a global hotkey.`,
+        });
         return;
       }
 
@@ -190,7 +191,10 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       const otherName = recording === 'quick' ? 'Enlarged Window' : 'Quick Overlay';
       if (other && normalizeCombo(combo) === normalizeCombo(other)) {
         setDraftCombo(combo);
-        setHotkeyError(`“${combo}” is already the ${otherName} hotkey — pick a different combination.`);
+        setHotkeyError({
+          field: recording,
+          message: `“${combo}” is already the ${otherName} hotkey — pick a different combination.`,
+        });
         return;
       }
 
@@ -313,8 +317,18 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
     try {
       await invoke('save_settings', { newSettings: updated });
+      if (key === 'quick_hotkey' || key === 'enlarged_hotkey') {
+        setHotkeyError(null);
+      }
     } catch (err) {
       console.error('Failed to auto-save setting:', err);
+      if (key === 'quick_hotkey' || key === 'enlarged_hotkey') {
+        setHotkeyError({
+          field: key === 'quick_hotkey' ? 'quick' : 'enlarged',
+          message: String(err),
+        });
+      }
+      fetchSettings();
     }
   };
 
@@ -466,9 +480,9 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               </button>
             </div>
           </div>
-          {recording === 'quick' && hotkeyError && (
+          {hotkeyError?.field === 'quick' && (
             <div className="hotkey-error" role="alert">
-              {hotkeyError}
+              {hotkeyError.message}
             </div>
           )}
           <div className="set-row">
@@ -489,9 +503,9 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               </button>
             </div>
           </div>
-          {recording === 'enlarged' && hotkeyError && (
+          {hotkeyError?.field === 'enlarged' && (
             <div className="hotkey-error" role="alert">
-              {hotkeyError}
+              {hotkeyError.message}
             </div>
           )}
           {(hotkeyStatus?.overlay_conflict || hotkeyStatus?.enlarged_conflict) && (

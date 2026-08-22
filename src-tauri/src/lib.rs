@@ -401,7 +401,9 @@ fn save_settings(
         let _ = state.settings.update_hotkeys(&old_hotkeys.0, &old_hotkeys.1);
         current = state.settings.get();
         let _ = shortcuts::reapply(&app, false);
-        let _ = app.emit("hotkey-error", e);
+        let _ = app.emit("hotkey-error", &e);
+        let _ = app.emit("settings-updated", &current);
+        return Err(e);
     }
 
     // Sync expansion hook with the (possibly) new enabled flag — settings already
