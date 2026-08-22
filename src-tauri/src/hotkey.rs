@@ -9,7 +9,9 @@ use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
     UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN,
@@ -18,6 +20,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 static CURRENT_CYCLE_INDEX: AtomicU32 = AtomicU32::new(0);
 static APP_HANDLE_HOLDER: Mutex<Option<AppHandle>> = Mutex::new(None);
+static RECORDING_TARGET: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn set_recording_target(target: Option<String>) {
+    *RECORDING_TARGET.lock().unwrap() = target;
+}
 
 // Registration status of the global hotkeys. Owned by the global-shortcut
 // swap in crate::shortcuts; kept here so the settings UI command can read it.
@@ -182,6 +189,87 @@ pub struct HotkeyManager;
 unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 && (wparam.0 as u32 == WM_KEYDOWN || wparam.0 as u32 == WM_SYSKEYDOWN) {
         let kbd = *(lparam.0 as *const KBDLLHOOKSTRUCT);
+
+        // If Settings is currently recording a new shortcut, intercept the keystroke
+        // before any external application (like AMD Radeon Software or NVIDIA Overlay)
+        // can capture it via RegisterHotKey or steal focus!
+        let target_opt = RECORDING_TARGET.lock().unwrap().clone();
+        if let Some(target) = target_opt {
+            let ctrl_down = (GetKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;
+            let shift_down = (GetKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
+            let alt_down = (GetKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0;
+            let win_down = (GetKeyState(VK_LWIN.0 as i32) as u16 & 0x8000) != 0
+                || (GetKeyState(VK_RWIN.0 as i32) as u16 & 0x8000) != 0;
+
+            let vk = kbd.vkCode;
+            if vk == 0x1B {
+                // Escape key cancels recording
+                *RECORDING_TARGET.lock().unwrap() = None;
+                if let Some(app) = APP_HANDLE_HOLDER.lock().unwrap().as_ref() {
+                    let _ = app.emit("hotkey-record-canceled", ());
+                }
+                return LRESULT(1);
+            }
+
+            let is_mod = matches!(vk, 0x10..=0x12 | 0x5B..=0x5C | 0xA0..=0xA5);
+            if !is_mod {
+                let key_name: Option<&'static str> = match vk {
+                    0x41 => Some("A"), 0x42 => Some("B"), 0x43 => Some("C"), 0x44 => Some("D"),
+                    0x45 => Some("E"), 0x46 => Some("F"), 0x47 => Some("G"), 0x48 => Some("H"),
+                    0x49 => Some("I"), 0x4A => Some("J"), 0x4B => Some("K"), 0x4C => Some("L"),
+                    0x4D => Some("M"), 0x4E => Some("N"), 0x4F => Some("O"), 0x50 => Some("P"),
+                    0x51 => Some("Q"), 0x52 => Some("R"), 0x53 => Some("S"), 0x54 => Some("T"),
+                    0x55 => Some("U"), 0x56 => Some("V"), 0x57 => Some("W"), 0x58 => Some("X"),
+                    0x59 => Some("Y"), 0x5A => Some("Z"),
+                    0x30 => Some("0"), 0x31 => Some("1"), 0x32 => Some("2"), 0x33 => Some("3"),
+                    0x34 => Some("4"), 0x35 => Some("5"), 0x36 => Some("6"), 0x37 => Some("7"),
+                    0x38 => Some("8"), 0x39 => Some("9"),
+                    0x70 => Some("F1"), 0x71 => Some("F2"), 0x72 => Some("F3"), 0x73 => Some("F4"),
+                    0x74 => Some("F5"), 0x75 => Some("F6"), 0x76 => Some("F7"), 0x77 => Some("F8"),
+                    0x78 => Some("F9"), 0x79 => Some("F10"), 0x7A => Some("F11"), 0x7B => Some("F12"),
+                    0x20 => Some("Space"), 0x09 => Some("Tab"), 0x0D => Some("Enter"),
+                    0x25 => Some("Left"), 0x26 => Some("Up"), 0x27 => Some("Right"), 0x28 => Some("Down"),
+                    0xBA => Some(";"), 0xBB => Some("="), 0xBC => Some(","), 0xBD => Some("-"),
+                    0xBE => Some("."), 0xBF => Some("/"), 0xC0 => Some("`"), 0xDB => Some("["),
+                    0xDC => Some("\\"), 0xDD => Some("]"), 0xDE => Some("'"),
+                    _ => None,
+                };
+
+                if let Some(key_str) = key_name {
+                    let mut mods = Vec::new();
+                    if ctrl_down { mods.push("Ctrl"); }
+                    if alt_down { mods.push("Alt"); }
+                    if shift_down { mods.push("Shift"); }
+                    if win_down { mods.push("Win"); }
+
+                    if !mods.is_empty() {
+                        *RECORDING_TARGET.lock().unwrap() = None;
+                        let combo = format!("{}+{}", mods.join("+"), key_str);
+                        if let Some(app) = APP_HANDLE_HOLDER.lock().unwrap().as_ref() {
+                            let _ = app.emit("hotkey-recorded", serde_json::json!({
+                                "target": target,
+                                "combo": combo,
+                            }));
+                        }
+                        return LRESULT(1); // Consume so GPU software / other apps NEVER see it!
+                    }
+                }
+            } else {
+                let mut mods = Vec::new();
+                if ctrl_down { mods.push("Ctrl"); }
+                if alt_down { mods.push("Alt"); }
+                if shift_down { mods.push("Shift"); }
+                if win_down { mods.push("Win"); }
+                if !mods.is_empty() {
+                    if let Some(app) = APP_HANDLE_HOLDER.lock().unwrap().as_ref() {
+                        let _ = app.emit("hotkey-draft-update", serde_json::json!({
+                            "draft": format!("{}+…", mods.join("+")),
+                        }));
+                    }
+                }
+            }
+        }
+
         // Virtual Key Code 0x56 is 'V'
         if kbd.vkCode == 0x56 {
             let ctrl_down = (GetKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;

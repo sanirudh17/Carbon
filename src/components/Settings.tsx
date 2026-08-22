@@ -138,18 +138,15 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   const committedRef = useRef(false);
 
   // Key recorder: while recording, capture the next non-modifier key press
-  // together with its modifiers and commit it as the new hotkey. A combo is
-  // only accepted if it has at least one modifier (a bare key can't be a
-  // global hotkey) and doesn't duplicate Carbon's other global hotkey.
+  // together with its modifiers and commit it as the new hotkey. Both webview
+  // keydown events AND the low-level WH_KEYBOARD_LL hook are active so keystrokes
+  // are captured even if an external application (like AMD/NVIDIA) holds a hotkey.
   useEffect(() => {
     if (!recording) return;
     committedRef.current = false;
 
-    // Suspend Carbon's own global shortcuts for the duration of the recording
-    // session: registered combos are grabbed by the OS-level hook before the
-    // webview sees them, so pressing e.g. the current enlarged-window combo
-    // would toggle windows instead of being captured by the recorder.
     invoke('suspend_global_shortcuts').catch(() => {});
+    invoke('start_recording_hotkey', { target: recording }).catch(() => {});
 
     const onKeyDown = (e: KeyboardEvent) => {
       e.preventDefault();
@@ -157,6 +154,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
       if (e.key === 'Escape') {
         committedRef.current = false;
+        invoke('stop_recording_hotkey').catch(() => {});
         setRecording(null);
         setDraftCombo('');
         setHotkeyError(null);
@@ -209,6 +207,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       }
 
       committedRef.current = true;
+      invoke('stop_recording_hotkey').catch(() => {});
       setHotkeyError(null);
       setRecording(null);
       setDraftCombo('');
@@ -218,6 +217,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     window.addEventListener('keydown', onKeyDown, true);
     return () => {
       window.removeEventListener('keydown', onKeyDown, true);
+      invoke('stop_recording_hotkey').catch(() => {});
       // Re-arm shortcuts ONLY if recording was canceled or toggled off without
       // committing a new hotkey. When a combo was accepted, updateSetting ->
       // save_settings re-arms shortcuts with the NEW binding atomically.
@@ -378,17 +378,58 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       .catch(() => {});
     let unlistenStatus: (() => void) | undefined;
     let unlistenError: (() => void) | undefined;
+    let unlistenRecorded: (() => void) | undefined;
+    let unlistenDraft: (() => void) | undefined;
+    let unlistenCancel: (() => void) | undefined;
+
     listen<HotkeyStatusInfo>('hotkey-status', (e) => setHotkeyStatus(e.payload)).then((fn) => {
       unlistenStatus = fn;
     });
     listen<string>('hotkey-error', (e) => showToast('error', e.payload, 8000)).then((fn) => {
       unlistenError = fn;
     });
+    listen<{ target: 'quick' | 'enlarged'; combo: string }>('hotkey-recorded', (e) => {
+      const { target, combo } = e.payload;
+      const other = target === 'quick' ? settings.enlarged_hotkey : settings.quick_hotkey;
+      const otherName = target === 'quick' ? 'Enlarged Window' : 'Quick Overlay';
+      if (other && normalizeCombo(combo) === normalizeCombo(other)) {
+        setHotkeyError({
+          field: target,
+          message: `“${combo}” is already the ${otherName} hotkey — pick a different combination.`,
+        });
+        setRecording(null);
+        setDraftCombo('');
+        return;
+      }
+      committedRef.current = true;
+      invoke('stop_recording_hotkey').catch(() => {});
+      setHotkeyError(null);
+      setRecording(null);
+      setDraftCombo('');
+      updateSetting(target === 'quick' ? 'quick_hotkey' : 'enlarged_hotkey', combo);
+    }).then((fn) => {
+      unlistenRecorded = fn;
+    });
+    listen<{ draft: string }>('hotkey-draft-update', (e) => {
+      setDraftCombo(e.payload.draft);
+    }).then((fn) => {
+      unlistenDraft = fn;
+    });
+    listen('hotkey-record-canceled', () => {
+      setRecording(null);
+      setDraftCombo('');
+    }).then((fn) => {
+      unlistenCancel = fn;
+    });
+
     return () => {
       unlistenStatus?.();
       unlistenError?.();
+      unlistenRecorded?.();
+      unlistenDraft?.();
+      unlistenCancel?.();
     };
-  }, []);
+  }, [settings]);
 
   const handleExportBackup = async () => {
     if (isExporting) return;

@@ -418,6 +418,16 @@ fn save_settings(
 }
 
 #[tauri::command]
+fn start_recording_hotkey(target: String) {
+    hotkey::set_recording_target(Some(target));
+}
+
+#[tauri::command]
+fn stop_recording_hotkey() {
+    hotkey::set_recording_target(None);
+}
+
+#[tauri::command]
 fn get_expansion_status() -> expansion::ExpansionStatus {
     expansion::get_expansion_status()
 }
@@ -1130,6 +1140,8 @@ pub fn run() {
             get_hotkey_status,
             suspend_global_shortcuts,
             resume_global_shortcuts,
+            start_recording_hotkey,
+            stop_recording_hotkey,
             get_target_app_name,
             set_overlay_preview,
             set_overlay_default_tab,
