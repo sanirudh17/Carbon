@@ -4216,7 +4216,7 @@ section:last-child {
   flex-wrap: nowrap;
   align-items: center;
   gap: 6px;
-  height: 30px;
+  height: 28px;
   padding: 0 12px;
   white-space: nowrap;
 }
@@ -4225,22 +4225,19 @@ section:last-child {
   flex-shrink: 0;
 }
 
-/* Shortcut chip rides the same line & centerline as its label */
-.sn-kbd {
+.sn-actions-btn {
   display: inline-flex;
   align-items: center;
-  position: static;
-  margin-top: 0;
+  justify-content: center;
+  gap: 6px;
 }
 
-.sn-kbd {
-  font-family: var(--mono, monospace);
+.sn-actions-btn .key {
   font-size: 9.5px;
-  color: var(--text-3);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 1px 5px;
-  background: var(--elev);
+  height: 18px;
+  padding: 0 5px;
+  margin: 0;
+  vertical-align: middle;
 }
 
 .snippets-preview-empty {
@@ -4652,6 +4649,9 @@ section:last-child {
   font-size: 11px;
   line-height: 1.45;
   color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sn-help-row em {
@@ -4661,6 +4661,7 @@ section:last-child {
   color: var(--accent-text);
   opacity: 0;
   transition: opacity 80ms ease;
+  white-space: nowrap;
 }
 
 .sn-help-row:hover em {
@@ -4668,22 +4669,29 @@ section:last-child {
 }
 
 .sn-help-mods {
-  margin-top: 9px;
-  padding-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
   border-top: 1px solid var(--line-soft);
+  white-space: nowrap;
+  flex-wrap: nowrap;
 }
 
 .sn-help-mods-title {
   font-size: 10.5px;
   font-weight: 600;
   color: var(--text-3);
-  margin-bottom: 6px;
+  margin-bottom: 0;
+  flex-shrink: 0;
 }
 
 .sn-help-mod-pills {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
+  flex-shrink: 0;
 }
 
 .sn-help-mod-pills code {
@@ -4692,14 +4700,18 @@ section:last-child {
   color: var(--sn-tok);
   background: color-mix(in srgb, var(--sn-tok) 9%, transparent);
   border: 1px solid color-mix(in srgb, var(--sn-tok) 18%, transparent);
-  padding: 2px 7px;
+  padding: 1px 6px;
   border-radius: 999px;
+  white-space: nowrap;
 }
 
 .sn-help-ex {
   font-size: 10.5px;
   color: var(--text-3);
-  margin-top: 7px;
+  margin-top: 0;
+  margin-left: auto;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .sn-help-ex code {
@@ -4960,6 +4972,39 @@ section:last-child {
 .sn-overlay-list .snippet-row {
   padding: 5px 7px;
   gap: 8px;
+}
+
+.sn-overlay-list .snippet-row.sn-row-single {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 8px;
+}
+
+.sn-row-main-single {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sn-row-main-single .sn-row-name {
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+.sn-row-main-single .sn-keyword-badge {
+  font-size: 10px;
+  padding: 1.5px 6px;
 }
 
 .sn-overlay-list .sn-row-ic {

@@ -143,12 +143,14 @@ export const SnippetEditorModal: React.FC<{
   const insertPlaceholder = (token: string) => {
     const el = textareaRef.current;
     if (!el) {
+      contentHistory.record(draftContent, null, draftContent + token);
       setDraftContent((prev) => prev + token);
       return;
     }
     const start = el.selectionStart ?? draftContent.length;
     const end = el.selectionEnd ?? draftContent.length;
     const next = draftContent.slice(0, start) + token + draftContent.slice(end);
+    contentHistory.record(draftContent, el, next);
     setDraftContent(next);
     setTimeout(() => {
       el.focus();
@@ -165,14 +167,15 @@ export const SnippetEditorModal: React.FC<{
       const el = helpBtnRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
+      const popWidth = Math.min(560, window.innerWidth - 24);
       const spaceBelow = window.innerHeight - rect.bottom - 10;
       const spaceAbove = rect.top - 10;
-      const dropUp = spaceBelow < 300 && spaceAbove > spaceBelow;
+      const dropUp = spaceBelow < 280 && spaceAbove > spaceBelow;
       setHelpPos({
         position: 'fixed',
-        width: 400,
+        width: popWidth,
         maxHeight: Math.max(180, dropUp ? Math.min(480, spaceAbove) : Math.min(480, spaceBelow)),
-        left: Math.max(8, Math.min(rect.left - 2, window.innerWidth - 408)),
+        left: Math.max(8, Math.min(rect.left - 2, window.innerWidth - popWidth - 12)),
         ...(dropUp
           ? { bottom: window.innerHeight - rect.top + 7 }
           : { top: rect.bottom + 7 }),
@@ -272,15 +275,15 @@ export const SnippetEditorModal: React.FC<{
                         ))}
                       </div>
                       <div className="sn-help-mods">
-                        <div className="sn-help-mods-title">Modifiers — chain after any token</div>
+                        <span className="sn-help-mods-title">Modifiers:</span>
                         <div className="sn-help-mod-pills">
                           {['uppercase', 'lowercase', 'trim', 'percent-encode', 'json-stringify', 'raw'].map((m) => (
                             <code key={m}>{m}</code>
                           ))}
                         </div>
-                        <div className="sn-help-ex">
-                          Example: <code>{'{clipboard | lowercase}'}</code>
-                        </div>
+                        <span className="sn-help-ex">
+                          e.g. <code>{'{clipboard | lowercase}'}</code>
+                        </span>
                       </div>
                     </div>,
                     document.body

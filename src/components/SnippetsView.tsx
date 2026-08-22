@@ -574,9 +574,9 @@ export const SnippetsView: React.FC<{
                 {selected.show_confirmation && <span className="sn-foot-confirm">confirms on use</span>}
               </span>
               <div className="sn-foot-actions">
-                <button type="button" className="btn subtle" onClick={() => { setActionIndex(0); setActionOpen(true); }}>
+                <button type="button" className="btn subtle sn-actions-btn" onClick={() => { setActionIndex(0); setActionOpen(true); }}>
+                  <span className="key">Ctrl+K</span>
                   <span>Actions</span>
-                  <span className="sn-kbd">Ctrl+K</span>
                 </button>
                 <button className="btn primary" disabled={selected.content.length === 0} onClick={() => useSnippet(selected, 'copy')}>
                   <CopyIcon /> Copy to Clipboard

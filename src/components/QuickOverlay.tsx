@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ClipItem, HotkeyStatus, AppSettings, Collection, Snippet } from '../types';
-import { ClipPreview, ClipMetaStrip, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
+import { ClipPreview, ClipMetaStrip, getSpecificTypeLabel, appDisplayName } from './ClipPreview';
 import { getActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
 import { collectionColorFor } from '../utils/collections';
 import {
@@ -455,8 +455,7 @@ export const QuickOverlay: React.FC = () => {
       setEditingContent(item.text_content || '');
       setRenderMode(
         item.content_type === 'rich_text' ||
-          Boolean(item.html_content) ||
-          (item.text_content ? isMarkdownContent(item.text_content) : false)
+          Boolean(item.html_content)
       );
     }
     return () => cancelAnimationFrame(raf);
@@ -1426,26 +1425,24 @@ export const QuickOverlay: React.FC = () => {
                       <div
                         key={s.id}
                         id={`sn-ov-row-${s.id}`}
-                        className={`snippet-row ${isSelected ? 'selected' : ''}`}
+                        className={`snippet-row sn-row-single ${isSelected ? 'selected' : ''}`}
                         onClick={() => {
                           setSnSelectedId(s.id);
                           focusSearchInput();
                         }}
                       >
                         <span className="sn-row-ic"><Icon /></span>
-                        <span className="sn-row-main">
+                        <span className="sn-row-main-single">
                           <span className="sn-row-name">{s.name}</span>
-                          <span className="sn-row-keywrap">
-                            <span className="sn-keyword-badge">{s.keyword || '/'}</span>
-                            {(s.tags || []).length > 0 && (
-                              <span className="sn-row-tags">
-                                {(s.tags || []).slice(0, 2).map((t) => (
-                                  <span key={t} className="sn-mini-tag">#{t}</span>
-                                ))}
-                                {(s.tags || []).length > 2 && <span className="sn-mini-tag">+{(s.tags || []).length - 2}</span>}
-                              </span>
-                            )}
-                          </span>
+                          <span className="sn-keyword-badge">{s.keyword || '/'}</span>
+                          {(s.tags || []).length > 0 && (
+                            <span className="sn-row-tags">
+                              {(s.tags || []).slice(0, 1).map((t) => (
+                                <span key={t} className="sn-mini-tag">#{t}</span>
+                              ))}
+                              {(s.tags || []).length > 1 && <span className="sn-mini-tag">+{(s.tags || []).length - 1}</span>}
+                            </span>
+                          )}
                         </span>
                         <span className="sn-row-time">{formatSnippetLastUsed(s.last_used_at)}</span>
                       </div>
@@ -1505,13 +1502,28 @@ export const QuickOverlay: React.FC = () => {
                     {getTypeIcon(selectedItem.content_type)}
                     {getSpecificTypeLabel(selectedItem)}
                   </span>
+                  {selectedItem.content_type !== 'image' && selectedItem.content_type !== 'file' &&
+                    (selectedItem.content_type === 'rich_text' || Boolean(selectedItem.html_content)) && (
+                    <div className="seg" style={{ marginLeft: 'auto' }}>
+                      <button
+                        className={`seg-btn ${renderMode ? 'active' : ''}`}
+                        onClick={() => setRenderMode(true)}
+                      >
+                        Render
+                      </button>
+                      <button
+                        className={`seg-btn ${!renderMode ? 'active' : ''}`}
+                        onClick={() => setRenderMode(false)}
+                      >
+                        Raw
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="overlay-preview-content">
                   {selectedItem.content_type === 'image' || selectedItem.content_type === 'file' ? (
                     <ClipPreview item={selectedItem} />
-                  ) : (selectedItem.content_type === 'rich_text' ||
-                      Boolean(selectedItem.html_content) ||
-                      (selectedItem.text_content && isMarkdownContent(selectedItem.text_content))) &&
+                  ) : (selectedItem.content_type === 'rich_text' || Boolean(selectedItem.html_content)) &&
                     renderMode ? (
                     <div className="preview-render">
                       <ClipPreview item={selectedItem} forceRaw={false} />
@@ -1542,7 +1554,16 @@ export const QuickOverlay: React.FC = () => {
 
         <div className="overlay-bar">
           <div className="bar-left">
-            <span className="hint primary" onClick={() => selectedItem && handlePaste(selectedItem, false)}>
+            <span
+              className="hint primary"
+              onClick={() => {
+                if (tab === 'snippets') {
+                  if (snSelected) useSnippet(snSelected, 'paste');
+                } else {
+                  if (selectedItem) handlePaste(selectedItem, false);
+                }
+              }}
+            >
               <span className="key">Enter</span>
               <b>{targetApp ? `Paste to ${targetApp}` : 'Paste'}</b>
             </span>
@@ -1553,8 +1574,13 @@ export const QuickOverlay: React.FC = () => {
             <span
               className="hint"
               onClick={() => {
-                setActionIndex(0);
-                setActionPanelOpen(true);
+                if (tab === 'snippets') {
+                  setSnActionIndex(0);
+                  setSnActionOpen(true);
+                } else {
+                  setActionIndex(0);
+                  setActionPanelOpen(true);
+                }
               }}
             >
               <span className="key">Ctrl+K</span>
