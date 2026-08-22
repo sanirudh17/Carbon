@@ -158,8 +158,21 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
         return;
       }
 
+      const mods: string[] = [];
+      if (e.ctrlKey) mods.push('Ctrl');
+      if (e.altKey) mods.push('Alt');
+      if (e.shiftKey) mods.push('Shift');
+      if (e.metaKey) mods.push('Win');
+
       const combo = keyEventToCombo(e);
-      if (!combo) return; // only modifiers held, or an unsupported physical key
+      if (!combo) {
+        // Show live visual feedback while holding modifiers (e.g. "Ctrl+Alt+…")
+        if (mods.length > 0) {
+          setDraftCombo(mods.join('+') + '+…');
+          setHotkeyError(null);
+        }
+        return;
+      }
 
       // Reject bare keys with an explicit reason instead of silently waiting.
       const keyLabel = combo.split('+').pop() as string;
@@ -188,9 +201,16 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       updateSetting(recording === 'quick' ? 'quick_hotkey' : 'enlarged_hotkey', combo);
     };
 
+    const onKeyUp = () => {
+      // Clear or adjust modifier draft when keys are released
+      setDraftCombo('');
+    };
+
     window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keyup', onKeyUp, true);
     return () => {
       window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('keyup', onKeyUp, true);
       // Re-arm shortcuts ONLY if recording was canceled or toggled off without
       // committing a new hotkey. When a combo was accepted, updateSetting ->
       // save_settings re-arms shortcuts with the NEW binding atomically.

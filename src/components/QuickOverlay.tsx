@@ -820,6 +820,11 @@ export const QuickOverlay: React.FC = () => {
   // paste/queue/preview action must operate on this, not the unfiltered array.
   const selectedItem = displayItems[selectedIndex];
 
+  // Keep editingContent synchronized with selectedItem so raw/edit mode never renders empty text
+  useEffect(() => {
+    setEditingContent(selectedItem?.text_content || '');
+  }, [selectedItem?.id, selectedItem?.text_content]);
+
   const handleExtractOrCopyOcr = async (item: ClipItem) => {
     try {
       const text = item.ocr_text && item.ocr_text.trim()
@@ -1559,7 +1564,6 @@ export const QuickOverlay: React.FC = () => {
               selectedItem && (() => {
                 const hasRenderedVersion =
                   selectedItem.content_type === 'rich_text' ||
-                  Boolean(selectedItem.html_content) ||
                   (Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!));
 
                 return (

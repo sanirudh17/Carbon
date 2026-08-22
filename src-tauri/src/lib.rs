@@ -394,16 +394,14 @@ fn save_settings(
     let mut current = state.settings.get();
     state.db.trim_history(current.retention_days, current.max_entries).ok();
 
-    // Swappable hotkeys (Glint-style): on a rebind, clear everything and
+    // Swappable hotkeys (Glint-style): on save, clear everything and
     // re-apply strictly. If Windows rejects a combo, roll back to the
     // previously active bindings and surface why — no silent fallbacks.
-    if current.quick_hotkey != old_hotkeys.0 || current.enlarged_hotkey != old_hotkeys.1 {
-        if let Err(e) = shortcuts::reapply(&app, true) {
-            let _ = state.settings.update_hotkeys(&old_hotkeys.0, &old_hotkeys.1);
-            current = state.settings.get();
-            let _ = shortcuts::reapply(&app, false);
-            let _ = app.emit("hotkey-error", e);
-        }
+    if let Err(e) = shortcuts::reapply(&app, true) {
+        let _ = state.settings.update_hotkeys(&old_hotkeys.0, &old_hotkeys.1);
+        current = state.settings.get();
+        let _ = shortcuts::reapply(&app, false);
+        let _ = app.emit("hotkey-error", e);
     }
 
     // Sync expansion hook with the (possibly) new enabled flag — settings already
