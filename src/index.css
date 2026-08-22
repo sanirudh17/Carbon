@@ -6,8 +6,8 @@
   --elev-hover: #1C1E24;
   --line: #23252C;
   --line-soft: #1B1D22;
-  --well-bg: #181A21;
-  --well-line: #3B404E;
+  --well-bg: #13151A;
+  --well-line: #2F333E;
   --text: #ECECEF;
   --text-2: #8F94A0;
   --text-3: #585D68;
@@ -1829,10 +1829,6 @@ section:last-child {
   line-height: 1.7;
   color: var(--text);
   word-break: break-word;
-  background: var(--well-bg);
-  border: 1px solid var(--well-line);
-  border-radius: var(--r-panel);
-  padding: 16px 18px;
 }
 
 .rich-doc :is(h1, h2, h3, h4, h5, h6) {
