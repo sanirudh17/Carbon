@@ -436,6 +436,7 @@ impl DbState {
             .map_err(|e| e.to_string())?;
 
         let mut to_update: Vec<(String, String, String)> = Vec::new(); // (id, clean_title, content_type)
+        let mut to_delete: Vec<String> = Vec::new();
         for r in rows {
             let (id, content_type, title, text_content) = r.map_err(|e| e.to_string())?;
 
@@ -463,12 +464,20 @@ impl DbState {
                         None,
                         None,
                     );
+
+                    // Legacy rows force-typed "code" by the old terminal
+                    // heuristic: prose with no code signals renders as unstyled
+                    // plain text under the code view — remove them outright.
+                    if content_type == "code"
+                        && detected_type == "text"
+                        && text_content.as_deref().map_or(false, crate::clipboard_watcher::looks_like_prose)
+                    {
+                        to_delete.push(id);
+                        continue;
+                    }
+
                     let target_type = if content_type == "text" && (detected_type == "link" || detected_type == "email" || detected_type == "color" || detected_type == "file") {
                         detected_type
-                    } else if content_type == "code" && detected_type == "text" && text_content.as_deref().map_or(false, crate::clipboard_watcher::looks_like_prose) {
-                        // Legacy rows force-typed "code" by the old terminal
-                        // heuristic — prose reads as plain text, demote it.
-                        "text".to_string()
                     } else {
                         content_type.clone()
                     };
@@ -489,6 +498,12 @@ impl DbState {
                 params![clean, new_type, id],
             )
             .map_err(|e| e.to_string())?;
+        }
+
+        for id in to_delete {
+            // The entries_ad trigger removes the matching FTS row.
+            conn.execute("DELETE FROM entries WHERE id = ?1", params![id])
+                .map_err(|e| e.to_string())?;
         }
 
         Ok(())

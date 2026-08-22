@@ -744,11 +744,10 @@ export const ClipMetaStrip: React.FC<{ item: ClipItem; onFilterByApp?: (app: str
   } else if (item.content_type === 'text' || item.content_type === 'code') {
     const text = item.text_content || '';
     const chars = text.length;
-    // Single length metric shared by prose and code — characters + line count.
-    const lines = text ? text.split('\n').length : 0;
+    // Single length metric shared by prose and code — character count.
     extra.push({
       label: 'Length',
-      value: `${chars.toLocaleString()} chars · ${lines.toLocaleString()} ${lines === 1 ? 'line' : 'lines'}`,
+      value: `${chars.toLocaleString()} chars`,
     });
   } else if (item.content_type === 'color') {
     extra.push({ label: 'Hex value', value: item.title });
