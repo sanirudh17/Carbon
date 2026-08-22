@@ -100,6 +100,9 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
                 if let Ok(entries) = state.db.get_all_entries(None, None, false, None) {
                     let _ = app_handle.emit("overlay-data", &entries);
                 }
+                if let Ok(snips) = state.db.list_snippets() {
+                    let _ = app_handle.emit("overlay-snippets", &snips);
+                }
             }
         }
     } else {

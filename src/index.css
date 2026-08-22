@@ -4014,19 +4014,21 @@ section:last-child {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  line-height: 1;
+  height: 18px;
+  box-sizing: border-box;
   font-family: var(--mono, monospace);
   font-size: 10px;
   font-weight: 600;
   color: var(--accent-text);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
-  padding: 2px 7px;
+  padding: 0 7px;
   border-radius: 999px;
   letter-spacing: 0.2px;
   flex-shrink: 0;
-  vertical-align: baseline;
-  transform: translateY(-0.5px);
+  line-height: 18px;
+  text-align: center;
+  vertical-align: middle;
 }
 
 .sn-row-tags {
@@ -4100,8 +4102,10 @@ section:last-child {
 .preview-kind .sn-keyword-badge,
 .sn-preview-name .sn-keyword-badge {
   font-size: 10px;
-  padding: 2px 7px;
-  transform: translateY(0.5px);
+  padding: 0 7px;
+  height: 18px;
+  line-height: 18px;
+  transform: none;
 }
 
 .sn-detail-body {
@@ -4654,9 +4658,6 @@ section:last-child {
   line-height: 1.45;
   color: var(--text-2);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
 }
 
 .sn-help-row em {
@@ -5016,7 +5017,10 @@ section:last-child {
 
 .sn-row-main-single .sn-keyword-badge {
   font-size: 10px;
-  padding: 1.5px 6px;
+  padding: 0 6px;
+  height: 17px;
+  line-height: 17px;
+  transform: none;
 }
 
 .sn-overlay-list .sn-row-ic {

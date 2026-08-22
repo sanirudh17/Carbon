@@ -167,16 +167,16 @@ export const SnippetEditorModal: React.FC<{
       const el = helpBtnRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
-      const popWidth = Math.min(580, window.innerWidth - 24);
+      const popWidth = Math.min(700, window.innerWidth - 32);
       const spaceBelow = window.innerHeight - rect.bottom - 10;
       const spaceAbove = rect.top - 10;
       const dropUp = spaceBelow < 280 && spaceAbove > spaceBelow;
       setHelpPos({
         position: 'fixed',
         width: popWidth,
-        maxWidth: 'calc(100vw - 24px)',
+        maxWidth: 'calc(100vw - 32px)',
         maxHeight: Math.max(180, dropUp ? Math.min(480, spaceAbove) : Math.min(480, spaceBelow)),
-        left: Math.max(8, Math.min(rect.left - 2, window.innerWidth - popWidth - 12)),
+        left: Math.max(8, Math.min(rect.left - 2, window.innerWidth - popWidth - 16)),
         boxSizing: 'border-box',
         ...(dropUp
           ? { bottom: window.innerHeight - rect.top + 7 }

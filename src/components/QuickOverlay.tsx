@@ -171,7 +171,6 @@ export const QuickOverlay: React.FC = () => {
 
   // ── Snippets tab state ────────────────────────────────────────────
   const [snSnippets, setSnSnippets] = useState<Snippet[]>([]);
-  const [snLoading, setSnLoading] = useState(false);
   const [snSearch, setSnSearch] = useState('');
   const [snTagFilter, setSnTagFilter] = useState('__all__');
   const [snSelectedId, setSnSelectedId] = useState<string | null>(null);
@@ -250,19 +249,16 @@ export const QuickOverlay: React.FC = () => {
   // ── Snippets tab: data + derived state ────────────────────────────
   const fetchSnippets = async () => {
     try {
-      // Cache-first: never flash a loading state over data we already have.
-      if (snSnippets.length === 0) setSnLoading(true);
       const list = await invoke<Snippet[]>('list_snippets');
-      setSnSnippets(list || []);
-      setSnSelectedId((prev) => {
-        const l = list || [];
-        if (l.length === 0) return null;
-        return prev && l.some((s) => s.id === prev) ? prev : l[0].id;
-      });
+      if (Array.isArray(list)) {
+        setSnSnippets(list);
+        setSnSelectedId((prev) => {
+          if (list.length === 0) return null;
+          return prev && list.some((s) => s.id === prev) ? prev : list[0].id;
+        });
+      }
     } catch (err) {
       console.error('Failed to fetch snippets:', err);
-    } finally {
-      setSnLoading(false);
     }
   };
 
@@ -536,6 +532,16 @@ export const QuickOverlay: React.FC = () => {
       if (Array.isArray(data)) {
         setItems(data);
         setSelectedIndex(0);
+      }
+    };
+
+    window.__carbonSetSnippets = (data: Snippet[]) => {
+      if (Array.isArray(data)) {
+        setSnSnippets(data);
+        setSnSelectedId((prev) => {
+          if (data.length === 0) return null;
+          return prev && data.some((s) => s.id === prev) ? prev : data[0].id;
+        });
       }
     };
 
@@ -1401,11 +1407,7 @@ export const QuickOverlay: React.FC = () => {
           </div>
           {/* Snippets list (always mounted; hidden when the Clips tab is active) */}
           <div className={`overlay-list sn-overlay-list ${tab === 'clips' ? 'inactive-tab' : ''}`}>
-            {snLoading ? (
-              <div className="empty">
-                <div className="big">Loading snippets…</div>
-              </div>
-            ) : snSnippets.length === 0 ? (
+            {snSnippets.length === 0 ? (
               <div className="empty">
                 <div className="big">No snippets yet</div>
                 <div className="sub">Create snippets from the full window, then recall them here.</div>

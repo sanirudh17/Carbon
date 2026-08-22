@@ -117,5 +117,6 @@ declare global {
   interface Window {
     __carbonDraggingClipIds?: string[] | null;
     __carbonSetData?: (data: ClipItem[]) => void;
+    __carbonSetSnippets?: (data: Snippet[]) => void;
   }
 }
