@@ -21,7 +21,7 @@ const normalizeCombo = (combo: string): string => {
 };
 
 const DEFAULT_HOTKEYS = {
-  quick_hotkey: 'Ctrl+Shift+X',
+  quick_hotkey: 'Ctrl+Shift+Z',
   enlarged_hotkey: 'Ctrl+Alt+X',
 };
 
@@ -85,7 +85,7 @@ const ACCENT_SWATCHES = [
 
 export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, currentTheme }) => {
   const [settings, setSettings] = useState<AppSettings>({
-    quick_hotkey: 'Ctrl+Shift+X',
+    quick_hotkey: 'Ctrl+Shift+Z',
     enlarged_hotkey: 'Ctrl+Alt+X',
     paste_plain_text: false,
     move_to_top_on_paste: true,
@@ -349,26 +349,6 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     await updateSetting(field, DEFAULT_HOTKEYS[field]);
   };
 
-  const handleResetAllHotkeys = async () => {
-    setHotkeyError(null);
-    setRecording(null);
-    setDraftCombo('');
-    const updated = {
-      ...settings,
-      quick_hotkey: DEFAULT_HOTKEYS.quick_hotkey,
-      enlarged_hotkey: DEFAULT_HOTKEYS.enlarged_hotkey,
-    };
-    setSettings(updated);
-    try {
-      await invoke('save_settings', { newSettings: updated });
-      showToast('success', 'Shortcuts reset to defaults.');
-    } catch (err) {
-      console.error('Failed to reset hotkeys:', err);
-      showToast('error', String(err));
-      fetchSettings();
-    }
-  };
-
   const handleClearHistory = async () => {
     if (window.confirm('Are you sure you want to clear all unpinned clipboard items?')) {
       try {
@@ -531,7 +511,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                 <button
                   type="button"
                   className="btn subtle small"
-                  title="Reset to default (Ctrl+Shift+X)"
+                  title="Reset to default (Ctrl+Shift+Z)"
                   onClick={() => handleResetHotkey('quick_hotkey')}
                 >
                   Reset
@@ -604,17 +584,6 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                   Windows could not register <strong>“{hotkeyStatus.enlarged_preferred}”</strong> for Enlarged Window because another app owns it. Carbon kept <strong>“{hotkeyStatus.enlarged}”</strong>.
                 </div>
               )}
-            </div>
-          )}
-          {(!isDefaultHotkey('quick_hotkey', settings.quick_hotkey) || !isDefaultHotkey('enlarged_hotkey', settings.enlarged_hotkey)) && (
-            <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                className="btn subtle small"
-                onClick={handleResetAllHotkeys}
-              >
-                Reset shortcuts to defaults
-              </button>
             </div>
           )}
         </section>

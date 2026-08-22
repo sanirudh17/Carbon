@@ -94,7 +94,7 @@ fn default_overlay_tab() -> String {
 impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
-            quick_hotkey: "Ctrl+Shift+X".to_string(),
+            quick_hotkey: "Ctrl+Shift+Z".to_string(),
             enlarged_hotkey: "Ctrl+Alt+X".to_string(),
             paste_plain_text: false,
             move_to_top_on_paste: true,
