@@ -32,9 +32,13 @@ interface ActionEntry {
   handler: () => void;
 }
 
-export const SnippetsView: React.FC<{ createSignal: number }> = ({ createSignal }) => {
-  const [snippets, setSnippets] = useState<Snippet[]>([]);
-  const [loading, setLoading] = useState(true);
+export const SnippetsView: React.FC<{
+  createSignal: number;
+  /** Warm cache from the parent — lets the section render instantly. */
+  initialSnippets?: Snippet[];
+}> = ({ createSignal, initialSnippets }) => {
+  const [snippets, setSnippets] = useState<Snippet[]>(initialSnippets ?? []);
+  const [loading, setLoading] = useState(!(initialSnippets && initialSnippets.length > 0));
   const [search, setSearch] = useState('');
   const [tagFilter, setTagFilter] = useState<string>('__all__');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -83,8 +87,10 @@ export const SnippetsView: React.FC<{ createSignal: number }> = ({ createSignal 
     }
   }, []);
 
+  // Silent background refresh — the cache already covers first paint.
   useEffect(() => {
     fetchSnippets();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchSnippets]);
 
   // Sidebar "+" → open the create dialog.
@@ -185,14 +191,15 @@ export const SnippetsView: React.FC<{ createSignal: number }> = ({ createSignal 
     onUsed: () => fetchSnippets(),
   });
 
-  const handleDelete = async (snippet: Snippet) => {
-    try {
-      await invoke('delete_snippet', { id: snippet.id });
-      setSnippets((prev) => prev.filter((s) => s.id !== snippet.id));
-      if (selectedId === snippet.id) setSelectedId(null);
-    } catch (err) {
+  const handleDelete = (snippet: Snippet) => {
+    // Optimistic: drop it from the UI immediately, persist in the background.
+    // Any error rolls the view back via a fresh fetch.
+    setSnippets((prev) => prev.filter((s) => s.id !== snippet.id));
+    if (selectedId === snippet.id) setSelectedId(null);
+    invoke('delete_snippet', { id: snippet.id }).catch((err) => {
       console.error('Failed to delete snippet:', err);
-    }
+      fetchSnippets();
+    });
   };
 
   const actions = useMemo<ActionEntry[]>(() => {
@@ -476,18 +483,18 @@ export const SnippetsView: React.FC<{ createSignal: number }> = ({ createSignal 
                     >
                       <span className="sn-row-ic"><Icon /></span>
                       <span className="sn-row-main">
-                        <span className="sn-row-name">{s.name}</span>
-                        <span className="sn-row-keywrap">
+                        <span className="sn-row-titlerow">
+                          <span className="sn-row-name">{s.name}</span>
                           <span className="sn-keyword-badge">{s.keyword || '/'}</span>
-                          {(s.tags || []).length > 0 && (
-                            <span className="sn-row-tags">
-                              {(s.tags || []).slice(0, 2).map((t) => (
-                                <span key={t} className="sn-mini-tag">#{t}</span>
-                              ))}
-                              {(s.tags || []).length > 2 && <span className="sn-mini-tag">+{(s.tags || []).length - 2}</span>}
-                            </span>
-                          )}
                         </span>
+                        {(s.tags || []).length > 0 && (
+                          <span className="sn-row-tags">
+                            {(s.tags || []).slice(0, 2).map((t) => (
+                              <span key={t} className="sn-mini-tag">#{t}</span>
+                            ))}
+                            {(s.tags || []).length > 2 && <span className="sn-mini-tag">+{(s.tags || []).length - 2}</span>}
+                          </span>
+                        )}
                       </span>
                       <span className="sn-row-time">{formatSnippetLastUsed(s.last_used_at)}</span>
                     </div>
@@ -564,12 +571,12 @@ export const SnippetsView: React.FC<{ createSignal: number }> = ({ createSignal 
 
             <div className="snippets-preview-foot">
               <span className="sn-foot-label">
-                <SelectedIcon />
-                {selected.show_confirmation && <span className="sn-foot-confirm" title="Play a confirmation when used">confirms on use</span>}
+                {selected.show_confirmation && <span className="sn-foot-confirm">confirms on use</span>}
               </span>
               <div className="sn-foot-actions">
-                <button className="btn subtle" onClick={() => { setActionIndex(0); setActionOpen(true); }}>
-                  Actions <span className="sn-kbd">Ctrl+K</span>
+                <button type="button" className="btn subtle" onClick={() => { setActionIndex(0); setActionOpen(true); }}>
+                  <span>Actions</span>
+                  <span className="sn-kbd">Ctrl+K</span>
                 </button>
                 <button className="btn primary" disabled={selected.content.length === 0} onClick={() => useSnippet(selected, 'copy')}>
                   <CopyIcon /> Copy to Clipboard

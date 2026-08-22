@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, memo, useCallback, useMemo } from '
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ClipItem, Collection, DbStats, AppSettings } from '../types';
+import { ClipItem, Collection, DbStats, AppSettings, Snippet } from '../types';
 import { collectionColorFor } from '../utils/collections';
 import { ClipPreview, ClipMetaStrip, getQrCopyLabel, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
 import { getActionsForClip, getPasteActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
@@ -406,14 +406,24 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   // Keep the latest fetch reachable from long-lived listeners so event
   // refreshes respect the current search/filter state.
   const fetchRef = useRef<() => void>(() => {});
+  // Full snippet list, cached so the Snippets section renders instantly on
+  // open (no IPC wait); SnippetsView still refreshes silently in background.
+  const [snippetsCache, setSnippetsCache] = useState<Snippet[]>([]);
+  const loadSnippetCache = useCallback(() => {
+    invoke<Snippet[]>('list_snippets')
+      .then((list) => {
+        const arr = Array.isArray(list) ? list : [];
+        setSnippetsCache(arr);
+        setSnippetsCount(arr.length);
+      })
+      .catch(() => setSnippetsCount(0));
+  }, []);
   fetchRef.current = () => {
     fetchItems();
     fetchCollections();
     fetchCounts();
     fetchQueue();
-    invoke<unknown[]>('list_snippets')
-      .then((list) => setSnippetsCount(Array.isArray(list) ? list.length : 0))
-      .catch(() => setSnippetsCount(0));
+    loadSnippetCache();
   };
 
   const handleSelectFilter = (filterKey: string) => {
@@ -470,9 +480,8 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     fetchCounts();
     fetchCollections();
     fetchQueue();
-    invoke<unknown[]>('list_snippets')
-      .then((list) => setSnippetsCount(Array.isArray(list) ? list.length : 0))
-      .catch(() => setSnippetsCount(0));
+    loadSnippetCache();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Show/hide Snippets section independent of expansion hook
@@ -1450,6 +1459,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                 className="side-add-btn"
                 title="Create new snippet"
                 onClick={() => {
+                  setSelectedFilter('__snippets__');
                   setViewMode('snippets');
                   setSnippetCreateSignal((n) => n + 1);
                 }}
@@ -1460,7 +1470,12 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
             <button
               className={`side-item ${viewMode === 'snippets' ? 'active' : ''}`}
-              onClick={() => setViewMode('snippets')}
+              onClick={() => {
+                // Deactivate every clips-mode highlight so only the Snippets
+                // tab is lit while this section is open.
+                setSelectedFilter('__snippets__');
+                setViewMode('snippets');
+              }}
           title="Snippets"
         >
           <span className="side-ic" style={{ color: 'var(--accent-text)' }}>
@@ -1634,7 +1649,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
       {/* Snippets view replaces the clip browser entirely when active */}
       {viewMode === 'snippets' && showSnippets ? (
-        <SnippetsView createSignal={snippetCreateSignal} />
+        <SnippetsView createSignal={snippetCreateSignal} initialSnippets={snippetsCache} />
       ) : (
         <>
           {/* Main Content Area */}

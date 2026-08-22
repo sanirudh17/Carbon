@@ -364,16 +364,16 @@ export const QuickOverlay: React.FC = () => {
     onUsed: () => fetchSnippets(),
   });
 
-  const handleSnDelete = async (snip: Snippet) => {
-    try {
-      await invoke('delete_snippet', { id: snip.id });
-      setSnSnippets((prev) => prev.filter((s) => s.id !== snip.id));
-      setSnSelectedId((prev) => (prev === snip.id ? null : prev));
-      showSnPill(`Deleted "${snip.name}"`);
-    } catch (err) {
+  const handleSnDelete = (snip: Snippet) => {
+    // Optimistic: remove from the list instantly, persist in the background.
+    setSnSnippets((prev) => prev.filter((s) => s.id !== snip.id));
+    setSnSelectedId((prev) => (prev === snip.id ? null : prev));
+    showSnPill(`Deleted "${snip.name}"`);
+    invoke('delete_snippet', { id: snip.id }).catch((err) => {
       console.error('Failed to delete snippet:', err);
       showSnPill('Could not delete the snippet', true);
-    }
+      fetchSnippets();
+    });
   };
 
   const snActions = useMemo(() => {

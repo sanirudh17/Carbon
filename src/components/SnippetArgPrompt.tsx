@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { BoltIcon, CheckIcon } from './Icons';
 import { ArgumentSpec } from '../utils/snippets';
+import { useTextHistory, restoreSelection } from '../utils/useTextHistory';
 
 /**
  * Shared sequential argument prompt modal for snippet expansion.
@@ -19,6 +20,8 @@ export const SnippetArgPrompt: React.FC<{
   onCancel: () => void;
 }> = ({ spec, value, onChange, onInsert, onCancel }) => {
   const hasOptions = !!spec.options && spec.options.length > 0;
+  const inputRef = useRef<HTMLInputElement>(null);
+  const history = useTextHistory();
   return (
     <div className="modal-backdrop" onClick={onCancel}>
       <div className="modal-card sn-arg-modal" onClick={(e) => e.stopPropagation()}>
@@ -60,11 +63,34 @@ export const SnippetArgPrompt: React.FC<{
             ) : (
               <input
                 id="sn-arg-value"
+                ref={inputRef}
                 type="text"
                 className="modal-input"
                 placeholder={spec.defaultValue ? spec.defaultValue : 'Enter a value…'}
                 value={value}
-                onChange={(e) => onChange(e.target.value)}
+                onChange={(e) => {
+                  history.record(value, inputRef.current, e.target.value);
+                  onChange(e.target.value);
+                }}
+                onKeyDown={(e) => {
+                  if (!(e.ctrlKey || e.metaKey)) return;
+                  const k = e.key.toLowerCase();
+                  if (k === 'z' && !e.shiftKey) {
+                    e.preventDefault();
+                    const snap = history.undo(value, inputRef.current);
+                    if (snap) {
+                      onChange(snap.value);
+                      restoreSelection(inputRef.current, snap);
+                    }
+                  } else if ((k === 'z' && e.shiftKey) || k === 'y') {
+                    e.preventDefault();
+                    const snap = history.redo(value, inputRef.current);
+                    if (snap) {
+                      onChange(snap.value);
+                      restoreSelection(inputRef.current, snap);
+                    }
+                  }
+                }}
                 autoFocus
               />
             )}

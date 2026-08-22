@@ -3,8 +3,40 @@ import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { Snippet } from '../types';
 import { highlightSnippetTokens } from '../utils/snippets';
+import { useTextHistory, restoreSelection } from '../utils/useTextHistory';
 import { SnippetIcon, SNIPPET_ICONS, HelpIcon } from './Icons';
 import { Dropdown } from './Dropdown';
+
+/** Shared keydown wiring for Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y on one field. */
+function historyKeyHandler(
+  e: React.KeyboardEvent,
+  hist: ReturnType<typeof useTextHistory>,
+  value: string,
+  el: HTMLInputElement | HTMLTextAreaElement | null,
+  apply: (v: string) => void
+): boolean {
+  if (!(e.ctrlKey || e.metaKey)) return false;
+  const k = e.key.toLowerCase();
+  if (k === 'z' && !e.shiftKey) {
+    e.preventDefault();
+    const snap = hist.undo(value, el);
+    if (snap) {
+      apply(snap.value);
+      restoreSelection(el, snap);
+    }
+    return true;
+  }
+  if ((k === 'z' && e.shiftKey) || k === 'y') {
+    e.preventDefault();
+    const snap = hist.redo(value, el);
+    if (snap) {
+      apply(snap.value);
+      restoreSelection(el, snap);
+    }
+    return true;
+  }
+  return false;
+}
 
 /** Accurate per the expansion engine in utils/snippets.ts. */
 const TOKEN_DOCS: { token: string; insert?: string; desc: string }[] = [
@@ -40,6 +72,9 @@ export const SnippetEditorModal: React.FC<{
   // their stored choice (the per-snippet toggle was removed from this form).
   const effectiveConfirm = snippet ? snippet.show_confirmation : true;
   const [draftError, setDraftError] = useState('');
+  const contentHistory = useTextHistory();
+  const nameHistory = useTextHistory();
+  const keywordHistory = useTextHistory();
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpPos, setHelpPos] = useState<React.CSSProperties>({});
   const helpBtnRef = useRef<HTMLButtonElement>(null);
@@ -135,9 +170,9 @@ export const SnippetEditorModal: React.FC<{
       const dropUp = spaceBelow < 300 && spaceAbove > spaceBelow;
       setHelpPos({
         position: 'fixed',
-        width: 340,
-        maxHeight: Math.max(180, dropUp ? Math.min(460, spaceAbove) : Math.min(460, spaceBelow)),
-        left: Math.max(8, Math.min(rect.left - 2, window.innerWidth - 348)),
+        width: 400,
+        maxHeight: Math.max(180, dropUp ? Math.min(480, spaceAbove) : Math.min(480, spaceBelow)),
+        left: Math.max(8, Math.min(rect.left - 2, window.innerWidth - 408)),
         ...(dropUp
           ? { bottom: window.innerHeight - rect.top + 7 }
           : { top: rect.bottom + 7 }),
@@ -266,7 +301,13 @@ export const SnippetEditorModal: React.FC<{
                   className="sn-editor-input"
                   spellCheck={false}
                   value={draftContent}
-                  onChange={(e) => setDraftContent(e.target.value)}
+                  onChange={(e) => {
+                    contentHistory.record(draftContent, textareaRef.current, e.target.value);
+                    setDraftContent(e.target.value);
+                  }}
+                  onKeyDown={(e) => {
+                    historyKeyHandler(e, contentHistory, draftContent, textareaRef.current, setDraftContent);
+                  }}
                   onScroll={syncBackdropScroll}
                   placeholder="Write your snippet — anything in {braces} becomes a live placeholder."
                 />
@@ -283,7 +324,13 @@ export const SnippetEditorModal: React.FC<{
                   className="modal-input"
                   placeholder="e.g. Address signature"
                   value={draftName}
-                  onChange={(e) => setDraftName(e.target.value)}
+                  onChange={(e) => {
+                    nameHistory.record(draftName, nameInputRef.current, e.target.value);
+                    setDraftName(e.target.value);
+                  }}
+                  onKeyDown={(e) => {
+                    historyKeyHandler(e, nameHistory, draftName, nameInputRef.current, setDraftName);
+                  }}
                 />
               </div>
               <div className="modal-field">
@@ -293,7 +340,13 @@ export const SnippetEditorModal: React.FC<{
                   className="modal-input sn-keyword-input"
                   placeholder="/address"
                   value={draftKeyword}
-                  onChange={(e) => setDraftKeyword(e.target.value)}
+                  onChange={(e) => {
+                    keywordHistory.record(draftKeyword, e.target as HTMLInputElement, e.target.value);
+                    setDraftKeyword(e.target.value);
+                  }}
+                  onKeyDown={(e) => {
+                    historyKeyHandler(e, keywordHistory, draftKeyword, e.target as HTMLInputElement, setDraftKeyword);
+                  }}
                 />
               </div>
               <div className="modal-field">
