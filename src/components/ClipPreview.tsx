@@ -744,9 +744,12 @@ export const ClipMetaStrip: React.FC<{ item: ClipItem; onFilterByApp?: (app: str
   } else if (item.content_type === 'text' || item.content_type === 'code') {
     const text = item.text_content || '';
     const chars = text.length;
-    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    const bytes =
+      item.file_size > 0
+        ? item.file_size
+        : new TextEncoder().encode(text).length;
     extra.push({ label: 'Characters', value: chars.toLocaleString() });
-    extra.push({ label: 'Words', value: words.toLocaleString() });
+    extra.push({ label: 'Size', value: formatBytes(bytes) });
   } else if (item.content_type === 'color') {
     extra.push({ label: 'Hex value', value: item.title });
   } else if (item.content_type === 'link' && item.text_content) {
@@ -759,6 +762,7 @@ export const ClipMetaStrip: React.FC<{ item: ClipItem; onFilterByApp?: (app: str
 
   return (
     <div className="meta-strip">
+      <div className="meta-title">Information</div>
       <div className="meta-row">
         <span className="meta-label">Application</span>
         <span
