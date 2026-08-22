@@ -4019,13 +4019,16 @@ section:last-child {
 }
 
 .sn-keyword-badge {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
   font-family: var(--mono, monospace);
   font-size: 10.5px;
   font-weight: 600;
   color: var(--accent-text);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
-  padding: 1px 7px;
+  padding: 2px 7px;
   border-radius: 999px;
   letter-spacing: 0.2px;
   flex-shrink: 0;
@@ -4185,14 +4188,29 @@ section:last-child {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  flex-wrap: nowrap;
 }
 
 .sn-foot-actions .btn {
   display: inline-flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 6px;
   height: 30px;
   padding: 0 12px;
+  white-space: nowrap;
+}
+
+.sn-foot-actions .btn > * {
+  flex-shrink: 0;
+}
+
+/* Shortcut chip rides the same line & centerline as its label */
+.sn-kbd {
+  display: inline-flex;
+  align-items: center;
+  position: static;
+  margin-top: 0;
 }
 
 .sn-kbd {
@@ -4215,13 +4233,13 @@ section:last-child {
   color: var(--text-3);
 }
 
-/* Confirmation pill — a quiet, momentary acknowledgment, centered in the
-   window so it can never collide with corner action buttons. */
+/* Confirmation pill — a quiet, momentary acknowledgment. Sits bottom-center
+   just above the taskbar (Windows-toast position), clear of all controls. */
 .sn-confirm-pill {
   position: fixed;
   left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  bottom: 26px;
+  transform: translateX(-50%);
   z-index: 1200;
   display: flex;
   align-items: center;
@@ -4247,8 +4265,8 @@ section:last-child {
 }
 
 @keyframes snPillIn {
-  from { opacity: 0; transform: translate(-50%, -50%) scale(0.94); }
-  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  from { opacity: 0; transform: translateX(-50%) translateY(12px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
 /* ── Create/Edit modal ── */
@@ -4401,14 +4419,13 @@ section:last-child {
   transform: rotate(180deg);
 }
 
+/* List is portaled to <body> and positioned FIXED next to its trigger
+   (inline style) so it can never grow a surrounding container's scroll area. */
 .c-dropdown-list {
-  position: absolute;
-  top: calc(100% + 5px);
-  left: 0;
-  z-index: 1300;
-  min-width: max(100%, 150px);
-  max-height: 264px;
+  z-index: 1400;
+  min-width: 150px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 4px;
   display: flex;
   flex-direction: column;
@@ -4417,20 +4434,19 @@ section:last-child {
   border: 1px solid var(--line);
   background: var(--elev);
   box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.55), 0 3px 10px rgba(0, 0, 0, 0.35);
-  transform-origin: top left;
   animation: cDropdownIn 120ms var(--ease-out);
 }
 
-.c-dropdown-list.end {
-  left: auto;
-  right: 0;
+.c-dropdown-list.origin-left {
+  transform-origin: top left;
+}
+
+.c-dropdown-list.origin-right {
   transform-origin: top right;
 }
 
 .c-dropdown-list.up {
-  top: auto;
-  bottom: calc(100% + 5px);
-  transform-origin: bottom left;
+  transform-origin: center bottom;
 }
 
 @keyframes cDropdownIn {
@@ -4538,23 +4554,32 @@ section:last-child {
   height: 14px;
 }
 
+/* Reference panel — portaled to <body>, FIXED-anchored to the help button.
+   Only this panel scrolls; it can never grow the modal's scroll area. */
 .sn-help-pop {
-  position: absolute;
-  top: calc(100% + 7px);
-  right: 0;
-  z-index: 1350;
-  width: 330px;
-  padding: 12px 12px 11px;
+  z-index: 1450;
+  padding: 12px;
   border-radius: var(--r-panel);
   border: 1px solid var(--line);
   background: var(--elev);
-  box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.55), 0 3px 10px rgba(0, 0, 0, 0.35);
-  transform-origin: top right;
+  box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.6), 0 3px 10px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  transform-origin: top left;
   animation: cDropdownIn 120ms var(--ease-out);
 }
 
+.sn-help-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-bottom: 9px;
+  margin-bottom: 7px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
 .sn-help-title {
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 650;
   letter-spacing: -0.1px;
   color: var(--text);
@@ -4563,21 +4588,23 @@ section:last-child {
 .sn-help-sub {
   font-size: 10.5px;
   color: var(--text-3);
-  margin: 2px 0 8px;
 }
 
 .sn-help-rows {
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 1px;
 }
 
 .sn-help-row {
-  display: flex;
-  align-items: baseline;
-  gap: 9px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
   width: 100%;
-  padding: 4px 6px;
+  padding: 5px 7px;
   border: none;
   border-radius: 6px;
   background: none;
@@ -4594,8 +4621,11 @@ section:last-child {
   font-family: var(--mono, monospace);
   font-size: 10.5px;
   color: var(--sn-tok-dyn);
+  background: color-mix(in srgb, var(--sn-tok-dyn) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sn-tok-dyn) 20%, transparent);
+  padding: 2px 7px;
+  border-radius: 5px;
   white-space: nowrap;
-  flex-shrink: 0;
 }
 
 .sn-help-row span {
@@ -4604,9 +4634,22 @@ section:last-child {
   color: var(--text-2);
 }
 
+.sn-help-row em {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent-text);
+  opacity: 0;
+  transition: opacity 80ms ease;
+}
+
+.sn-help-row:hover em {
+  opacity: 1;
+}
+
 .sn-help-mods {
   margin-top: 9px;
-  padding-top: 9px;
+  padding-top: 10px;
   border-top: 1px solid var(--line-soft);
 }
 
@@ -4614,22 +4657,35 @@ section:last-child {
   font-size: 10.5px;
   font-weight: 600;
   color: var(--text-3);
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 
-.sn-help-mods code {
+.sn-help-mod-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.sn-help-mod-pills code {
   font-family: var(--mono, monospace);
   font-size: 10px;
   color: var(--sn-tok);
-  display: block;
-  line-height: 1.5;
+  background: color-mix(in srgb, var(--sn-tok) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sn-tok) 18%, transparent);
+  padding: 2px 7px;
+  border-radius: 999px;
 }
 
 .sn-help-ex {
+  font-size: 10.5px;
+  color: var(--text-3);
+  margin-top: 7px;
+}
+
+.sn-help-ex code {
   font-family: var(--mono, monospace);
   font-size: 10px;
-  color: var(--text-3);
-  margin-top: 3px;
+  color: var(--sn-tok-dyn);
 }
 
 /* ── Minimal Expansion Consent Modal ─────────────────── */
@@ -4706,34 +4762,6 @@ section:last-child {
   font-size: 12px;
   font-family: var(--font);
   padding: 2px 2px;
-}
-
-.sn-confirm-toggle {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  margin-top: 4px;
-  cursor: pointer;
-  user-select: none;
-}
-
-.sn-confirm-toggle input {
-  accent-color: var(--accent);
-  margin-top: 2px;
-}
-
-.sn-confirm-label {
-  font-size: 12.5px;
-  font-weight: 550;
-  color: var(--text);
-}
-
-.sn-confirm-hint {
-  display: block;
-  font-size: 10.5px;
-  color: var(--text-3);
-  line-height: 1.4;
-  margin-top: 2px;
 }
 
 /* ---- Argument prompt ---- */

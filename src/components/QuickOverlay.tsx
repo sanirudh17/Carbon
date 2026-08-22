@@ -978,7 +978,16 @@ export const QuickOverlay: React.FC = () => {
       if (snSelected) setSnEditorTarget({ snippet: snSelected });
       return;
     }
-    if (!typingInInput && (e.key === 'Delete' || e.key === 'Del')) {
+    // Del deletes the highlighted snippet. When caret-retention has left
+    // focus in a search field that is EMPTY (nothing to edit), Delete must
+    // still delete rather than silently do nothing.
+    if (e.key === 'Delete' || e.key === 'Del') {
+      if (typingInInput) {
+        const el = target as HTMLInputElement;
+        const hasText = (el.value?.length ?? 0) > 0;
+        const hasSelection = (el.selectionStart ?? 0) !== (el.selectionEnd ?? 0);
+        if (hasText || hasSelection) return;
+      }
       e.preventDefault();
       if (snSelected) handleSnDelete(snSelected);
       return;
@@ -1156,8 +1165,18 @@ export const QuickOverlay: React.FC = () => {
       }
     }
 
-    // Do not intercept Delete / Backspace when editing in text input
-    if (isInput && (e.key === 'Delete' || e.key === 'Backspace')) {
+    // Backspace always belongs to text editing. Delete only does while there
+    // is actually text to edit: an EMPTY search bar has no caret work, so
+    // Delete falls through to the clip actions below. This matters because
+    // caret-retention keeps the search bar focused after any click — without
+    // this, plain Delete silently did nothing after clicking around.
+    if (isInput && e.key === 'Backspace') return;
+    if (isSearchInput && e.key === 'Delete') {
+      const el = target as HTMLInputElement;
+      const hasText = (el.value?.length ?? 0) > 0;
+      const hasSelection = (el.selectionStart ?? 0) !== (el.selectionEnd ?? 0);
+      if (hasText || hasSelection) return;
+    } else if (isInput && e.key === 'Delete') {
       return;
     }
 

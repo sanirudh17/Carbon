@@ -1202,9 +1202,17 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       return;
     }
 
-    // Delete / Del key for single or bulk delete
+    // Delete / Del key for single or bulk delete. While focus sits in an
+    // input, only bail when there is actually text to edit — an empty
+    // search bar must not swallow Delete (same reliability rule as the
+    // Quick Overlay).
     if (e.key === 'Delete' || e.key === 'Del') {
-      if (isInput) return;
+      if (isInput) {
+        const el = target as HTMLInputElement;
+        const hasText = (el.value?.length ?? 0) > 0;
+        const hasSelection = (el.selectionStart ?? 0) !== (el.selectionEnd ?? 0);
+        if (hasText || hasSelection) return;
+      }
       if (selectedIds.size > 1) {
         e.preventDefault();
         setBulkConfirmDelete(true);

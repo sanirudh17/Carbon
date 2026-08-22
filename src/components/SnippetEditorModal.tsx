@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { Snippet } from '../types';
 import { highlightSnippetTokens } from '../utils/snippets';
@@ -35,10 +36,14 @@ export const SnippetEditorModal: React.FC<{
   const [draftIcon, setDraftIcon] = useState(snippet?.icon || 'snippet');
   const [draftTags, setDraftTags] = useState<string[]>(snippet?.tags || []);
   const [tagInput, setTagInput] = useState('');
-  // Out-of-the-box snippets confirm their use; authors can opt out per snippet.
-  const [draftConfirm, setDraftConfirm] = useState(snippet?.show_confirmation ?? true);
+  // Confirmation is on by default for new snippets; existing snippets keep
+  // their stored choice (the per-snippet toggle was removed from this form).
+  const effectiveConfirm = snippet ? snippet.show_confirmation : true;
   const [draftError, setDraftError] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
+  const [helpPos, setHelpPos] = useState<React.CSSProperties>({});
+  const helpBtnRef = useRef<HTMLButtonElement>(null);
+  const helpPopRef = useRef<HTMLDivElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
@@ -71,7 +76,7 @@ export const SnippetEditorModal: React.FC<{
           content: draftContent,
           tags: draftTags,
           icon: draftIcon,
-          showConfirmation: draftConfirm,
+          showConfirmation: effectiveConfirm,
         });
         onSaved(updated);
       } else {
@@ -81,7 +86,7 @@ export const SnippetEditorModal: React.FC<{
           content: draftContent,
           tags: draftTags,
           icon: draftIcon,
-          showConfirmation: draftConfirm,
+          showConfirmation: effectiveConfirm,
         });
         onSaved(created);
       }
@@ -118,11 +123,49 @@ export const SnippetEditorModal: React.FC<{
 
   const highlighted = useMemo(() => highlightSnippetTokens(draftContent), [draftContent]);
 
+  /** Anchor the reference panel to the help button; only the panel scrolls. */
+  useEffect(() => {
+    if (!helpOpen) return;
+    const place = () => {
+      const el = helpBtnRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom - 10;
+      const spaceAbove = rect.top - 10;
+      const dropUp = spaceBelow < 300 && spaceAbove > spaceBelow;
+      setHelpPos({
+        position: 'fixed',
+        width: 340,
+        maxHeight: Math.max(180, dropUp ? Math.min(460, spaceAbove) : Math.min(460, spaceBelow)),
+        left: Math.max(8, Math.min(rect.left - 2, window.innerWidth - 348)),
+        ...(dropUp
+          ? { bottom: window.innerHeight - rect.top + 7 }
+          : { top: rect.bottom + 7 }),
+      });
+    };
+    place();
+    const onScrollCapture = (e: Event) => {
+      if (helpPopRef.current?.contains(e.target as Node)) return;
+      setHelpOpen(false);
+    };
+    const onResize = () => setHelpOpen(false);
+    window.addEventListener('scroll', onScrollCapture, true);
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('scroll', onScrollCapture, true);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [helpOpen]);
+
   // Close the placeholder reference on Escape / outside click.
   useEffect(() => {
     if (!helpOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setHelpOpen(false);
+      if (e.key === 'Escape') {
+        // Keep the app-window Escape handler out of this while the panel closes.
+        e.stopImmediatePropagation();
+        setHelpOpen(false);
+      }
     };
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement;
@@ -156,6 +199,7 @@ export const SnippetEditorModal: React.FC<{
               <div className="sn-content-head">
                 <label className="modal-label">Content</label>
                 <button
+                  ref={helpBtnRef}
                   type="button"
                   className={`sn-help-btn ${helpOpen ? 'on' : ''}`}
                   title="Placeholder reference"
@@ -165,30 +209,47 @@ export const SnippetEditorModal: React.FC<{
                 >
                   <HelpIcon />
                 </button>
-                {helpOpen && (
-                  <div className="sn-help-pop" role="dialog" aria-label="Placeholder reference">
-                    <div className="sn-help-title">Dynamic placeholders</div>
-                    <div className="sn-help-sub">Click one to insert it at the caret.</div>
-                    <div className="sn-help-rows">
-                      {TOKEN_DOCS.map((tok) => (
-                        <button
-                          key={tok.token}
-                          type="button"
-                          className="sn-help-row"
-                          onClick={() => insertPlaceholder(tok.insert ?? tok.token)}
-                        >
-                          <code>{tok.token}</code>
-                          <span>{tok.desc}</span>
-                        </button>
-                      ))}
-                    </div>
-                    <div className="sn-help-mods">
-                      <div className="sn-help-mods-title">Modifiers — chain after any token</div>
-                      <code>uppercase · lowercase · trim · percent-encode · json-stringify · raw</code>
-                      <div className="sn-help-ex">{'{clipboard | lowercase}'}</div>
-                    </div>
-                  </div>
-                )}
+                {helpOpen &&
+                  createPortal(
+                    <div
+                      ref={helpPopRef}
+                      role="dialog"
+                      aria-label="Placeholder reference"
+                      style={helpPos}
+                      className="sn-help-pop"
+                    >
+                      <div className="sn-help-head">
+                        <span className="sn-help-title">Dynamic placeholders</span>
+                        <span className="sn-help-sub">click to insert at caret</span>
+                      </div>
+                      <div className="sn-help-rows">
+                        {TOKEN_DOCS.map((tok) => (
+                          <button
+                            key={tok.token}
+                            type="button"
+                            className="sn-help-row"
+                            onClick={() => insertPlaceholder(tok.insert ?? tok.token)}
+                          >
+                            <code>{tok.token}</code>
+                            <span>{tok.desc}</span>
+                            <em>insert</em>
+                          </button>
+                        ))}
+                      </div>
+                      <div className="sn-help-mods">
+                        <div className="sn-help-mods-title">Modifiers — chain after any token</div>
+                        <div className="sn-help-mod-pills">
+                          {['uppercase', 'lowercase', 'trim', 'percent-encode', 'json-stringify', 'raw'].map((m) => (
+                            <code key={m}>{m}</code>
+                          ))}
+                        </div>
+                        <div className="sn-help-ex">
+                          Example: <code>{'{clipboard | lowercase}'}</code>
+                        </div>
+                      </div>
+                    </div>,
+                    document.body
+                  )}
               </div>
               <div className="sn-editor-wrap">
                 <div className="sn-editor-backdrop" ref={backdropRef} aria-hidden="true">
@@ -276,15 +337,6 @@ export const SnippetEditorModal: React.FC<{
                   />
                 </div>
               </div>
-              <label className="sn-confirm-toggle">
-                <input
-                  type="checkbox"
-                  checked={draftConfirm}
-                  onChange={(e) => setDraftConfirm(e.target.checked)}
-                />
-                <span className="sn-confirm-label">Show confirmation</span>
-                <span className="sn-confirm-hint">names this snippet in a brief pill after it is used</span>
-              </label>
               {draftError && <div className="pin-error-msg">{draftError}</div>}
             </div>
           </div>
