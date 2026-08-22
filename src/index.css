@@ -11,6 +11,7 @@
   --text-3: #6E6E78;
   --accent: #5B7CFA;
   --accent-hover: #6D8BFA;
+  --accent-fg: #ffffff;
   --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
   --accent-ring: color-mix(in srgb, var(--accent) 28%, transparent);
   --accent-text: color-mix(in srgb, var(--accent) 80%, white);
@@ -56,6 +57,7 @@
   --text-3: #64748B;
   --accent: #5B7CFA;
   --accent-hover: #4A69E8;
+  --accent-fg: #ffffff;
   --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
   --accent-ring: color-mix(in srgb, var(--accent) 30%, transparent);
   --accent-text: color-mix(in srgb, var(--accent) 90%, black);
@@ -1250,12 +1252,13 @@ section:last-child {
 }
 
 .toggle.on {
-  background: color-mix(in srgb, var(--accent) 78%, transparent);
+  background: var(--accent);
+  border-color: transparent;
 }
 
 .toggle.on .knob {
   transform: translate(15px, -50%);
-  background: #fff;
+  background: var(--accent-fg);
 }
 
 .btn {
@@ -1315,16 +1318,21 @@ section:last-child {
 
 .btn.accent,
 .btn.primary {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  color: var(--accent-text);
-  border: 1px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: 1px solid transparent;
   transition: all 130ms var(--ease-out);
 }
 
 .btn.accent:hover,
 .btn.primary:hover {
-  background: color-mix(in srgb, var(--accent) 30%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  background: var(--accent-hover);
+  border-color: transparent;
+}
+
+.btn.accent:active,
+.btn.primary:active {
+  opacity: 0.88;
 }
 
 .btn:disabled {
@@ -1992,7 +2000,7 @@ section:last-child {
 
 .seg-btn.active {
   background: var(--accent-soft);
-  color: var(--accent-text);
+  color: var(--accent);
 }
 
 /* ═══════════ v1.2 ENHANCEMENTS ═══════════ */
@@ -2120,6 +2128,14 @@ section:last-child {
   font-size: 12px;
   font-weight: 600;
   padding: 6px 14px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border: 1px solid transparent;
+}
+
+.sensitive-reveal-btn:hover {
+  background: var(--accent-ring);
+  color: var(--accent);
 }
 
 .sensitive-revealed-bar {

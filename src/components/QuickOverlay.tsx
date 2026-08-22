@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, memo, useCallback, useMemo } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useRef, memo, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -449,13 +449,23 @@ export const QuickOverlay: React.FC = () => {
     const item = displayItems[selectedIndex];
     if (item) {
       setEditingContent(item.text_content || '');
-      setRenderMode(
-        item.content_type === 'rich_text' ||
-          Boolean(item.html_content) ||
-          (Boolean(item.text_content) && isMarkdownContent(item.text_content || ''))
-      );
     }
     return () => cancelAnimationFrame(raf);
+  }, [selectedIndex, displayItems]);
+
+  // Render-mode must sync BEFORE paint (useLayoutEffect): scrolling through
+  // items right after toggling Raw otherwise paints one stale raw-text frame
+  // before the rendered preview commits. The main window resets render mode
+  // synchronously inside its selection handlers; here layout-phase sync is
+  // the equivalent guarantee.
+  useLayoutEffect(() => {
+    const item = displayItems[selectedIndex];
+    if (!item) return;
+    setRenderMode(
+      item.content_type === 'rich_text' ||
+        Boolean(item.html_content) ||
+        (Boolean(item.text_content) && isMarkdownContent(item.text_content || ''))
+    );
   }, [selectedIndex, displayItems]);
 
   const logClient = (msg: string) => {
