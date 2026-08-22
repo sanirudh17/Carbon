@@ -307,11 +307,11 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     }, duration);
   };
 
-  // Mirror the backend hotkey manager's registration status: after every
-  // settings save it re-registers both global hotkeys and emits the result.
-  // A conflict flag means Windows refused the preferred combo (another app
-  // already holds it) and Carbon fell back to a free one — surface that
-  // clearly instead of pretending the rebind succeeded.
+  // Mirror the backend shortcut manager's registration status: after every
+  // settings save it swaps both global shortcuts atomically and emits the
+  // result. A conflict flag means Windows refused the preferred combo because
+  // another app genuinely holds it — Carbon kept the previous binding, and we
+  // surface that clearly instead of pretending the rebind succeeded.
   useEffect(() => {
     invoke<HotkeyStatusInfo | null>('get_hotkey_status')
       .then((s) => {
@@ -402,8 +402,8 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               title="How global hotkeys work"
               lines={[
                 "Combos must include at least one modifier (Ctrl / Alt / Shift / Win) plus a key — letters, F1–F24, Space, Tab or Enter all work.",
-                "Carbon's two shortcuts can't share the same combo, and Windows blocks combos reserved by the system or other apps.",
-                "Changes register system-wide the moment you record them; if another app already owns a combo, Carbon automatically falls back to the next free suggestion and tells you here.",
+                "Carbon owns exactly these two shortcuts and swaps them atomically on rebind — no phantom conflicts with itself.",
+                "Changes register system-wide the moment you record them; only if another app genuinely owns a combo does Carbon keep your current binding and flag it here.",
               ]}
             />
           </div>
@@ -416,7 +416,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                 lines={[
                   "Click the key chip, then press the combo you want — Esc cancels, Backspace clears.",
                   "Pick something the apps you use don't already grab; Ctrl+Shift combos are usually safe.",
-                  "The binding is saved and re-registered instantly, so it survives restarts.",
+                  "The binding is swapped in place instantly and persisted, so it survives restarts.",
                 ]}
               />
             </div>
@@ -446,8 +446,8 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                 title="Enlarged window hotkey setup"
                 lines={[
                   "Must differ from the Quick paste hotkey — duplicates are rejected while recording.",
-                  "If Windows refuses the combo because another app owns it, Carbon falls back to a free suggestion and the conflict note above tells you what's active.",
-                  "Recording a different combo resolves the conflict immediately — no restart needed.",
+                  "If another app genuinely owns the combo, Carbon keeps your current binding and shows the conflict here instead of silently failing.",
+                  "Recording a free combo resolves the conflict immediately — no restart needed.",
                 ]}
               />
             </div>
@@ -473,34 +473,16 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
             <div className="hotkey-conflict-note">
               {hotkeyStatus.overlay_conflict && (
                 <div>
-                  {hotkeyStatus.overlay === hotkeyStatus.overlay_preferred ? (
-                    <>
-                      Windows couldn’t register “{hotkeyStatus.overlay_preferred}” for the Quick Overlay, and
-                      every automatic alternative is taken too. This shortcut is currently inactive — record a
-                      different combination below and it applies instantly.
-                    </>
-                  ) : (
-                    <div>
-                      Windows couldn’t register “{hotkeyStatus.overlay_preferred}” for the Quick Overlay — another
-                      application is likely already using it. Carbon fell back to “{hotkeyStatus.overlay}”.
-                    </div>
-                  )}
+                  Windows couldn’t register “{hotkeyStatus.overlay_preferred}” for the Quick Overlay — another
+                  application owns it, so Carbon kept “{hotkeyStatus.overlay}”. Record a different combination
+                  above and the new one applies instantly.
                 </div>
               )}
               {hotkeyStatus.enlarged_conflict && (
                 <div>
-                  {hotkeyStatus.enlarged === hotkeyStatus.enlarged_preferred ? (
-                    <>
-                      Windows couldn’t register “{hotkeyStatus.enlarged_preferred}” for the Enlarged Window, and
-                      every automatic alternative is taken too. This shortcut is currently inactive — record a
-                      different combination below and it applies instantly.
-                    </>
-                  ) : (
-                    <div>
-                      Windows couldn’t register “{hotkeyStatus.enlarged_preferred}” for the Enlarged Window — another
-                      application is likely already using it. Carbon fell back to “{hotkeyStatus.enlarged}”.
-                    </div>
-                  )}
+                  Windows couldn’t register “{hotkeyStatus.enlarged_preferred}” for the Enlarged Window — another
+                  application owns it, so Carbon kept “{hotkeyStatus.enlarged}”. Record a different combination
+                  above and the new one applies instantly.
                 </div>
               )}
             </div>

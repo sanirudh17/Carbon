@@ -1,53 +1,26 @@
 use crate::paste::{get_cursor_position, restore_target_window, save_target_window};
-use crate::settings::SettingsState;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager};
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL,
-    MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, VK_CONTROL, VK_MENU, VK_SHIFT,
-};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW,
-    RegisterClassExW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HHOOK, HMENU,
-    HWND_MESSAGE, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_HOTKEY, WM_KEYDOWN, WM_SYSKEYDOWN,
-    WNDCLASSEXW, WS_OVERLAPPED,
+    CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
+    UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN,
+    WM_SYSKEYDOWN,
 };
 
-const HOTKEY_ID_OVERLAY: i32 = 1001;
-const HOTKEY_ID_ENLARGED: i32 = 1002;
 static CURRENT_CYCLE_INDEX: AtomicU32 = AtomicU32::new(0);
 static APP_HANDLE_HOLDER: Mutex<Option<AppHandle>> = Mutex::new(None);
 
-// Ordered fallback chains tried when the configured combo is already claimed
-// by another application. Each chain starts from the most natural neighbours
-// of the factory default and ends well away from the other hotkey's chain, so
-// the two bindings can never collide with each other while falling back.
-const OVERLAY_FALLBACKS: &[&str] = &[
-    "Ctrl+Shift+Z",
-    "Ctrl+Shift+X",
-    "Ctrl+Shift+F12",
-    "Ctrl+Alt+Shift+X",
-    "Ctrl+Shift+F9",
-    "Ctrl+Win+Z",
-];
-const ENLARGED_FALLBACKS: &[&str] = &[
-    "Ctrl+Alt+Z",
-    "Ctrl+Alt+X",
-    "Ctrl+Alt+F12",
-    "Ctrl+Alt+Shift+Z",
-    "Ctrl+Alt+F9",
-    "Ctrl+Win+X",
-];
-
+// Registration status of the global hotkeys. Owned by the global-shortcut
+// swap in crate::shortcuts; kept here so the settings UI command can read it.
 #[derive(Serialize, Clone, Debug)]
 pub struct HotkeyStatus {
     pub overlay: String,
@@ -57,9 +30,6 @@ pub struct HotkeyStatus {
     pub overlay_conflict: bool,
     pub enlarged_conflict: bool,
 }
-
-static LAST_STATUS: Mutex<Option<HotkeyStatus>> = Mutex::new(None);
-static HOTKEY_WINDOW: Mutex<Option<isize>> = Mutex::new(None);
 
 pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     crate::paste::log_diag("[HOTKEY] handle_overlay_hotkey triggered.");
@@ -269,32 +239,21 @@ unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LP
 }
 
 impl HotkeyManager {
-    pub fn start(app_handle: AppHandle, settings_state: Arc<SettingsState>) {
+    /// Spawns the low-level keyboard hook thread. Global hotkey registration
+    /// itself lives in crate::shortcuts (tauri-plugin-global-shortcut); this
+    /// thread only services the WH_KEYBOARD_LL hook used by the paste queue,
+    /// which needs its own message pump to stay alive.
+    pub fn start(app_handle: AppHandle) {
         *APP_HANDLE_HOLDER.lock().unwrap() = Some(app_handle.clone());
-        let app_clone = app_handle.clone();
-        let settings_clone = settings_state.clone();
 
         thread::spawn(move || unsafe {
-            let msg_hwnd = create_message_only_window();
-            *HOTKEY_WINDOW.lock().unwrap() = msg_hwnd.map(|h| h.0 as isize);
-
-            let settings = settings_clone.get();
-            register_global_hotkeys(&app_clone, &settings_clone, &settings.quick_hotkey, &settings.enlarged_hotkey);
-
             let hinstance = HINSTANCE(GetModuleHandleW(None).unwrap_or_default().0);
-            let hook: HHOOK = SetWindowsHookExW(WH_KEYBOARD_LL, Some(ll_keyboard_proc), hinstance, 0).unwrap_or_default();
+            let hook: HHOOK =
+                SetWindowsHookExW(WH_KEYBOARD_LL, Some(ll_keyboard_proc), hinstance, 0)
+                    .unwrap_or_default();
 
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, HWND::default(), 0, 0).as_bool() {
-                if msg.message == WM_HOTKEY {
-                    let id = msg.wParam.0 as i32;
-                    eprintln!("[carbon] WM_HOTKEY received: id={id}");
-                    if id == HOTKEY_ID_OVERLAY {
-                        handle_overlay_hotkey(&app_clone);
-                    } else if id == HOTKEY_ID_ENLARGED {
-                        handle_enlarged_hotkey(&app_clone);
-                    }
-                }
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
@@ -303,194 +262,6 @@ impl HotkeyManager {
                 let _ = UnhookWindowsHookEx(hook);
             }
         });
-    }
-}
-
-pub fn register_global_hotkeys(
-    app: &AppHandle,
-    settings_state: &SettingsState,
-    quick_str: &str,
-    enlarged_str: &str,
-) {
-    unsafe {
-        let hwnd: HWND = HOTKEY_WINDOW
-            .lock()
-            .unwrap()
-            .map(|h| HWND(h as *mut _))
-            .unwrap_or_default();
-
-        let (overlay_eff, overlay_conflict) = register_with_fallbacks(
-            app,
-            hwnd,
-            HOTKEY_ID_OVERLAY,
-            quick_str,
-            OVERLAY_FALLBACKS,
-            "Quick Overlay",
-        );
-        let (enlarged_eff, enlarged_conflict) = register_with_fallbacks(
-            app,
-            hwnd,
-            HOTKEY_ID_ENLARGED,
-            enlarged_str,
-            ENLARGED_FALLBACKS,
-            "Enlarged Window",
-        );
-
-        if overlay_eff != quick_str || enlarged_eff != enlarged_str {
-            let _ = settings_state.update_hotkeys(&overlay_eff, &enlarged_eff);
-        }
-
-        let status = HotkeyStatus {
-            overlay: overlay_eff,
-            enlarged: enlarged_eff,
-            overlay_preferred: quick_str.to_string(),
-            enlarged_preferred: enlarged_str.to_string(),
-            overlay_conflict,
-            enlarged_conflict,
-        };
-        *LAST_STATUS.lock().unwrap() = Some(status.clone());
-        let _ = app.emit("hotkey-status", status);
-    }
-}
-
-pub fn get_hotkey_status() -> Option<HotkeyStatus> {
-    LAST_STATUS.lock().unwrap().clone()
-}
-
-unsafe fn register_with_fallbacks(
-    app: &AppHandle,
-    hwnd: HWND,
-    id: i32,
-    preferred: &str,
-    fallbacks: &[&str],
-    name: &str,
-) -> (String, bool) {
-    let _ = UnregisterHotKey(hwnd, id);
-
-    let mut candidates: Vec<&str> = vec![preferred];
-    for fb in fallbacks {
-        if !candidates.contains(fb) {
-            candidates.push(fb);
-        }
-    }
-
-    for combo in &candidates {
-        if let Some((mods, vk)) = parse_hotkey_string(combo) {
-            if RegisterHotKey(hwnd, id, mods | MOD_NOREPEAT, vk).is_ok()
-                || RegisterHotKey(hwnd, id, mods, vk).is_ok()
-            {
-                eprintln!("[carbon] Registered {name} hotkey: {combo}");
-                return (combo.to_string(), *combo != preferred);
-            }
-        }
-    }
-
-    // Every candidate — the user's combo plus the whole fallback chain,
-    // factory defaults included — is claimed. Nothing is registered, so be
-    // explicit: there is no working binding until the user picks a free one.
-    let err = std::io::Error::last_os_error();
-    eprintln!("[carbon] FAILED to register {name} hotkey ({preferred}): {err}");
-    let _ = app.emit(
-        "hotkey-error",
-        format!(
-            "{name} hotkey ({preferred}) and every automatic alternative are already in use by \
-             other applications. This shortcut is currently inactive — close the conflicting app \
-             or pick a different shortcut in Settings."
-        ),
-    );
-    (preferred.to_string(), true)
-}
-
-unsafe extern "system" fn hotkey_wnd_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    DefWindowProcW(hwnd, msg, wparam, lparam)
-}
-
-unsafe fn create_message_only_window() -> Option<HWND> {
-    const CLASS_NAME: &str = "CarbonHotkeyMessageWindow";
-    let class_name_wide: Vec<u16> = CLASS_NAME
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-
-    let hinstance: HINSTANCE = HINSTANCE(GetModuleHandleW(None).ok()?.0);
-
-    let wc = WNDCLASSEXW {
-        cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-        style: Default::default(),
-        lpfnWndProc: Some(hotkey_wnd_proc),
-        cbClsExtra: 0,
-        cbWndExtra: 0,
-        hInstance: hinstance,
-        hIcon: Default::default(),
-        hCursor: Default::default(),
-        hbrBackground: Default::default(),
-        lpszMenuName: PCWSTR::null(),
-        lpszClassName: PCWSTR(class_name_wide.as_ptr()),
-        hIconSm: Default::default(),
-    };
-
-    RegisterClassExW(&wc);
-
-    CreateWindowExW(
-        Default::default(),
-        PCWSTR(class_name_wide.as_ptr()),
-        PCWSTR::null(),
-        WS_OVERLAPPED,
-        0,
-        0,
-        0,
-        0,
-        HWND_MESSAGE,
-        HMENU::default(),
-        hinstance,
-        None,
-    )
-    .ok()
-}
-
-pub fn parse_hotkey_string(s: &str) -> Option<(HOT_KEY_MODIFIERS, u32)> {
-    let parts: Vec<&str> = s.split('+').map(|p| p.trim()).collect();
-    let mut mods = HOT_KEY_MODIFIERS(0);
-    let mut vk = 0u32;
-
-    for part in parts {
-        match part.to_lowercase().as_str() {
-            "ctrl" | "control" | "cmdorctrl" | "commandorcontrol" => mods |= MOD_CONTROL,
-            "shift" => mods |= MOD_SHIFT,
-            "alt" | "option" => mods |= MOD_ALT,
-            "super" | "win" | "cmd" | "meta" => mods |= MOD_WIN,
-            key => {
-                let key_upper = key.to_uppercase();
-                if key_upper.len() == 1 {
-                    vk = key_upper.chars().next().unwrap() as u32;
-                } else if key_upper.starts_with('F') {
-                    if let Ok(num) = key_upper[1..].parse::<u32>() {
-                        if (1..=24).contains(&num) {
-                            vk = 0x6F + num;
-                        }
-                    }
-                } else if key_upper == "SPACE" {
-                    vk = 0x20;
-                } else if key_upper == "TAB" {
-                    vk = 0x09;
-                } else if key_upper == "ENTER" || key_upper == "RETURN" {
-                    vk = 0x0D;
-                } else if key_upper == "ESC" || key_upper == "ESCAPE" {
-                    vk = 0x1B;
-                }
-            }
-        }
-    }
-
-    if vk != 0 {
-        Some((mods, vk))
-    } else {
-        None
     }
 }
 
