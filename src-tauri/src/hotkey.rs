@@ -27,8 +27,26 @@ const HOTKEY_ID_ENLARGED: i32 = 1002;
 static CURRENT_CYCLE_INDEX: AtomicU32 = AtomicU32::new(0);
 static APP_HANDLE_HOLDER: Mutex<Option<AppHandle>> = Mutex::new(None);
 
-const OVERLAY_FALLBACKS: &[&str] = &["Ctrl+Shift+Z", "Ctrl+Shift+F12", "Ctrl+Alt+Shift+X"];
-const ENLARGED_FALLBACKS: &[&str] = &["Ctrl+Alt+Z", "Ctrl+Alt+F12", "Ctrl+Alt+Shift+Z"];
+// Ordered fallback chains tried when the configured combo is already claimed
+// by another application. Each chain starts from the most natural neighbours
+// of the factory default and ends well away from the other hotkey's chain, so
+// the two bindings can never collide with each other while falling back.
+const OVERLAY_FALLBACKS: &[&str] = &[
+    "Ctrl+Shift+Z",
+    "Ctrl+Shift+X",
+    "Ctrl+Shift+F12",
+    "Ctrl+Alt+Shift+X",
+    "Ctrl+Shift+F9",
+    "Ctrl+Win+Z",
+];
+const ENLARGED_FALLBACKS: &[&str] = &[
+    "Ctrl+Alt+Z",
+    "Ctrl+Alt+X",
+    "Ctrl+Alt+F12",
+    "Ctrl+Alt+Shift+Z",
+    "Ctrl+Alt+F9",
+    "Ctrl+Win+X",
+];
 
 #[derive(Serialize, Clone, Debug)]
 pub struct HotkeyStatus {
@@ -367,13 +385,17 @@ unsafe fn register_with_fallbacks(
         }
     }
 
+    // Every candidate — the user's combo plus the whole fallback chain,
+    // factory defaults included — is claimed. Nothing is registered, so be
+    // explicit: there is no working binding until the user picks a free one.
     let err = std::io::Error::last_os_error();
     eprintln!("[carbon] FAILED to register {name} hotkey ({preferred}): {err}");
     let _ = app.emit(
         "hotkey-error",
         format!(
-            "{name} hotkey ({preferred}) is already in use by another application. \
-             Close the other app or pick a different shortcut in Settings."
+            "{name} hotkey ({preferred}) and every automatic alternative are already in use by \
+             other applications. This shortcut is currently inactive — close the conflicting app \
+             or pick a different shortcut in Settings."
         ),
     );
     (preferred.to_string(), true)

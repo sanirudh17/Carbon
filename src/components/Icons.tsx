@@ -446,3 +446,60 @@ export const CarbonMarkIcon: React.FC<{ className?: string }> = ({ className = '
     <rect x="8.5" y="2" width="7" height="4.5" rx="1.4" />
   </svg>
 );
+
+// Full-colour Carbon app badge (the layered-clipboard illustration) rendered
+// twice inside one SVG: a dark-theme variant and a light-theme variant. CSS
+// shows exactly one via the html[data-theme] attribute, so the sidebar mark
+// swaps automatically whenever the user switches theme — no React state or
+// props needed. Gradient ids are namespaced to avoid colliding with any other
+// inline SVGs in the document.
+export const BrandBadgeIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
+  <svg className={className} viewBox="0 0 64 64" fill="none" aria-hidden="true">
+    <defs>
+      <linearGradient id="carbon-badge-bg-light" x1="32" y1="2" x2="32" y2="62" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stopColor="#FFFFFF" />
+        <stop offset="1" stopColor="#E9EBF1" />
+      </linearGradient>
+      <linearGradient id="carbon-badge-plate-dark" x1="36" y1="13" x2="36" y2="53" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stopColor="#F3F3F8" />
+        <stop offset="1" stopColor="#C4C7D4" />
+      </linearGradient>
+      <linearGradient id="carbon-badge-plate-light" x1="36" y1="13" x2="36" y2="53" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stopColor="#FFFFFF" />
+        <stop offset="1" stopColor="#F2F3F8" />
+      </linearGradient>
+    </defs>
+
+    {/* Dark-theme variant */}
+    <g className="carbon-badge-dark">
+      <rect x="1" y="1" width="62" height="62" rx="15" fill="#171A21" />
+      <rect x="1.75" y="1.75" width="60.5" height="60.5" rx="14.25" stroke="#2B303C" strokeWidth="1.5" />
+      <g transform="rotate(-9 26 38)">
+        <rect x="12.5" y="17" width="27" height="38" rx="6.5" fill="#333947" />
+      </g>
+      <g transform="rotate(3 37 35)">
+        <rect x="28.5" y="8" width="15.5" height="10" rx="4" fill="#474D5C" />
+        <rect x="22.5" y="13" width="28.5" height="40" rx="6.5" fill="url(#carbon-badge-plate-dark)" />
+        <rect x="30" y="23" width="13.5" height="3.6" rx="1.8" fill="#343945" />
+        <rect x="30" y="30.6" width="13.5" height="3.6" rx="1.8" fill="#343945" />
+        <rect x="30" y="38.2" width="8.5" height="3.6" rx="1.8" fill="#343945" />
+      </g>
+    </g>
+
+    {/* Light-theme variant */}
+    <g className="carbon-badge-light">
+      <rect x="1" y="1" width="62" height="62" rx="15" fill="url(#carbon-badge-bg-light)" />
+      <rect x="1.75" y="1.75" width="60.5" height="60.5" rx="14.25" stroke="#DFE2EA" strokeWidth="1.5" />
+      <g transform="rotate(-9 26 38)">
+        <rect x="12.5" y="17" width="27" height="38" rx="6.5" fill="#C2C6D5" />
+      </g>
+      <g transform="rotate(3 37 35)">
+        <rect x="28.5" y="8" width="15.5" height="10" rx="4" fill="#6E7686" />
+        <rect x="22.5" y="13" width="28.5" height="40" rx="6.5" fill="url(#carbon-badge-plate-light)" stroke="#E3E5EE" strokeWidth="1" />
+        <rect x="30" y="23" width="13.5" height="3.6" rx="1.8" fill="#DCDFE8" />
+        <rect x="30" y="30.6" width="13.5" height="3.6" rx="1.8" fill="#DCDFE8" />
+        <rect x="30" y="38.2" width="8.5" height="3.6" rx="1.8" fill="#DCDFE8" />
+      </g>
+    </g>
+  </svg>
+);

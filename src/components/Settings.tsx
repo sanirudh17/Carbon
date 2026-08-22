@@ -30,6 +30,35 @@ interface HotkeyStatusInfo {
   enlarged_conflict: boolean;
 }
 
+// Small "i" badge that reveals a hover/focus popover with multi-line guidance.
+// Pure CSS (no portal): the popover is positioned relative to the badge, so it
+// must live inside containers that don't clip overflow (settings-body scrolls,
+// but rows themselves don't clip).
+const HelpHint: React.FC<{ title: string; lines: string[] }> = ({ title, lines }) => (
+  <span
+    className="help-hint"
+    tabIndex={0}
+    role="note"
+    aria-label={title}
+    onClick={(e) => e.preventDefault()}
+  >
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <circle cx="8" cy="5.1" r="0.9" fill="currentColor" />
+      <path d="M8 7.4v3.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+    <span className="help-pop">
+      <span className="help-pop-title">{title}</span>
+      {lines.map((line, i) => (
+        <span key={i} className="help-pop-line">
+          {line}
+        </span>
+      ))}
+    </span>
+  </span>
+);
+
+
 const ACCENT_SWATCHES = [
   { name: 'Periwinkle', color: '#5B7CFA' },
   { name: 'Amethyst', color: '#8B5CF6' },
@@ -367,11 +396,29 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       <div className="settings-body">
         {/* Shortcuts */}
         <section>
-          <div className="sec-title">Shortcuts</div>
+          <div className="sec-title">
+            Shortcuts
+            <HelpHint
+              title="How global hotkeys work"
+              lines={[
+                "Combos must include at least one modifier (Ctrl / Alt / Shift / Win) plus a key — letters, F1–F24, Space, Tab or Enter all work.",
+                "Carbon's two shortcuts can't share the same combo, and Windows blocks combos reserved by the system or other apps.",
+                "Changes register system-wide the moment you record them; if another app already owns a combo, Carbon automatically falls back to the next free suggestion and tells you here.",
+              ]}
+            />
+          </div>
           <div className="set-row">
             <div className="set-label">
               Quick paste hotkey
               <div className="set-hint">Opens the overlay anywhere. Click the key to change it.</div>
+              <HelpHint
+                title="Quick paste hotkey setup"
+                lines={[
+                  "Click the key chip, then press the combo you want — Esc cancels, Backspace clears.",
+                  "Pick something the apps you use don't already grab; Ctrl+Shift combos are usually safe.",
+                  "The binding is saved and re-registered instantly, so it survives restarts.",
+                ]}
+              />
             </div>
             <div className="set-control hotkey-control">
               <button
@@ -395,6 +442,14 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
             <div className="set-label">
               Enlarged window hotkey
               <div className="set-hint">Opens full library and settings. Click the key to change it.</div>
+              <HelpHint
+                title="Enlarged window hotkey setup"
+                lines={[
+                  "Must differ from the Quick paste hotkey — duplicates are rejected while recording.",
+                  "If Windows refuses the combo because another app owns it, Carbon falls back to a free suggestion and the conflict note above tells you what's active.",
+                  "Recording a different combo resolves the conflict immediately — no restart needed.",
+                ]}
+              />
             </div>
             <div className="set-control hotkey-control">
               <button
@@ -418,14 +473,34 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
             <div className="hotkey-conflict-note">
               {hotkeyStatus.overlay_conflict && (
                 <div>
-                  Windows couldn’t register “{hotkeyStatus.overlay_preferred}” for the Quick Overlay — another
-                  application is likely already using it. Carbon fell back to “{hotkeyStatus.overlay}”.
+                  {hotkeyStatus.overlay === hotkeyStatus.overlay_preferred ? (
+                    <>
+                      Windows couldn’t register “{hotkeyStatus.overlay_preferred}” for the Quick Overlay, and
+                      every automatic alternative is taken too. This shortcut is currently inactive — record a
+                      different combination below and it applies instantly.
+                    </>
+                  ) : (
+                    <div>
+                      Windows couldn’t register “{hotkeyStatus.overlay_preferred}” for the Quick Overlay — another
+                      application is likely already using it. Carbon fell back to “{hotkeyStatus.overlay}”.
+                    </div>
+                  )}
                 </div>
               )}
               {hotkeyStatus.enlarged_conflict && (
                 <div>
-                  Windows couldn’t register “{hotkeyStatus.enlarged_preferred}” for the Enlarged Window — another
-                  application is likely already using it. Carbon fell back to “{hotkeyStatus.enlarged}”.
+                  {hotkeyStatus.enlarged === hotkeyStatus.enlarged_preferred ? (
+                    <>
+                      Windows couldn’t register “{hotkeyStatus.enlarged_preferred}” for the Enlarged Window, and
+                      every automatic alternative is taken too. This shortcut is currently inactive — record a
+                      different combination below and it applies instantly.
+                    </>
+                  ) : (
+                    <div>
+                      Windows couldn’t register “{hotkeyStatus.enlarged_preferred}” for the Enlarged Window — another
+                      application is likely already using it. Carbon fell back to “{hotkeyStatus.enlarged}”.
+                    </div>
+                  )}
                 </div>
               )}
             </div>

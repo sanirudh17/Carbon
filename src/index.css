@@ -713,6 +713,34 @@ input, textarea, select, button {
   border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
 }
 
+/* Badge variant: the full-colour layered-clipboard illustration fills the whole
+   mark, so the accent tint behind it would only peek at the corners. */
+.brand .brand-mark.brand-badge {
+  background: transparent;
+  border: none;
+  overflow: hidden;
+}
+
+.brand .brand-mark.brand-badge .brand-badge-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Theme-aware badge: both illustrations ship inside the one SVG; exactly one
+   is displayed based on the html[data-theme] attribute App.tsx maintains. */
+.carbon-badge-light {
+  display: none;
+}
+
+[data-theme='light'] .carbon-badge-dark {
+  display: none;
+}
+
+[data-theme='light'] .carbon-badge-light {
+  display: block;
+}
+
 .brand .brand-mark svg {
   width: 15px;
   height: 15px;
@@ -1259,6 +1287,104 @@ section:last-child {
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+
+/* Helper hover popups ("i" badge → popover) used across the settings rows to
+   explain hotkey configuration rules and setup guidelines without cluttering
+   the UI. Revealed on hover or keyboard focus; hidden from the layout
+   otherwise so it never shifts the row it annotates. */
+.help-hint {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 6px;
+  border-radius: 50%;
+  color: var(--text-3);
+  cursor: help;
+  outline: none;
+  vertical-align: middle;
+  transition: color 120ms ease;
+}
+
+.help-hint:hover,
+.help-hint:focus-visible {
+  color: var(--accent);
+}
+
+.help-hint svg {
+  pointer-events: none;
+}
+
+.help-pop {
+  position: absolute;
+  z-index: 60;
+  bottom: calc(100% + 8px);
+  left: -10px;
+  width: 280px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: var(--elev, #1c1f27);
+  border: 1px solid var(--line);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  text-align: left;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-2);
+  cursor: default;
+
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease,
+    visibility 140ms;
+}
+
+.help-hint:hover .help-pop,
+.help-hint:focus-visible .help-pop {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+/* Keep the popover on screen for hints that sit near the right edge of a row:
+   anchor to the right instead of growing leftwards off-canvas. */
+.set-control .help-pop {
+  left: auto;
+  right: -6px;
+}
+
+.help-pop-title {
+  display: block;
+  font-weight: 600;
+  font-size: 11.5px;
+  color: var(--text);
+  margin-bottom: 5px;
+}
+
+.help-pop-line {
+  display: block;
+  position: relative;
+  padding-left: 12px;
+}
+
+.help-pop-line + .help-pop-line {
+  margin-top: 4px;
+}
+
+.help-pop-line::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 0.55em;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
 }
 
 .set-control {
