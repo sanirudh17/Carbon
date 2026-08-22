@@ -160,6 +160,8 @@ export const QuickOverlay: React.FC = () => {
   // Application filter chip in the searchbar (same behavior as the main app:
   // click the APPLICATION value in the preview to filter, ✕ to clear).
   const [sourceAppFilter, setSourceAppFilter] = useState<string | null>(null);
+  // Content-type category filter for the overlay's clips list ('__all__' = no filter)
+  const [typeFilter, setTypeFilter] = useState<string>('__all__');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [renderMode, setRenderMode] = useState<boolean>(true);
   const [editingContent, setEditingContent] = useState<string>('');
@@ -274,16 +276,23 @@ export const QuickOverlay: React.FC = () => {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [snSnippets]);
 
-  // Distinct source applications present in the clipboard history — feeds the
-  // Raycast-style "All Apps" filter box in the overlay's clips searchbar.
-  const appFilterOptions = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const i of items) {
-      if (i.source_app && !seen.has(i.source_app)) seen.set(i.source_app, appDisplayName(i.source_app));
-    }
-    return Array.from(seen.entries())
-      .sort((a, b) => a[1].localeCompare(b[1]))
-      .map(([raw, label]) => ({ value: raw, label }));
+  // Distinct content-type categories present in the clipboard history —
+  // feeds the Raycast-style "All Types" filter box in the overlay's clips
+  // searchbar (mirrors the main window's sidebar type filters).
+  const typeFilterOptions = useMemo(() => {
+    const ORDER = ['text', 'code', 'rich_text', 'image', 'file', 'link', 'email', 'color'];
+    const LABELS: Record<string, string> = {
+      text: 'Text',
+      code: 'Code',
+      rich_text: 'Rich Text',
+      image: 'Image',
+      file: 'File',
+      link: 'Link',
+      email: 'Email',
+      color: 'Color',
+    };
+    const present = new Set<string>(items.map((i) => String(i.content_type)));
+    return ORDER.filter((t) => present.has(t)).map((t) => ({ value: t, label: LABELS[t] }));
   }, [items]);
 
   const snFiltered = useMemo(
@@ -307,21 +316,24 @@ export const QuickOverlay: React.FC = () => {
     [snSnippets, snSelectedId]
   );
 
-  // Client-side application filter (mirrors EnlargedWindow semantics)
-  const displayItems = useMemo(
-    () =>
-      sourceAppFilter
-        ? items.filter(
-            (i) => i.source_app && i.source_app.toLowerCase() === sourceAppFilter.toLowerCase()
-          )
-        : items,
-    [items, sourceAppFilter]
-  );
+  // Client-side application + content-type filters (mirrors EnlargedWindow semantics)
+  const displayItems = useMemo(() => {
+    let out = items;
+    if (sourceAppFilter) {
+      out = out.filter(
+        (i) => i.source_app && i.source_app.toLowerCase() === sourceAppFilter.toLowerCase()
+      );
+    }
+    if (typeFilter !== '__all__') {
+      out = out.filter((i) => String(i.content_type) === typeFilter);
+    }
+    return out;
+  }, [items, sourceAppFilter, typeFilter]);
 
   // Reset highlight when the filter changes so Enter/preview stay valid
   useEffect(() => {
     setSelectedIndex(0);
-  }, [sourceAppFilter]);
+  }, [sourceAppFilter, typeFilter]);
 
   // Clips-tab behavior: the highlighted row is always a valid row of the
   // filtered list (keeps Enter instantly usable and the preview populated).
@@ -1324,12 +1336,12 @@ export const QuickOverlay: React.FC = () => {
             )}
             <Dropdown
               className="app-filter-dd"
-              value={sourceAppFilter ?? '__all__'}
-              onChange={(v) => setSourceAppFilter(v === '__all__' ? null : v)}
+              value={typeFilter}
+              onChange={setTypeFilter}
               align="end"
-              ariaLabel="Filter by application"
-              title="Filter by application"
-              options={[{ value: '__all__', label: 'All Apps' }, ...appFilterOptions]}
+              ariaLabel="Filter by type"
+              title="Filter by type"
+              options={[{ value: '__all__', label: 'All Types' }, ...typeFilterOptions]}
             />
           </div>
           <div className={`searchbar sn-searchbar ${tab === 'clips' ? 'inactive-tab' : ''}`}>

@@ -6,8 +6,8 @@
   --elev-hover: #1C1E24;
   --line: #23252C;
   --line-soft: #1B1D22;
-  --well-bg: #14171D;
-  --well-line: #454D5E;
+  --well-bg: #15161B;
+  --well-line: #33353C;
   --text: #ECECEF;
   --text-2: #8F94A0;
   --text-3: #585D68;
@@ -852,6 +852,8 @@ input, textarea, select, button {
 
 .main-top .searchbar {
   flex: 1;
+  /* Embedded tag filter sits inset at the right edge, like the quick overlay */
+  padding-right: 4px;
 }
 
 .total {
@@ -1036,8 +1038,9 @@ input, textarea, select, button {
 }
 
 .preview-edit:focus {
-  border-color: var(--accent-ring);
-  box-shadow: 0 0 0 1px var(--accent-soft);
+  /* Neutral focus cue — no accent blue on the editable surface */
+  border-color: var(--text-3);
+  box-shadow: none;
   color: var(--text);
 }
 
@@ -1823,15 +1826,7 @@ section:last-child {
 }
 
 /* Rendered rich text (headers, lists, bold — not raw source).
-   Dark mode gives the document a clearly visible card so the rendered
-   section reads as distinct content; light mode leaves it bare. */
-:root:not([data-theme="light"]) .rich-doc {
-  background: #161924;
-  border: 1px solid #3A4150;
-  border-radius: var(--r-panel);
-  padding: 14px 18px;
-}
-
+   Deliberately bare: no card/box — rendered markdown floats as plain text. */
 .rich-doc {
   font-family: var(--font);
   font-size: 13.5px;
@@ -5006,16 +5001,24 @@ section:last-child {
 
 .filter-box .filter-box-ic {
   position: absolute;
-  left: 10px;
-  width: 13px !important;
-  height: 13px !important;
-  color: var(--text-3);
+  left: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  /* Distinct mini-button wrapper around the funnel glyph */
+  width: 20px !important;
+  height: 20px !important;
+  padding: 3.5px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--elev);
+  color: var(--text-2);
   pointer-events: none;
   z-index: 1;
 }
 
 .filter-box .c-dropdown-trigger {
-  padding-left: 29px;
+  padding-left: 31px;
 }
 
 /* App-category filter box riding the right edge of the CLIPS searchbar
@@ -5030,7 +5033,21 @@ section:last-child {
   height: 28px;
   gap: 5px;
   padding: 0 7px 0 9px;
-  border-radius: var(--r-btn);
+  /* Distinct surrounding box against the searchbar */
+  border: 1px solid var(--line);
+  background: var(--elev-hover);
+}
+
+/* Tag filter embedded inside the main window's snippets searchbar */
+.main-top .searchbar .sn-tag-dd {
+  height: 28px;
+}
+
+.main-top .searchbar .sn-tag-dd .c-dropdown-trigger {
+  height: 100%;
+  /* Subtle border so the control reads as its own box inside the bar */
+  border-color: var(--line);
+  background: transparent;
 }
 
 .overlay > .searchbar.has-app-filter {
