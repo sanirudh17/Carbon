@@ -1049,52 +1049,57 @@ fn handle_expansion(snippet_id: String, keyword_len: usize, hwnd_at_match: isize
     Ok(())
 }
 
+pub fn show_placement_pill(app_handle: &AppHandle, message: Option<&str>) {
+    let msg = message.unwrap_or("text has been placed successfully").to_string();
+    let _ = app_handle.emit("expansion-pill-show", msg.clone());
+    let _ = app_handle.emit("snippet-expanded", msg);
+
+    if let Some(pill) = app_handle.get_webview_window("pill") {
+        let scale = pill.scale_factor().unwrap_or(1.0);
+        let w_log = 380;
+        let h_log = 56;
+        let phys_w = (w_log as f64 * scale).round() as i32;
+        let phys_h = (h_log as f64 * scale).round() as i32;
+
+        let (cx, cy) = get_caret_screen_position();
+        let (mut x, mut y) = (0, 0);
+        unsafe {
+            let pt = POINT { x: cx, y: cy };
+            let hmon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            if GetMonitorInfoW(hmon, &mut info).as_bool() {
+                let work = info.rcWork;
+                let work_w = work.right - work.left;
+                // Center horizontally on the screen
+                x = work.left + (work_w - phys_w) / 2;
+                // Position at the bottom of the screen, just above the taskbar
+                y = work.bottom - phys_h - (24.0 * scale).round() as i32;
+            } else {
+                x = cx - phys_w / 2;
+                y = cy - phys_h / 2;
+            }
+        }
+        let _ = pill.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+            x,
+            y,
+        }));
+        let _ = pill.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+            width: phys_w as u32,
+            height: phys_h as u32,
+        }));
+        let _ = pill.show();
+    }
+}
+
 fn post_expansion_success(snippet: &Snippet, expanded_text: &str) {
     // Record use
     if let Some(ctx) = EXPANSION_CTX.lock().unwrap().as_ref() {
         let _ = ctx.db.record_snippet_use(&snippet.id);
         if snippet.show_confirmation {
-            let _ = ctx.app_handle.emit("snippet-expanded", snippet.name.clone());
-            let _ = ctx.app_handle.emit("expansion-pill-show", snippet.name.clone());
-            // Show transient pill centered on the monitor (always-on-top, auto-hides in JS)
-            // Neat, centered toast — never cluttering the caret or the main app.
-            if let Some(pill) = ctx.app_handle.get_webview_window("pill") {
-                let scale = pill.scale_factor().unwrap_or(1.0);
-                let w_log = 380;
-                let h_log = 56;
-                let phys_w = (w_log as f64 * scale).round() as i32;
-                let phys_h = (h_log as f64 * scale).round() as i32;
-                // Center on the monitor that contains the caret
-                let (cx, cy) = get_caret_screen_position();
-                let (mut x, mut y) = (0, 0);
-                unsafe {
-                    let pt = POINT { x: cx, y: cy };
-                    let hmon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
-                    let mut info = MONITORINFO {
-                        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-                        ..Default::default()
-                    };
-                    if GetMonitorInfoW(hmon, &mut info).as_bool() {
-                        let work = info.rcWork;
-                        let work_w = work.right - work.left;
-                        let work_h = work.bottom - work.top;
-                        x = work.left + (work_w - phys_w) / 2;
-                        y = work.top + (work_h - phys_h) / 2;
-                    } else {
-                        x = cx - phys_w / 2;
-                        y = cy - phys_h / 2;
-                    }
-                }
-                let _ = pill.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                    x,
-                    y,
-                }));
-                let _ = pill.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                    width: phys_w as u32,
-                    height: phys_h as u32,
-                }));
-                // Visibility is asserted by the frontend once text is rendered
-            }
+            show_placement_pill(&ctx.app_handle, Some("text has been placed successfully"));
         }
         let _ = ctx.app_handle.emit("snippets-updated", ());
     }

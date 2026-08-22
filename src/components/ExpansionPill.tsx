@@ -5,12 +5,10 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 export const ExpansionPill: React.FC = () => {
   const [text, setText] = useState<string | null>(null);
   const timerRef = useRef<number | null>(null);
-  const textRef = useRef<string | null>(null);
-  textRef.current = text;
 
-  const showPill = (name: string) => {
+  const showPill = (msg?: string) => {
     if (timerRef.current) window.clearTimeout(timerRef.current);
-    setText(name);
+    setText(msg || 'text has been placed successfully');
     getCurrentWindow().show().catch(() => {});
     timerRef.current = window.setTimeout(async () => {
       try {
@@ -18,24 +16,20 @@ export const ExpansionPill: React.FC = () => {
         await win.hide();
       } catch {}
       setText(null);
-    }, 1800);
+    }, 2000);
   };
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen<string>('snippet-expanded', (e) => {
-      const name = e.payload as string;
-      if (!name) return;
-      showPill(name);
+      showPill(e.payload || 'text has been placed successfully');
     }).then((fn) => {
       unlisten = fn;
     });
 
     let unlistenPill: (() => void) | undefined;
     listen<string>('expansion-pill-show', (e) => {
-      const name = e.payload as string;
-      if (!name) return;
-      showPill(name);
+      showPill(e.payload || 'text has been placed successfully');
     }).then((fn) => {
       unlistenPill = fn;
     });
@@ -71,7 +65,7 @@ export const ExpansionPill: React.FC = () => {
         justifyContent: 'center',
         background: 'transparent',
         pointerEvents: 'none',
-        padding: 12,
+        padding: 8,
         boxSizing: 'border-box',
       }}
     >
@@ -80,66 +74,47 @@ export const ExpansionPill: React.FC = () => {
           display: 'inline-flex',
           alignItems: 'center',
           gap: 10,
-          maxWidth: 360,
-          padding: '11px 16px 11px 12px',
-          borderRadius: 12,
-          background: 'color-mix(in srgb, var(--surface) 96%, transparent)',
+          padding: '10px 18px 10px 14px',
+          borderRadius: 999,
+          background: 'color-mix(in srgb, var(--surface, #1e1e24) 96%, transparent)',
           backdropFilter: 'blur(20px)',
           WebkitBackdropFilter: 'blur(20px)',
-          border: '1px solid var(--line)',
-          boxShadow: '0 16px 40px -4px rgba(0,0,0,0.65), 0 4px 12px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06)',
-          fontSize: 13,
-          fontWeight: 550,
-          color: 'var(--text)',
+          border: '1px solid var(--line, rgba(255,255,255,0.12))',
+          boxShadow:
+            '0 16px 40px -4px rgba(0,0,0,0.65), 0 4px 12px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06)',
+          fontSize: 12.5,
+          fontWeight: 500,
+          color: 'var(--text, #f0f0f5)',
           whiteSpace: 'nowrap',
           overflow: 'hidden',
-          animation: 'modalScaleIn 160ms var(--ease-out)',
+          animation: 'modalScaleIn 160ms cubic-bezier(0.16, 1, 0.3, 1)',
           willChange: 'transform, opacity',
         }}
       >
         <span
           style={{
-            width: 22,
-            height: 22,
-            borderRadius: 7,
+            width: 20,
+            height: 20,
+            borderRadius: '50%',
             display: 'grid',
             placeItems: 'center',
-            background: 'var(--accent)',
+            background: 'var(--accent, #6366f1)',
             color: '#fff',
             fontSize: 11,
             fontWeight: 700,
             flexShrink: 0,
-            boxShadow: '0 2px 8px var(--accent-ring)',
+            boxShadow: '0 2px 8px var(--accent-ring, rgba(99,102,241,0.4))',
           }}
         >
           ✓
         </span>
         <span
           style={{
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
             letterSpacing: '-0.1px',
+            color: 'var(--text, #f0f0f5)',
           }}
         >
-          Pasted&nbsp;<span style={{ color: 'var(--text-2)', fontWeight: 500 }}>{text}</span>
-        </span>
-        <span
-          style={{
-            marginLeft: 4,
-            fontSize: 10,
-            fontWeight: 600,
-            letterSpacing: 0.4,
-            textTransform: 'uppercase',
-            color: 'var(--text-3)',
-            background: 'var(--elev)',
-            border: '1px solid var(--line-soft)',
-            padding: '2px 5px',
-            borderRadius: 5,
-            flexShrink: 0,
-          }}
-        >
-          ✓ done
+          {text}
         </span>
       </div>
     </div>

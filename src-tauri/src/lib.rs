@@ -936,6 +936,7 @@ fn copy_snippet_text(text: String) -> Result<(), String> {
 /// after a `{cursor}` marker — when present, the caret is walked back there.
 #[tauri::command]
 fn paste_snippet_text(
+    app_handle: AppHandle,
     pre: String,
     post: Option<String>,
     window: WebviewWindow,
@@ -949,7 +950,9 @@ fn paste_snippet_text(
         "[PASTE_SNIPPET] window.hide() returned {:?}",
         hide_res
     ));
-    paste::paste_text_into_target(&pre, post.as_deref())
+    let res = paste::paste_text_into_target(&pre, post.as_deref())?;
+    expansion::show_placement_pill(&app_handle, Some("text has been placed successfully"));
+    Ok(res)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

@@ -63,7 +63,7 @@ export function useSnippetFlow(opts: {
         await invoke('record_snippet_use', { id: snippet.id }).catch(() => null);
         if (snippet.show_confirmation) {
           const label = snippet.name || snippet.keyword || 'Snippet';
-          onConfirm(mode === 'copy' ? `Copied ${label} to clipboard` : `Inserted ${label}`);
+          onConfirm(mode === 'copy' ? `Copied ${label} to clipboard` : 'text has been placed successfully');
         }
         onUsed?.();
       } catch (err) {
