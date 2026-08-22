@@ -30,33 +30,40 @@ interface HotkeyStatusInfo {
   enlarged_conflict: boolean;
 }
 
-// Small "i" badge that reveals a hover/focus popover with multi-line guidance.
-// Pure CSS (no portal): the popover is positioned relative to the badge, so it
-// must live inside containers that don't clip overflow (settings-body scrolls,
-// but rows themselves don't clip).
-const HelpHint: React.FC<{ title: string; lines: string[] }> = ({ title, lines }) => (
-  <span
-    className="help-hint"
-    tabIndex={0}
-    role="note"
-    aria-label={title}
-    onClick={(e) => e.preventDefault()}
-  >
-    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-      <circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <circle cx="8" cy="5.1" r="0.9" fill="currentColor" />
-      <path d="M8 7.4v3.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-    <span className="help-pop">
-      <span className="help-pop-title">{title}</span>
-      {lines.map((line, i) => (
-        <span key={i} className="help-pop-line">
-          {line}
+// Small "i" badge that toggles an inline guidance panel. The panel expands in
+// normal document flow (no absolute positioning, no hover reveal), so it can
+// never float over other content or get clipped by container edges — the
+// settings body simply grows and scrolls.
+const HelpHint: React.FC<{ title: string; lines: string[] }> = ({ title, lines }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className={`help-hint-wrap${open ? ' open' : ''}`}>
+      <button
+        type="button"
+        className="help-hint"
+        aria-expanded={open}
+        aria-label={title}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+          <circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" strokeWidth="1.3" />
+          <circle cx="8" cy="5.1" r="0.9" fill="currentColor" />
+          <path d="M8 7.4v3.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        </svg>
+      </button>
+      {open && (
+        <span className="help-pop" role="note">
+          <span className="help-pop-title">{title}</span>
+          {lines.map((line, i) => (
+            <span key={i} className="help-pop-line">
+              {line}
+            </span>
+          ))}
         </span>
-      ))}
+      )}
     </span>
-  </span>
-);
+  );
+};
 
 
 const ACCENT_SWATCHES = [
@@ -127,6 +134,12 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   useEffect(() => {
     if (!recording) return;
 
+    // Suspend Carbon's own global shortcuts for the duration of the recording
+    // session: registered combos are grabbed by the OS-level hook before the
+    // webview sees them, so pressing e.g. the current enlarged-window combo
+    // would toggle windows instead of being captured by the recorder.
+    invoke('suspend_global_shortcuts').catch(() => {});
+
     const onKeyDown = (e: KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
@@ -183,7 +196,14 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     };
 
     window.addEventListener('keydown', onKeyDown, true);
-    return () => window.removeEventListener('keydown', onKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+      // Re-arm whatever the current settings say. When the session ended
+      // because a combo was accepted, save_settings re-applies strictly with
+      // the NEW binding right after; this tolerant resume is idempotent and
+      // only matters for Esc / Backspace / toggle-off paths.
+      invoke('resume_global_shortcuts').catch(() => {});
+    };
   }, [recording, settings]);
 
   const fetchSettings = async () => {
@@ -415,7 +435,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                 title="Quick paste hotkey setup"
                 lines={[
                   "Click the key chip, then press the combo you want — Esc cancels, Backspace clears.",
-                  "Pick something the apps you use don't already grab; Ctrl+Shift combos are usually safe.",
+                  "Carbon's own hotkeys are paused while recording, so even the current combo is captured cleanly.",
                   "The binding is swapped in place instantly and persisted, so it survives restarts.",
                 ]}
               />
@@ -445,9 +465,9 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               <HelpHint
                 title="Enlarged window hotkey setup"
                 lines={[
-                  "Must differ from the Quick paste hotkey — duplicates are rejected while recording.",
+                  "Click the key chip, then press the combo you want — Esc cancels, Backspace clears.",
+                  "Carbon's own hotkeys are paused while recording, and duplicates of the other hotkey are rejected on the spot.",
                   "If another app genuinely owns the combo, Carbon keeps your current binding and shows the conflict here instead of silently failing.",
-                  "Recording a free combo resolves the conflict immediately — no restart needed.",
                 ]}
               />
             </div>

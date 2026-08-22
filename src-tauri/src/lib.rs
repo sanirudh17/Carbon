@@ -467,6 +467,21 @@ fn get_hotkey_status() -> Option<hotkey::HotkeyStatus> {
     shortcuts::get_hotkey_status()
 }
 
+/// Drop all global shortcuts temporarily — used by the settings UI while it is
+/// recording a new combo, so Carbon's own registered bindings don't swallow
+/// the keystrokes before the recorder ever sees them.
+#[tauri::command]
+fn suspend_global_shortcuts(app: AppHandle) {
+    shortcuts::unregister_all(&app);
+}
+
+/// Re-arm global shortcuts from current settings after a recording session
+/// ends. Tolerant: a combo owned elsewhere is flagged via hotkey-status.
+#[tauri::command]
+fn resume_global_shortcuts(app: AppHandle) -> Result<(), String> {
+    shortcuts::reapply(&app, false)
+}
+
 /// Remembers which tab ("clips" | "snippets") the Quick Overlay opens with.
 #[tauri::command]
 fn set_overlay_default_tab(state: State<'_, AppState>, app_handle: AppHandle, tab: String) -> Result<(), String> {
@@ -1113,6 +1128,8 @@ pub fn run() {
             submit_arg_prompt,
             get_pending_arg_request,
             get_hotkey_status,
+            suspend_global_shortcuts,
+            resume_global_shortcuts,
             get_target_app_name,
             set_overlay_preview,
             set_overlay_default_tab,
