@@ -9,8 +9,8 @@
   --text: #F4F4F6;
   --text-2: #A1A1AA;
   --text-3: #6E6E78;
-  --accent: #6366F1;
-  --accent-hover: #4F46E5;
+  --accent: #5B7CFA;
+  --accent-hover: #6D8BFA;
   --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
   --accent-ring: color-mix(in srgb, var(--accent) 28%, transparent);
   --accent-text: color-mix(in srgb, var(--accent) 80%, white);
@@ -18,18 +18,18 @@
   --tooltip-text: #F4F4F6;
   --tint-alpha: 12%;
   --tint-text: #94A3B8;
-  --tint-code: #818CF8;
+  --tint-code: #7E96F8;
   --tint-rich: #F59E0B;
   --tint-image: #EC4899;
   --tint-files: #3B82F6;
   --tint-link: #06B6D4;
   --tint-email: #10B981;
-  --tint-color: #8B5CF6;
+  --tint-color: #93A8FA;
   --danger: #F87171;
   /* Snippet placeholder token colors (inline syntax highlighting) */
   --sn-tok: #34D399;
   --sn-tok-dyn: #38BDF8;
-  --sn-tok-arg: #C084FC;
+  --sn-tok-arg: #7E96F8;
   --sn-tok-snip: #2DD4BF;
   --sn-tok-cursor: #FBBF24;
   --sn-tok-bad: #F87171;
@@ -54,8 +54,8 @@
   --text: #0F172A;
   --text-2: #334155;
   --text-3: #64748B;
-  --accent: #4F46E5;
-  --accent-hover: #4338CA;
+  --accent: #5B7CFA;
+  --accent-hover: #4A69E8;
   --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
   --accent-ring: color-mix(in srgb, var(--accent) 30%, transparent);
   --accent-text: color-mix(in srgb, var(--accent) 90%, black);
@@ -63,18 +63,18 @@
   --tooltip-text: #0F172A;
   --tint-alpha: 12%;
   --tint-text: #334155;
-  --tint-code: #4338CA;
+  --tint-code: #3D5BD9;
   --tint-rich: #D97706;
   --tint-image: #DB2777;
   --tint-files: #2563EB;
   --tint-link: #0891B2;
   --tint-email: #059669;
-  --tint-color: #7C3AED;
+  --tint-color: #4A69E8;
   --danger: #DC2626;
   /* Snippet placeholder token colors (inline syntax highlighting) */
   --sn-tok: #059669;
   --sn-tok-dyn: #0284C7;
-  --sn-tok-arg: #9333EA;
+  --sn-tok-arg: #3D5BD9;
   --sn-tok-snip: #0D9488;
   --sn-tok-cursor: #D97706;
   --sn-tok-bad: #DC2626;

@@ -99,10 +99,10 @@ export const ExpansionPill: React.FC = () => {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            background: 'var(--accent, #6366f1)',
+            background: 'var(--accent, #5B7CFA)',
             color: '#ffffff',
             flexShrink: 0,
-            boxShadow: '0 2px 8px var(--accent-ring, rgba(99,102,241,0.4))',
+            boxShadow: '0 2px 8px var(--accent-ring, rgba(91,124,250,0.4))',
           }}
         >
           <svg

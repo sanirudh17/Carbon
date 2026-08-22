@@ -11,8 +11,8 @@ interface SettingsProps {
 }
 
 const ACCENT_SWATCHES = [
-  { name: 'Indigo', color: '#6366F1' },
-  { name: 'Violet', color: '#8B5CF6' },
+  { name: 'Periwinkle', color: '#5B7CFA' },
+  { name: 'Sky', color: '#0EA5E9' },
   { name: 'Sapphire', color: '#3B82F6' },
   { name: 'Emerald', color: '#10B981' },
   { name: 'Amber', color: '#F59E0B' },
@@ -30,7 +30,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     retention_days: 30,
     max_entries: 5000,
     image_size_limit_mb: 20,
-    accent_color: '#8B5CF6',
+    accent_color: '#5B7CFA',
     theme: 'dark',
     ignore_apps: [],
     preview_enabled: true,

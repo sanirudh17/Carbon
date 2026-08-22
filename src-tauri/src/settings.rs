@@ -103,7 +103,7 @@ impl Default for AppSettings {
             retention_days: 30,
             max_entries: 5000,
             image_size_limit_mb: 20,
-            accent_color: "#8B5CF6".to_string(),
+            accent_color: "#5B7CFA".to_string(),
             theme: "dark".to_string(),
             ignore_apps: vec![
                 "1Password.exe".to_string(),
