@@ -215,16 +215,9 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       updateSetting(recording === 'quick' ? 'quick_hotkey' : 'enlarged_hotkey', combo);
     };
 
-    const onKeyUp = () => {
-      // Clear or adjust modifier draft when keys are released
-      setDraftCombo('');
-    };
-
     window.addEventListener('keydown', onKeyDown, true);
-    window.addEventListener('keyup', onKeyUp, true);
     return () => {
       window.removeEventListener('keydown', onKeyDown, true);
-      window.removeEventListener('keyup', onKeyUp, true);
       // Re-arm shortcuts ONLY if recording was canceled or toggled off without
       // committing a new hotkey. When a combo was accepted, updateSetting ->
       // save_settings re-arms shortcuts with the NEW binding atomically.
