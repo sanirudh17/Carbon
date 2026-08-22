@@ -1,21 +1,21 @@
 /* ═══════════ Carbon Tokens & Base Styles ═══════════ */
 :root {
-  --bg0: #121215;
-  --surface: #17171C;
-  --elev: #1E1E26;
-  --elev-hover: #262632;
-  --line: #2D2D38;
-  --line-soft: #23232C;
-  --text: #F4F4F6;
-  --text-2: #A1A1AA;
-  --text-3: #6E6E78;
+  --bg0: #15151A;
+  --surface: #1A1A21;
+  --elev: #23232C;
+  --elev-hover: #2C2C38;
+  --line: #343441;
+  --line-soft: #292935;
+  --text: #F6F6F8;
+  --text-2: #ADADB7;
+  --text-3: #7B7B87;
   --accent: #5B7CFA;
   --accent-hover: #6D8BFA;
   --accent-fg: #ffffff;
   --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
   --accent-ring: color-mix(in srgb, var(--accent) 28%, transparent);
   --accent-text: color-mix(in srgb, var(--accent) 80%, white);
-  --tooltip-bg: rgba(18, 18, 24, 0.96);
+  --tooltip-bg: rgba(22, 22, 29, 0.97);
   --tooltip-text: #F4F4F6;
   --tint-alpha: 12%;
   --tint-text: #94A3B8;
@@ -118,7 +118,7 @@ input, textarea, select, button {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2C2C33;
+  background: #34343F;
   border-radius: 4px;
   border: 1px solid transparent;
   background-clip: content-box;
@@ -129,7 +129,7 @@ input, textarea, select, button {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3A3A42;
+  background: #42424F;
 }
 
 .mono {
