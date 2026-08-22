@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { AppSettings, DbStats } from '../types';
-import { ChevronLeftIcon, SpinnerIcon, CheckIcon } from './Icons';
+import { ChevronLeftIcon, SpinnerIcon, CheckIcon, AlertTriangleIcon } from './Icons';
 
 interface SettingsProps {
   onBack: () => void;
@@ -18,6 +18,16 @@ const normalizeCombo = (combo: string): string => {
   const key = parts[parts.length - 1].toLowerCase();
   const mods = parts.slice(0, -1).map((m) => m.toLowerCase()).sort();
   return [...mods, key].join('+');
+};
+
+const DEFAULT_HOTKEYS = {
+  quick_hotkey: 'Ctrl+Shift+X',
+  enlarged_hotkey: 'Ctrl+Alt+X',
+};
+
+const isDefaultHotkey = (field: 'quick_hotkey' | 'enlarged_hotkey', current: string | undefined): boolean => {
+  if (!current) return false;
+  return normalizeCombo(current) === normalizeCombo(DEFAULT_HOTKEYS[field]);
 };
 
 // Mirrors hotkey::HotkeyStatus on the Rust side.
@@ -332,6 +342,33 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     }
   };
 
+  const handleResetHotkey = async (field: 'quick_hotkey' | 'enlarged_hotkey') => {
+    setHotkeyError(null);
+    setRecording(null);
+    setDraftCombo('');
+    await updateSetting(field, DEFAULT_HOTKEYS[field]);
+  };
+
+  const handleResetAllHotkeys = async () => {
+    setHotkeyError(null);
+    setRecording(null);
+    setDraftCombo('');
+    const updated = {
+      ...settings,
+      quick_hotkey: DEFAULT_HOTKEYS.quick_hotkey,
+      enlarged_hotkey: DEFAULT_HOTKEYS.enlarged_hotkey,
+    };
+    setSettings(updated);
+    try {
+      await invoke('save_settings', { newSettings: updated });
+      showToast('success', 'Shortcuts reset to defaults.');
+    } catch (err) {
+      console.error('Failed to reset hotkeys:', err);
+      showToast('error', String(err));
+      fetchSettings();
+    }
+  };
+
   const handleClearHistory = async () => {
     if (window.confirm('Are you sure you want to clear all unpinned clipboard items?')) {
       try {
@@ -478,11 +515,33 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               >
                 {recording === 'quick' ? draftCombo || 'Press keys…' : settings.quick_hotkey}
               </button>
+              {recording === 'quick' ? (
+                <button
+                  type="button"
+                  className="btn subtle small"
+                  onClick={() => {
+                    setRecording(null);
+                    setDraftCombo('');
+                    setHotkeyError(null);
+                  }}
+                >
+                  Cancel
+                </button>
+              ) : !isDefaultHotkey('quick_hotkey', settings.quick_hotkey) ? (
+                <button
+                  type="button"
+                  className="btn subtle small"
+                  title="Reset to default (Ctrl+Shift+X)"
+                  onClick={() => handleResetHotkey('quick_hotkey')}
+                >
+                  Reset
+                </button>
+              ) : null}
             </div>
           </div>
           {hotkeyError?.field === 'quick' && (
             <div className="hotkey-error" role="alert">
-              {hotkeyError.message}
+              <AlertTriangleIcon /> {hotkeyError.message}
             </div>
           )}
           <div className="set-row">
@@ -501,29 +560,61 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               >
                 {recording === 'enlarged' ? draftCombo || 'Press keys…' : settings.enlarged_hotkey}
               </button>
+              {recording === 'enlarged' ? (
+                <button
+                  type="button"
+                  className="btn subtle small"
+                  onClick={() => {
+                    setRecording(null);
+                    setDraftCombo('');
+                    setHotkeyError(null);
+                  }}
+                >
+                  Cancel
+                </button>
+              ) : !isDefaultHotkey('enlarged_hotkey', settings.enlarged_hotkey) ? (
+                <button
+                  type="button"
+                  className="btn subtle small"
+                  title="Reset to default (Ctrl+Alt+X)"
+                  onClick={() => handleResetHotkey('enlarged_hotkey')}
+                >
+                  Reset
+                </button>
+              ) : null}
             </div>
           </div>
           {hotkeyError?.field === 'enlarged' && (
             <div className="hotkey-error" role="alert">
-              {hotkeyError.message}
+              <AlertTriangleIcon /> {hotkeyError.message}
             </div>
           )}
           {(hotkeyStatus?.overlay_conflict || hotkeyStatus?.enlarged_conflict) && (
-            <div className="hotkey-conflict-note">
+            <div className="hotkey-conflict-note" role="alert">
+              <div className="hotkey-conflict-header">
+                <AlertTriangleIcon /> Shortcut Conflict Detected
+              </div>
               {hotkeyStatus.overlay_conflict && (
-                <div>
-                  Windows couldn’t register “{hotkeyStatus.overlay_preferred}” for the Quick Overlay — another
-                  application owns it, so Carbon kept “{hotkeyStatus.overlay}”. Record a different combination
-                  above and the new one applies instantly.
+                <div className="hotkey-conflict-item">
+                  Windows could not register <strong>“{hotkeyStatus.overlay_preferred}”</strong> for Quick Overlay because another app owns it. Carbon kept <strong>“{hotkeyStatus.overlay}”</strong>.
                 </div>
               )}
               {hotkeyStatus.enlarged_conflict && (
-                <div>
-                  Windows couldn’t register “{hotkeyStatus.enlarged_preferred}” for the Enlarged Window — another
-                  application owns it, so Carbon kept “{hotkeyStatus.enlarged}”. Record a different combination
-                  above and the new one applies instantly.
+                <div className="hotkey-conflict-item">
+                  Windows could not register <strong>“{hotkeyStatus.enlarged_preferred}”</strong> for Enlarged Window because another app owns it. Carbon kept <strong>“{hotkeyStatus.enlarged}”</strong>.
                 </div>
               )}
+            </div>
+          )}
+          {(!isDefaultHotkey('quick_hotkey', settings.quick_hotkey) || !isDefaultHotkey('enlarged_hotkey', settings.enlarged_hotkey)) && (
+            <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn subtle small"
+                onClick={handleResetAllHotkeys}
+              >
+                Reset shortcuts to defaults
+              </button>
             </div>
           )}
         </section>
