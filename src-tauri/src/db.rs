@@ -465,12 +465,15 @@ impl DbState {
                         None,
                     );
 
-                    // Legacy rows force-typed "code" by the old terminal
-                    // heuristic: prose with no code signals renders as unstyled
-                    // plain text under the code view — remove them outright.
+                    // Legacy rows force-typed "code" by the old heuristic:
+                    // prose or markdown with no code anatomy renders wrong
+                    // under the code view — remove them outright.
                     if content_type == "code"
                         && detected_type == "text"
-                        && text_content.as_deref().map_or(false, crate::clipboard_watcher::looks_like_prose)
+                        && text_content.as_deref().map_or(false, |s| {
+                            crate::clipboard_watcher::looks_like_prose(s)
+                                || crate::clipboard_watcher::looks_like_markdown(s)
+                        })
                     {
                         to_delete.push(id);
                         continue;

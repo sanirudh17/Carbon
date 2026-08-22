@@ -785,38 +785,162 @@ pub fn classify_text_content(
         return "rich_text".to_string();
     }
 
-    // 5. Code detection — content signals are authoritative; the source app is
-    // only a weak hint. A prose guard keeps the two detections separate:
-    // copying plain English from a terminal or editor must not become "code".
-    let prose = looks_like_prose(trimmed);
+    // 4.6 Markdown documents stay plain text so the UI can render them —
+    // headings, lists and even embedded fenced code blocks are document
+    // content, not a code capture.
+    if looks_like_markdown(trimmed) {
+        return "text".to_string();
+    }
 
+    // 5. Code detection — structural signals only. A bare keyword substring
+    // ("if (", "return ", "=>") inside prose must never flip a capture to
+    // code; there must be real code anatomy (JSON/HTML documents, SQL
+    // statements, keyword hits combined with block/line structure).
+    if is_structural_code(trimmed) {
+        return "code".to_string();
+    }
+
+    // Last resort: an editor source hint, which never applies to prose.
+    let prose = looks_like_prose(trimmed);
     let is_code_app = source_app.map_or(false, |app| {
         let app_l = app.to_lowercase();
         // NOTE: terminals (wt.exe, powershell, cmd) are intentionally excluded —
         // they carry prose, commands and shell output, not just source code.
         app_l.contains("code") || app_l.contains("devenv") || app_l.contains("idea") || app_l.contains("sublime")
     });
-
-    let code_keywords = [
-        "const ", "let ", "var ", "function ", "import ", "export ", "class ", "def ", "fn ", "pub ",
-        "return ", "if (", "for (", "while (", "SELECT ", "INSERT INTO ", "UPDATE ", "DELETE FROM ",
-        "struct ", "interface ", "async ", "await ", "std::", "fmt.", "::", "=>", "->"
-    ];
-
-    let contains_code_keyword = code_keywords.iter().any(|k| trimmed.contains(k));
-    let has_braces_and_semis = (trimmed.contains('{') && trimmed.contains('}'))
-        || (trimmed.contains(';') && trimmed.lines().count() > 1);
-
-    // Strong content signal wins outright (real code with comments still
-    // contains keywords/braces). The app hint only applies to non-prose text.
-    if contains_code_keyword || has_braces_and_semis {
-        return "code".to_string();
-    }
     if is_code_app && !prose {
         return "code".to_string();
     }
 
     "text".to_string()
+}
+
+/// Heuristic: does this read like a Markdown document? Headings, fences,
+/// emphasis, links, lists, tables… Markdown stays text even when it embeds
+/// fenced code blocks — the rendered view highlights those inline.
+pub fn looks_like_markdown(s: &str) -> bool {
+    let t = s.trim();
+    if !t.contains('\n') && !t.contains("```") {
+        // Single-line snippets are rarely markdown documents unless clearly marked up.
+        let inline_re = Regex::new(r"\[[^\]\n]+\]\([^)\n]+\)|\*\*[^*\n]+\*\*|`[^`\n]+`").unwrap();
+        return inline_re.is_match(t);
+    }
+    // Shebang → shell/python script, not markdown.
+    if t.starts_with("#!") {
+        return false;
+    }
+
+    let mut markers = 0usize;
+    // Fenced code block — strong marker on its own.
+    if t.contains("```") || t.contains("~~~") {
+        return true;
+    }
+    // ATX headings (# … ######), count them; needs company or multiples.
+    let heading_re = Regex::new(r"(?m)^\s*#{1,6}\s+\S").unwrap();
+    let headings = heading_re.find_iter(t).count();
+    if headings >= 2 {
+        return true;
+    }
+    if headings == 1 {
+        markers += 2;
+    }
+    // Emphasis
+    if Regex::new(r"\*\*[^*\n]+\*\*|__[^_\n]+__").unwrap().is_match(t) {
+        markers += 1;
+    }
+    // Links / images
+    if Regex::new(r"\[[^\]\n]+\]\([^)\n]+\)").unwrap().is_match(t) {
+        markers += 2;
+    }
+    // Bullet / ordered lists — two or more list lines.
+    let list_re = Regex::new(r"(?m)^\s*([-*+]|\d+[.)])\s+\S").unwrap();
+    if list_re.find_iter(t).count() >= 2 {
+        markers += 2;
+    }
+    // Blockquotes
+    if Regex::new(r"(?m)^\s*>\s+\S").unwrap().is_match(t) {
+        markers += 1;
+    }
+    // Inline code spans
+    if Regex::new(r"`[^`\n]+`").unwrap().is_match(t) {
+        markers += 1;
+    }
+    // Tables
+    if Regex::new(r"(?m)^\s*\|.+\|\s*$").unwrap().is_match(t) {
+        markers += 2;
+    }
+    markers >= 3
+}
+
+/// Structural code detection — requires real code anatomy, not bare keyword
+/// substrings: JSON/HTML/SQL documents, multiple language keywords combined
+/// with block structure, or blocks of semicolon/brace-terminated lines.
+fn is_structural_code(s: &str) -> bool {
+    let t = s.trim();
+
+    // JSON document
+    if (t.starts_with('{') && t.ends_with('}')) || (t.starts_with('[') && t.ends_with(']')) {
+        if serde_json::from_str::<serde_json::Value>(t).is_ok() {
+            return true;
+        }
+    }
+
+    // HTML / XML document pasted as plain text
+    if Regex::new(r"(?i)^\s*(<!DOCTYPE\s+html|<html[\s>])").unwrap().is_match(t)
+        || Regex::new(r"^\s*<[a-z][\w-]*(\s[^>]*)?>[\s\S]*</[a-z][\w-]*>\s*$").unwrap().is_match(t)
+    {
+        return true;
+    }
+
+    // SQL statement
+    if Regex::new(r"(?i)^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|WITH)\s[^;]+;\s*$")
+        .unwrap()
+        .is_match(t)
+    {
+        return true;
+    }
+
+    let code_keywords = [
+        "const ", "let ", "var ", "function ", "import ", "export ", "class ", "def ", "fn ", "pub ",
+        "return ", "if (", "for (", "while (", "SELECT ", "INSERT INTO ", "UPDATE ", "DELETE FROM ",
+        "struct ", "interface ", "async ", "await ", "std::", "fmt.", "::", "=>", "->",
+    ];
+    let kw_hits = code_keywords.iter().filter(|k| t.contains(**k)).count();
+    let has_braces = t.contains('{') && t.contains('}');
+    let has_semis = t.contains(';');
+    let multiline = t.lines().count() > 1;
+
+    // Several language keywords plus block/line structure = real code.
+    if kw_hits >= 2 && (has_braces || has_semis || multiline) {
+        return true;
+    }
+    if kw_hits >= 1 && has_braces && has_semis {
+        return true;
+    }
+
+    // A block of semicolon-terminated lines (C-style bodies).
+    if multiline && has_semis {
+        let semi_lines = t.lines().filter(|l| l.trim_end().ends_with(';')).count();
+        if semi_lines >= 3 {
+            return true;
+        }
+    }
+
+    // A block of brace-delimited lines (function/class bodies).
+    if multiline && has_braces {
+        let brace_lines = t
+            .lines()
+            .filter(|l| {
+                let e = l.trim_end();
+                e.ends_with('{') || e == "}" || e.ends_with("};") || e.ends_with(")}")
+            })
+            .count();
+        if brace_lines >= 3 {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Heuristic: does this text read like natural-language prose (sentences built
@@ -996,3 +1120,72 @@ mod tests {
 }
 
 
+
+#[cfg(test)]
+mod classify_tests {
+    use super::*;
+
+    #[test]
+    fn plain_prose_is_text_even_from_terminal() {
+        assert_eq!(
+            classify_text_content(
+                "Make markdown view box in rendered section more visible; make editable interface more distinguished.",
+                None,
+                None,
+                Some("WindowsTerminal.exe"),
+            ),
+            "text"
+        );
+    }
+
+    #[test]
+    fn prose_with_single_keyword_stays_text() {
+        assert_eq!(
+            classify_text_content(
+                "When you return home please bring the package if you can.",
+                None,
+                None,
+                Some("Code.exe"),
+            ),
+            "text"
+        );
+    }
+
+    #[test]
+    fn markdown_heading_doc_is_text() {
+        assert_eq!(
+            classify_text_content(
+                "### Overview\n\nThis project does things.\n\n### Details\n\nIt works well.",
+                None,
+                None,
+                Some("Code.exe"),
+            ),
+            "text"
+        );
+    }
+
+    #[test]
+    fn markdown_with_fenced_code_block_is_text() {
+        let md = "## Usage\n\nRun it like this:\n\n```js\nconst x = 1;\nconsole.log(x);\n```\n\nDone.";
+        assert_eq!(classify_text_content(md, None, None, Some("Code.exe")), "text");
+    }
+
+    #[test]
+    fn json_document_is_code() {
+        assert_eq!(classify_text_content("{ \"a\": 1, \"b\": [2, 3] }", None, None, None), "code");
+    }
+
+    #[test]
+    fn real_function_is_code() {
+        let js = "function add(a, b) {\n  const sum = a + b;\n  return sum;\n}";
+        assert_eq!(classify_text_content(js, None, None, Some("Code.exe")), "code");
+    }
+
+    #[test]
+    fn sql_statement_is_code() {
+        assert_eq!(
+            classify_text_content("SELECT id, name FROM users WHERE active = 1;", None, None, Some("wt.exe")),
+            "code"
+        );
+    }
+}
