@@ -25,3 +25,14 @@ dist-ssr
 
 # Rust build artifacts
 src-tauri/target
+
+# Bundled binaries (fetched per-machine, ~164 MB, not committed)
+src-tauri/binaries/
+src-tauri/icon-source.png
+
+# Tauri bundle output
+src-tauri/target/release/bundle/
+
+# Env
+.env
+.env.local
