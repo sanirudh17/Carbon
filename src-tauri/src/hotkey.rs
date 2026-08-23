@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    GetAsyncKeyState, GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
@@ -195,11 +195,15 @@ unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LP
         // can capture it via RegisterHotKey or steal focus!
         let target_opt = RECORDING_TARGET.lock().unwrap().clone();
         if let Some(target) = target_opt {
-            let ctrl_down = (GetKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;
-            let shift_down = (GetKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
-            let alt_down = (GetKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0;
-            let win_down = (GetKeyState(VK_LWIN.0 as i32) as u16 & 0x8000) != 0
-                || (GetKeyState(VK_RWIN.0 as i32) as u16 & 0x8000) != 0;
+            // GetAsyncKeyState is required inside WH_KEYBOARD_LL — GetKeyState
+            // queries the calling thread's message queue and returns 0 on the
+            // hook thread, while GetAsyncKeyState reflects the global physical
+            // state and correctly sees Ctrl/Alt/Shift held before this hook.
+            let ctrl_down = (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;
+            let shift_down = (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
+            let alt_down = (GetAsyncKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0;
+            let win_down = (GetAsyncKeyState(VK_LWIN.0 as i32) as u16 & 0x8000) != 0
+                || (GetAsyncKeyState(VK_RWIN.0 as i32) as u16 & 0x8000) != 0;
 
             let vk = kbd.vkCode;
             if vk == 0x1B {

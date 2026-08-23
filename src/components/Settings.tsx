@@ -136,6 +136,11 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   }, []);
 
   const committedRef = useRef(false);
+  // Ref mirror of settings so Tauri event listeners (registered once) always
+  // see the latest hotkey values without re-subscribing on every keystroke,
+  // which would otherwise drop events mid-flight and lose conflict banners.
+  const settingsRef = useRef(settings);
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
 
   // Key recorder: while recording, capture the next non-modifier key press
   // together with its modifiers and commit it as the new hotkey. Both webview
@@ -390,7 +395,8 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     });
     listen<{ target: 'quick' | 'enlarged'; combo: string }>('hotkey-recorded', (e) => {
       const { target, combo } = e.payload;
-      const other = target === 'quick' ? settings.enlarged_hotkey : settings.quick_hotkey;
+      const cur = settingsRef.current;
+      const other = target === 'quick' ? cur.enlarged_hotkey : cur.quick_hotkey;
       const otherName = target === 'quick' ? 'Enlarged Window' : 'Quick Overlay';
       if (other && normalizeCombo(combo) === normalizeCombo(other)) {
         setHotkeyError({
@@ -399,6 +405,8 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
         });
         setRecording(null);
         setDraftCombo('');
+        invoke('stop_recording_hotkey').catch(() => {});
+        invoke('resume_global_shortcuts').catch(() => {});
         return;
       }
       committedRef.current = true;
@@ -429,7 +437,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       unlistenDraft?.();
       unlistenCancel?.();
     };
-  }, [settings]);
+  }, []);
 
   const handleExportBackup = async () => {
     if (isExporting) return;
