@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>A fast, local-first clipboard manager for Windows.</strong><br/>
-  Instant overlay, searchable history, snippets & OCR — everything stays on your machine.
+  Overlay, searchable history, snippets & OCR — everything stays on your machine.
 </p>
 
 <p align="center">
@@ -20,51 +20,105 @@
 
 ## Overview
 
-Carbon is a local-first clipboard manager for Windows. Press a hotkey to summon a quick overlay anywhere, paste from a searchable history, organize clips into collections, expand snippets system-wide, and extract text from images with bundled Tesseract OCR — all without cloud, accounts, or telemetry.
+Carbon is a local-first clipboard manager for Windows. Press a hotkey to summon an overlay anywhere, paste from a searchable history, organize clips into collections, expand snippets system-wide, and extract text from images with bundled Tesseract OCR — all without cloud, accounts, or telemetry.
 
-Carbon keeps everything in a local SQLite database (`carbon_history.db`) with image files on disk. History, snippets, and settings never leave your computer.
+Everything lives in a local SQLite database (`carbon_history.db`) with image files on disk in `%APPDATA%\com.carbon.clipboard\`. History, snippets, and settings never leave your computer.
 
-## Table of contents
+> **New here?** Install the single `Carbon_0.1.0_x64-setup.exe` from [Releases](https://github.com/sanirudh17/Carbon/releases/latest) — no extra dependencies, Tesseract is already bundled.
+
+## Contents
 
 - [Features](#features)
-- [Download & install](#download--install)
-- [Building from source](#building-from-source)
-- [Tech stack](#tech-stack)
-- [Project structure](#project-structure)
+- [How It Works](#how-it-works)
+- [Settings Reference](#settings-reference)
+- [Download & Install](#download--install)
+- [Building from Source](#building-from-source)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Configuration & Data](#configuration--data)
 - [Privacy](#privacy)
+- [Troubleshooting](#troubleshooting)
 - [License](#license)
 
 ## Features
 
-### Quick Overlay (HUD)
+**Capture & History**
 
-Summon with `Ctrl+Shift+Z` (customizable) — a centered overlay appears at your cursor, showing recent clips and snippets. Search, filter by type (text, code, image, files, links, email, color, rich text), and paste with transforms (plain text, markdown, JSON, uppercase/lowercase/title, base64, URL). `Ctrl+V` advances a queued multi-paste. The preview pane is toggleable and remembers its position.
+- **Automatic capture** of text, code, rich text, images, files, links, email, and color values as you copy — with de-duplication and pinning.
+- **Searchable history** with type filters, full-text search, and inline editing of clip text.
+- **Collections** with colors and optional PIN + recovery code; add/remove clips, rename, and color-code.
+- **Bulk actions** — select many clips to pin, delete, or queue for pasting.
 
-### Library & Enlarged Window
+**Overlay & Library**
 
-Open the full library with `Ctrl+Alt+X` (customizable) — a searchable, filterable view of all history. Pin favorites, bulk select, manage collections (with optional PIN), and edit clip text inline. Two-way sync: deleting in Explorer or in Carbon stays consistent.
+- **Quick overlay** (`Ctrl+Shift+Z`) — centered at the cursor, shows recent clips and snippets. Filter by type, queue multiple clips with `Ctrl+V` to advance, and paste with transforms (plain text, markdown, JSON, uppercase/lowercase/title, base64, URL encode/decode). Preview pane is toggleable.
+- **Full library** (`Ctrl+Alt+X`) — searchable, sortable view of all history with collections sidebar, stats, and snippet management.
 
-### Snippets & System-wide Expansion
+**Snippets & Expansion**
 
-Create snippets with keywords (e.g. `/select`) and dynamic placeholders (`{date}`, `{clipboard}`, `{cursor}`). Enable **snippet expansion** to expand keywords as you type in any app across Windows — private in-memory buffer (256 chars), zero CPU when idle, UIPI-safe in elevated windows.
+- Create snippets with keywords (e.g. `/date`) and dynamic placeholders (`{date}`, `{time}`, `{clipboard}`, `{cursor}`).
+- **System-wide expansion** — type a keyword in any app and it expands inline at native typing speed. Private 256-char in-memory buffer, zero CPU when idle, UIPI-safe in elevated windows. Opt-in via consent.
 
-### Capture Text (OCR)
+**Image & Text Tools**
 
-Extract text from any image clip with a single click, powered by a **bundled Tesseract** engine (no separate install). Preprocessing upscales, enhances contrast, adds white padding, and runs two PSM passes for accuracy; `eng.traineddata` ships inside the installer.
+- **OCR** — extract text from any image clip with one click. Preprocessing upscales 3×, enhances contrast, adds white padding, and runs two Tesseract PSM passes (`6` then `3` fallback); `eng.traineddata` ships inside the installer.
+- **Transforms on paste** — choose per-paste or set default plain-text pasting and move-to-top behavior.
 
-### Collections & Privacy
+**Smart Capture**
 
-Organize clips into collections with colors and PIN protection (with recovery code). Optional **ClipMerge** appends rapid successive copies, **strip tracking params** cleans URLs (`utm_*`, `fbclid`, etc.), custom **capture rules** (find/replace, plain or regex), and **sensitive data** detection (credit cards, API keys, JWTs, private keys) with auto-expiry.
+- **ClipMerge** — rapid successive copies within a window append to the top clip instead of creating separate entries.
+- **URL cleaning** — strip tracking params (`utm_*`, `fbclid`, `gclid`, etc.) at capture time.
+- **Custom rules** — ordered find/replace (plain text or regex) applied on every capture.
+- **Sensitive detection** — optional local detection of credit cards (Luhn), API keys, JWTs, and private keys, with auto-expiry after 5 minutes.
 
-### Global Hotkeys
+**Hotkeys & Theming**
 
-Two swappable global shortcuts (Quick Overlay + Enlarged Window) — `tauri-plugin-global-shortcut` with atomic `unregister_all`/`reapply` and strict rollback. `Ctrl+Alt` combos are handled via `AltGraph` parity (so `M→µ`, `N→ñ` etc. work) and a `WH_KEYBOARD_LL` hook prevents GPU software from stealing focus. Conflicts show inline errors and toast pop-ups.
+- Two swappable global shortcuts with atomic `unregister_all`/`reapply` and strict rollback. `Ctrl+Alt` handled via `AltGraph` parity and a `WH_KEYBOARD_LL` hook so GPU software can't steal focus; conflicts show inline errors and toast pop-ups.
+- **Dark/light themes** with PNG badge at native resolution (1.2–1.3 MB dark/light) and 6 accent swatches + custom picker. All settings persist in `settings.json`.
 
-### Theming & Polish
+## How It Works
 
-Dark/light themes with `PNG` app badge at native resolution (dark/light variants), accent swatches + custom color picker, and a theme-aware layered-clipboard icon. All settings persist in `settings.json` and survive restarts.
+Everything between copying and pasting runs as a local pipeline. Each stage can fail without losing your clipboard.
 
-## Download & install
+```
+  copy (Ctrl+C / right-click)
+        │
+        ▼
+  clipboard watcher ───────► classify (text/code/image/file/link/email/color/rich)
+        │                    de-duplicate, apply ClipMerge window
+        ▼
+  smart capture ───────────► strip tracking params → custom rules (regex/text, ordered)
+        │                    detect sensitive → set expires_at (+5m) if enabled
+        ▼
+  storage ─────────────────► SQLite (WAL) + image files in %APPDATA%\com.carbon.clipboard%\media
+        │                    trim by retention_days / max_entries (hourly + on save)
+        ▼
+  overlay / library ───────► search, filter, pin, edit, queue, transform
+        │
+        ▼
+  paste ───────────────────► paste_clip / queue_paste_next with PasteTransform
+                             (plain/markdown/json/case/base64/url) + bump-to-top
+```
+
+**Snippets** run on a separate `WH_KEYBOARD_LL` path: keystrokes are buffered, matched against a trie of keywords, and replaced inline via `write_text_to_clipboard` + `paste_text_into_target` with `{cursor}` support.
+
+## Settings Reference
+
+**Behavior** — `Overlay opens on` (Clips/Snippets) · `Keep window warm` (hide vs close, recreate when cold) · `Start with Windows` (Run registry) · `ClipMerge` + `ClipMerge window` (500–10000 ms, debounced).
+
+**Snippets** — `Enable snippet expansion` (consent-gated, `WH_KEYBOARD_LL`) · `Show snippets in library & overlay`.
+
+**Capture Rules & Sanitization** — `Strip URL tracking parameters` · `Custom Find & Replace Rules` (plain/regex, enabled toggle, ordered).
+
+**Privacy** — `Detect and auto-expire sensitive clips`.
+
+**Storage** — `Retention` (days, `0` = forever) · `Max entries` · `Image size limit` (`0` = unlimited, MB) · `Clear history` (deletes DB rows + orphan images + emits update) · `Export`/`Restore` backup (JSON with base64 images, snippets).
+
+**Appearance** — `Accent theme` (6 swatches + custom `<input type=color>`) · `Theme mode` (dark/light, `html[data-theme]`).
+
+Internals: `overlay_default_tab`, `preview_enabled`, `detect_sensitive_data`, `clip_merge_enabled`, `clip_merge_window_ms`, `strip_tracking_params`, `capture_rules`, `snippet_expansion_enabled`, `show_snippets` all in `AppSettings` (`settings.rs`).
+
+## Download & Install
 
 Download the latest installer from the [**Releases**](https://github.com/sanirudh17/Carbon/releases/latest) page and run it:
 
@@ -76,7 +130,7 @@ Everything Carbon needs is bundled — no extra dependencies. The installer is c
 
 **System requirements:** Windows 10 or 11 (64-bit). WebView2 is preinstalled on Windows 11 and auto-installed on Windows 10 if missing.
 
-## Building from source
+## Building from Source
 
 ### Prerequisites
 
@@ -98,8 +152,8 @@ npm install
 Tesseract is large (~164 MB) and not committed. Fetch once per machine:
 
 ```powershell
-# From repository root, copy or fetch tesseract to src-tauri/binaries/tesseract/
-# Example: copy from Glint's bundled copy or run your fetch script
+# Fetch tesseract to src-tauri/binaries/tesseract/ (tesseract.exe, DLLs, tessdata/eng.traineddata)
+# Use your preferred fetch script or copy from an existing local build
 ```
 
 This populates `src-tauri/binaries/tesseract/` (`tesseract.exe`, DLLs, `tessdata/eng.traineddata`) which `npm run tauri build` bundles via `tauri.conf.json` `bundle.resources: {"binaries/tesseract":"tesseract"}`. Without it the app builds but OCR will report `TESS_MISSING`.
@@ -124,7 +178,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 npm run build
 ```
 
-## Tech stack
+## Tech Stack
 
 | Layer | Technology |
 |---|---|
@@ -135,21 +189,48 @@ npm run build
 | Hotkeys | `tauri-plugin-global-shortcut` + `WH_KEYBOARD_LL` hook |
 | Clipboard | Windows `Win32_System_DataExchange`, `html2md`, `image` |
 
-## Project structure
+## Project Structure
 
 ```
 src/               React + TypeScript frontend (Vite)
   components/      QuickOverlay, EnlargedWindow, Settings, Icons (PNG badge)
   assets/          carbon-badge-dark/light.png (1.2–1.3 MB, theme-aware)
 src-tauri/
-  src/             Rust core (clipboard_watcher, db, hotkey, shortcuts, expansion, ocr, paste)
+  src/             Rust core (clipboard_watcher, db, hotkey, shortcuts, expansion, ocr, paste, history, settings)
   icons/           Generated from dark PNG (128x128@2x, icon.ico/icns, StoreLogo)
   binaries/tesseract/  Bundled OCR runtime (not committed, fetched per-machine)
 ```
 
+## Configuration & Data
+
+Settings, history, and snippets are stored as JSON/SQLite in your user config directory:
+
+```
+%APPDATA%\com.carbon.clipboard\
+├── settings.json      # AppSettings (hotkeys, theme, retention, etc.)
+├── carbon_history.db  # SQLite (clips, collections, snippets)
+└── media/             # image files for image clips
+```
+
+Clipboard watcher and `HistoryManager` trim history hourly and on save according to `retention_days` (0 = keep forever) and `max_entries` (oldest unpinned first). `keep_window_warm` controls whether overlay/library `hide()` vs `close()` (free memory).
+
 ## Privacy
 
-Carbon is **local-first**. No network code, no cloud sync, no accounts, no telemetry. Clipboard history, images, snippets, and settings live in `%APPDATA%/com.carbon.clipboard/` and never leave your disk. Snippet expansion uses a private 256-char in-memory buffer never written to disk.
+Carbon is **local-first**. No network code, no cloud sync, no accounts, no telemetry. Clipboard history, images, snippets, and settings live in `%APPDATA%\com.carbon.clipboard\` and never leave your disk. Snippet expansion uses a private 256-char in-memory buffer never written to disk; it is opt-in and `snippet_expansion_enabled` is excluded from backup/restore by design. Window titles are never logged for context detection.
+
+## Troubleshooting
+
+**Overlay doesn't appear with the hotkey.**
+Another app may own that combo — Windows gives it to whoever registered first. Carbon keeps your previous hotkey and shows an inline error + toast. Try a different combo (`Ctrl+Shift+Z` is free by default).
+
+**OCR says “Tesseract is not installed”.**
+The `src-tauri/binaries/tesseract` folder is missing. Fetch it (see Building step 2) and rebuild, or install Tesseract via `winget install UB-Mannheim.TesseractOCR` for a system-wide fallback.
+
+**Nothing happens when I paste.**
+Check `Behavior → Keep window warm` and `Paste plain text` settings. If `move to top on paste` is on, the pasted clip bumps to the top of history.
+
+**History grows forever or deletes too quickly.**
+`Storage → Retention` (`0` = forever) and `Max entries` are enforced by `trim_history`; `Clear history` removes unpinned clips and orphan images.
 
 ## License
 
@@ -159,4 +240,4 @@ Bundled Tesseract is third-party software under [Apache-2.0](https://github.com/
 
 ## Acknowledgements
 
-Built with [Tauri](https://v2.tauri.app/) and [Tesseract OCR](https://github.com/tesseract-ocr/tesseract). Icon design from the Carbon layered-clipboard illustration. Inspired by CleanShot X and Glint.
+Built with [Tauri](https://v2.tauri.app/) and [Tesseract OCR](https://github.com/tesseract-ocr/tesseract). Icon design from the Carbon layered-clipboard illustration.
