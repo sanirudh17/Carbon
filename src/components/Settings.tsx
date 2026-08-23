@@ -52,12 +52,16 @@ const CODE_KEY: Record<string, string> = {
 // PHYSICAL key — rather than e.key. With Ctrl+Alt held (AltGr on many
 // layouts) e.key can turn into a different character or symbol, which is why
 // Ctrl+Alt combos previously failed to record; e.code is layout-independent
-// and always identifies the key that was pressed. Returns null while only
-// modifiers are held or the physical key isn't usable as a hotkey.
+// and always identifies the key that was pressed. On Windows, Ctrl+Alt is
+// delivered as AltGr for keys that have an AltGr character on the active
+// layout (e.g. M→µ, N→ñ, I→í): the event reports ctrlKey=false/altKey=false
+// but AltGraph=true. We mirror Typr's proven fix and treat AltGraph as its
+// physical components — Ctrl+Alt — so every Ctrl+Alt+letter captures.
 const keyEventToCombo = (e: KeyboardEvent): string | null => {
+  const altGraph = (e as KeyboardEvent).getModifierState?.('AltGraph') ?? false;
   const mods: string[] = [];
-  if (e.ctrlKey) mods.push('Ctrl');
-  if (e.altKey) mods.push('Alt');
+  if (e.ctrlKey || altGraph) mods.push('Ctrl');
+  if (e.altKey || altGraph) mods.push('Alt');
   if (e.shiftKey) mods.push('Shift');
   if (e.metaKey) mods.push('Win');
 
@@ -171,9 +175,10 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
         return;
       }
 
+      const altGraph = (e as KeyboardEvent).getModifierState?.('AltGraph') ?? false;
       const mods: string[] = [];
-      if (e.ctrlKey) mods.push('Ctrl');
-      if (e.altKey) mods.push('Alt');
+      if (e.ctrlKey || altGraph) mods.push('Ctrl');
+      if (e.altKey || altGraph) mods.push('Alt');
       if (e.shiftKey) mods.push('Shift');
       if (e.metaKey) mods.push('Win');
 
@@ -189,7 +194,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
       // Reject bare keys with an explicit reason instead of silently waiting.
       const keyLabel = combo.split('+').pop() as string;
-      if (!e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
+      if (!e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey && !altGraph) {
         setDraftCombo(keyLabel);
         setHotkeyError({
           field: recording,
