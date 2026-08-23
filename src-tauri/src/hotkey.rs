@@ -217,6 +217,9 @@ unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LP
 
             let is_mod = matches!(vk, 0x10..=0x12 | 0x5B..=0x5C | 0xA0..=0xA5);
             if !is_mod {
+                // Mirrors frontend keyEventToCombo + global-hotkey parse_key: letters, digits,
+                // Numpad, F1-F24, Space/Tab/Enter, arrows, and editing keys. Keeps hook and
+                // webview in sync so a combo recorded via WH_KEYBOARD_LL triggers identically.
                 let key_name: Option<&'static str> = match vk {
                     0x41 => Some("A"), 0x42 => Some("B"), 0x43 => Some("C"), 0x44 => Some("D"),
                     0x45 => Some("E"), 0x46 => Some("F"), 0x47 => Some("G"), 0x48 => Some("H"),
@@ -228,10 +231,19 @@ unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LP
                     0x30 => Some("0"), 0x31 => Some("1"), 0x32 => Some("2"), 0x33 => Some("3"),
                     0x34 => Some("4"), 0x35 => Some("5"), 0x36 => Some("6"), 0x37 => Some("7"),
                     0x38 => Some("8"), 0x39 => Some("9"),
+                    // Numpad — mapped to digit token like frontend Numpad3 -> "3" so hook/webview agree
+                    0x60 => Some("0"), 0x61 => Some("1"), 0x62 => Some("2"), 0x63 => Some("3"),
+                    0x64 => Some("4"), 0x65 => Some("5"), 0x66 => Some("6"), 0x67 => Some("7"),
+                    0x68 => Some("8"), 0x69 => Some("9"),
                     0x70 => Some("F1"), 0x71 => Some("F2"), 0x72 => Some("F3"), 0x73 => Some("F4"),
                     0x74 => Some("F5"), 0x75 => Some("F6"), 0x76 => Some("F7"), 0x77 => Some("F8"),
                     0x78 => Some("F9"), 0x79 => Some("F10"), 0x7A => Some("F11"), 0x7B => Some("F12"),
+                    0x7C => Some("F13"), 0x7D => Some("F14"), 0x7E => Some("F15"), 0x7F => Some("F16"),
+                    0x80 => Some("F17"), 0x81 => Some("F18"), 0x82 => Some("F19"), 0x83 => Some("F20"),
+                    0x84 => Some("F21"), 0x85 => Some("F22"), 0x86 => Some("F23"), 0x87 => Some("F24"),
                     0x20 => Some("Space"), 0x09 => Some("Tab"), 0x0D => Some("Enter"),
+                    0x08 => Some("Backspace"), 0x2E => Some("Delete"), 0x2D => Some("Insert"),
+                    0x24 => Some("Home"), 0x23 => Some("End"), 0x21 => Some("PageUp"), 0x22 => Some("PageDown"),
                     0x25 => Some("Left"), 0x26 => Some("Up"), 0x27 => Some("Right"), 0x28 => Some("Down"),
                     0xBA => Some(";"), 0xBB => Some("="), 0xBC => Some(","), 0xBD => Some("-"),
                     0xBE => Some("."), 0xBF => Some("/"), 0xC0 => Some("`"), 0xDB => Some("["),
@@ -276,9 +288,9 @@ unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LP
 
         // Virtual Key Code 0x56 is 'V'
         if kbd.vkCode == 0x56 {
-            let ctrl_down = (GetKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;
-            let shift_down = (GetKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
-            let alt_down = (GetKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0;
+            let ctrl_down = (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;
+            let shift_down = (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
+            let alt_down = (GetAsyncKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0;
 
             // Plain Ctrl+V in target application
             if ctrl_down && !shift_down && !alt_down {

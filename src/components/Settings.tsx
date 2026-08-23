@@ -146,6 +146,14 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   const settingsRef = useRef(settings);
   useEffect(() => { settingsRef.current = settings; }, [settings]);
 
+  const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const showToast = (type: 'success' | 'error' | 'info', message: string, duration = 4000) => {
+    setToast({ type, message });
+    setTimeout(() => {
+      setToast((curr) => (curr?.message === message ? null : curr));
+    }, duration);
+  };
+
   // Key recorder: while recording, capture the next non-modifier key press
   // together with its modifiers and commit it as the new hotkey. Both webview
   // keydown events AND the low-level WH_KEYBOARD_LL hook are active so keystrokes
@@ -208,11 +216,13 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       const other = recording === 'quick' ? settings.enlarged_hotkey : settings.quick_hotkey;
       const otherName = recording === 'quick' ? 'Enlarged Window' : 'Quick Overlay';
       if (other && normalizeCombo(combo) === normalizeCombo(other)) {
+        const msg = `“${combo}” is already the ${otherName} hotkey — pick a different combination.`;
         setDraftCombo(combo);
         setHotkeyError({
           field: recording,
-          message: `“${combo}” is already the ${otherName} hotkey — pick a different combination.`,
+          message: msg,
         });
+        showToast('error', msg, 8000);
         return;
       }
 
@@ -336,10 +346,12 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     } catch (err) {
       console.error('Failed to auto-save setting:', err);
       if (key === 'quick_hotkey' || key === 'enlarged_hotkey') {
+        const msg = String(err);
         setHotkeyError({
           field: key === 'quick_hotkey' ? 'quick' : 'enlarged',
-          message: String(err),
+          message: msg,
         });
+        showToast('error', msg, 8000);
       }
       fetchSettings();
     }
@@ -365,15 +377,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [isImporting, setIsImporting] = useState<boolean>(false);
-  const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const showToast = (type: 'success' | 'error' | 'info', message: string, duration = 4000) => {
-    setToast({ type, message });
-    setTimeout(() => {
-      setToast((curr) => (curr?.message === message ? null : curr));
-    }, duration);
-  };
 
   // Mirror the backend shortcut manager's registration status: after every
   // settings save it swaps both global shortcuts atomically and emits the
@@ -404,10 +408,12 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       const other = target === 'quick' ? cur.enlarged_hotkey : cur.quick_hotkey;
       const otherName = target === 'quick' ? 'Enlarged Window' : 'Quick Overlay';
       if (other && normalizeCombo(combo) === normalizeCombo(other)) {
+        const msg = `“${combo}” is already the ${otherName} hotkey — pick a different combination.`;
         setHotkeyError({
           field: target,
-          message: `“${combo}” is already the ${otherName} hotkey — pick a different combination.`,
+          message: msg,
         });
+        showToast('error', msg, 8000);
         setRecording(null);
         setDraftCombo('');
         invoke('stop_recording_hotkey').catch(() => {});
