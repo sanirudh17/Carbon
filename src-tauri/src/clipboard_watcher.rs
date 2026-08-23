@@ -700,14 +700,58 @@ fn compute_item_hash(item: &ClipItem) -> u64 {
 
 pub fn is_rich_html(html: &str) -> bool {
     let lower = html.to_lowercase();
-    let tags = [
-        "<b", "<strong", "<i", "<em", "<u", "<s", "<strike", "<del",
-        "<h1", "<h2", "<h3", "<h4", "<h5", "<h6",
-        "<ul", "<ol", "<li", "<table", "<tr", "<td", "<th",
-        "<blockquote", "<hr", "<a ", "<font", "style=", "class=",
-        "<mark", "<sub", "<sup", "<p", "<div", "<span"
+
+    // 1. Semantic / rich formatting HTML tags.
+    let tag_patterns = [
+        r#"<b[\s>/]"#, r#"<strong[\s>/]"#, r#"<i[\s>/]"#, r#"<em[\s>/]"#, r#"<u[\s>/]"#,
+        r#"<s[\s>/]"#, r#"<strike[\s>/]"#, r#"<del[\s>/]"#, r#"<ins[\s>/]"#, r#"<mark[\s>/]"#,
+        r#"<sub[\s>/]"#, r#"<sup[\s>/]"#, r#"<small[\s>/]"#, r#"<big[\s>/]"#,
+        r#"<h1[\s>/]"#, r#"<h2[\s>/]"#, r#"<h3[\s>/]"#, r#"<h4[\s>/]"#, r#"<h5[\s>/]"#, r#"<h6[\s>/]"#,
+        r#"<ul[\s>/]"#, r#"<ol[\s>/]"#, r#"<li[\s>/]"#, r#"<dl[\s>/]"#, r#"<dt[\s>/]"#, r#"<dd[\s>/]"#,
+        r#"<table[\s>/]"#, r#"<tr[\s>/]"#, r#"<td[\s>/]"#, r#"<th[\s>/]"#, r#"<thead[\s>/]"#, r#"<tbody[\s>/]"#, r#"<tfoot[\s>/]"#,
+        r#"<blockquote[\s>/]"#, r#"<pre[\s>/]"#, r#"<code[\s>/]"#, r#"<kbd[\s>/]"#, r#"<q[\s>/]"#, r#"<cite[\s>/]"#,
+        r#"<img[\s>/]"#, r#"<svg[\s>/]"#, r#"<picture[\s>/]"#, r#"<hr[\s>/]"#, r#"<font[\s>/]"#,
     ];
-    tags.iter().any(|&tag| lower.contains(tag))
+
+    for pat in &tag_patterns {
+        if let Ok(re) = Regex::new(pat) {
+            if re.is_match(&lower) {
+                return true;
+            }
+        }
+    }
+
+    // 2. Links with an actual href attribute
+    if let Ok(re) = Regex::new(r#"<a\s+[^>]*href=["'][^"']+["']"#) {
+        if re.is_match(&lower) {
+            return true;
+        }
+    }
+
+    // 3. Meaningful rich CSS styles in style="..."
+    let style_patterns = [
+        r#"font-weight\s*:\s*(bold|[6-9]00)\b"#,
+        r#"font-style\s*:\s*(italic|oblique)\b"#,
+        r#"text-decoration\s*:\s*[^;"]*(underline|line-through)\b"#,
+        r#"background-color\s*:\s*(?!transparent|inherit|rgba\(0,\s*0,\s*0,\s*0\)|rgba\(255,\s*255,\s*255,\s*0\))[^\s;"]+"#,
+    ];
+
+    for pat in &style_patterns {
+        if let Ok(re) = Regex::new(pat) {
+            if re.is_match(&lower) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+pub fn is_rich_rtf(rtf: &str) -> bool {
+    rtf.contains("\\b ") || rtf.contains("\\b1") || rtf.contains("\\i ") || rtf.contains("\\i1")
+        || rtf.contains("\\ul ") || rtf.contains("\\ul1") || rtf.contains("\\strike")
+        || rtf.contains("\\highlight") || rtf.contains("\\cf1") || rtf.contains("\\cf2")
+        || rtf.contains("\\bullet") || rtf.contains("\\trowd") || rtf.contains("\\cell")
 }
 
 pub fn classify_text_content(
@@ -779,7 +823,7 @@ pub fn classify_text_content(
 
     // 4. Rich text: If genuine HTML or RTF was captured
     let has_rich_html = html.map_or(false, is_rich_html);
-    let has_rich_rtf = rtf.map_or(false, |r| r.contains("\\b") || r.contains("\\i") || r.contains("\\ul") || r.contains("\\par"));
+    let has_rich_rtf = rtf.map_or(false, is_rich_rtf);
 
     if has_rich_html || has_rich_rtf {
         return "rich_text".to_string();
@@ -1187,5 +1231,44 @@ mod classify_tests {
             classify_text_content("SELECT id, name FROM users WHERE active = 1;", None, None, Some("wt.exe")),
             "code"
         );
+    }
+
+    #[test]
+    fn browser_wrapped_plain_text_is_text_not_rich() {
+        let html = r#"Version:0.9
+StartHTML:0000000105
+EndHTML:0000000741
+StartFragment:0000000141
+EndFragment:0000000705
+<html>
+<body>
+<!--StartFragment--><span style="white-space: pre-wrap;">Okay, I need your help designing. I'm building Carbon, a modern Windows native clipboard and step-in manager.</span><!--EndFragment-->
+</body>
+</html>"#;
+        let text = "Okay, I need your help designing. I'm building Carbon, a modern Windows native clipboard and step-in manager.";
+        assert!(!is_rich_html(html));
+        assert_eq!(classify_text_content(text, Some(html), None, Some("Comet.exe")), "text");
+    }
+
+    #[test]
+    fn genuine_rich_html_is_rich_text() {
+        let html_bold = "<html><body><!--StartFragment--><b>Important:</b> check this out<!--EndFragment--></body></html>";
+        assert!(is_rich_html(html_bold));
+        assert_eq!(classify_text_content("Important: check this out", Some(html_bold), None, None), "rich_text");
+
+        let html_link = r#"<html><body><a href="https://example.com">Visit us</a></body></html>"#;
+        assert!(is_rich_html(html_link));
+        assert_eq!(classify_text_content("Visit us", Some(html_link), None, None), "rich_text");
+
+        let html_list = "<ul><li>First item</li><li>Second item</li></ul>";
+        assert!(is_rich_html(html_list));
+        assert_eq!(classify_text_content("First item\nSecond item", Some(html_list), None, None), "rich_text");
+    }
+
+    #[test]
+    fn plain_rtf_with_par_is_text() {
+        let rtf = r#"{\rtf1\ansi\ansicpg1252\deff0\nouicompat\deflang1033{\fonttbl{\f0\fnil\fcharset0 Calibri;}}\pard\sa200\sl276\slmult1\f0\fs22\lang9 Hello world\par}"#;
+        assert!(!is_rich_rtf(rtf));
+        assert_eq!(classify_text_content("Hello world", None, Some(rtf), None), "text");
     }
 }

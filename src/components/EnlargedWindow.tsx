@@ -9,6 +9,7 @@ import { getActionsForClip, getPasteActionsForClip, handleClipKeyDown, ClipActio
 import { SnippetsView } from './SnippetsView';
 import {
   SearchIcon,
+  BrandBadgeIcon,
   AllIcon,
   TextIcon,
   CodeIcon,
@@ -183,6 +184,12 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     sidebarRef.current?.classList.toggle('collapsed');
   }, []);
   const [editingContent, setEditingContent] = useState('');
+
+  // Keep editingContent in sync with selectedItem text_content so the edit pane
+  // never shows empty content when a valid text item is selected
+  useEffect(() => {
+    setEditingContent(selectedItem?.text_content || '');
+  }, [selectedItem?.id, selectedItem?.text_content]);
   const [zoom100, setZoom100] = useState(false);
   const [counts, setCounts] = useState<{ [key: string]: number }>({});
   const [snippetsCount, setSnippetsCount] = useState(0);
@@ -1324,7 +1331,9 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
         }}
       >
         <div className="brand">
-          <div className="brand-mark">C</div>
+          <div className="brand-mark brand-badge" title="Carbon">
+            <BrandBadgeIcon className="brand-badge-svg" />
+          </div>
           <span className="brand-name hide-when-collapsed">Carbon</span>
         </div>
 
@@ -1966,8 +1975,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
               </span>
               {selectedItem &&
                 (selectedItem.content_type === 'rich_text' ||
-                  Boolean(selectedItem.html_content) ||
-                  (selectedItem.text_content && isMarkdownContent(selectedItem.text_content))) && (
+                  (Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!))) && (
                 <div className="seg" style={{ marginRight: 4 }}>
                   <button
                     className={`seg-btn ${renderMode ? 'active' : ''}`}
@@ -2120,8 +2128,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   </div>
                 </div>
               ) : (selectedItem.content_type === 'rich_text' ||
-                  Boolean(selectedItem.html_content) ||
-                  (selectedItem.text_content && isMarkdownContent(selectedItem.text_content))) &&
+                  (Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!))) &&
                 renderMode ? (
                 /* Read-only RENDERED preview (Rich text & Markdown). Toggle to Raw to edit the source. */
                 <div className="preview-render">

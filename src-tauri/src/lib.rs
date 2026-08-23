@@ -7,6 +7,7 @@ mod ocr;
 mod paste;
 mod sensitive;
 mod settings;
+mod shortcuts;
 mod titles;
 
 use clipboard_watcher::ClipboardWatcher;
@@ -383,15 +384,28 @@ fn save_settings(
     app: AppHandle,
 ) -> Result<(), String> {
     let old_expansion = state.settings.get().snippet_expansion_enabled;
-    // Persist the user's choice first, then (re)register. If the chosen combo
-    // is claimed by another app, registration auto-falls back to a free combo
-    // and persists that, so the effective binding always survives restarts.
+    let old_hotkeys = {
+        let s = state.settings.get();
+        (s.quick_hotkey, s.enlarged_hotkey)
+    };
+    // Persist the user's choice first, then swap the global shortcuts.
     state.settings.update(new_settings)?;
 
-    use hotkey::register_global_hotkeys;
-    let current = state.settings.get();
+    let mut current = state.settings.get();
     state.db.trim_history(current.retention_days, current.max_entries).ok();
-    register_global_hotkeys(&app, &state.settings, &current.quick_hotkey, &current.enlarged_hotkey);
+
+    // Swappable hotkeys (Glint-style): on save, clear everything and
+    // re-apply strictly. If Windows rejects a combo, roll back to the
+    // previously active bindings and surface why — no silent fallbacks.
+    if let Err(e) = shortcuts::reapply(&app, true) {
+        let _ = state.settings.update_hotkeys(&old_hotkeys.0, &old_hotkeys.1);
+        current = state.settings.get();
+        let _ = shortcuts::reapply(&app, false);
+        let _ = app.emit("hotkey-error", &e);
+        let _ = app.emit("settings-updated", &current);
+        return Err(e);
+    }
+
     // Sync expansion hook with the (possibly) new enabled flag — settings already
     // persisted above, so just toggle the hook (no second settings write).
     if old_expansion != current.snippet_expansion_enabled {
@@ -401,6 +415,16 @@ fn save_settings(
     let _ = app.emit("expansion-status-changed", expansion::get_expansion_status());
     let _ = app.emit("clipboard-updated", ());
     Ok(())
+}
+
+#[tauri::command]
+fn start_recording_hotkey(target: String) {
+    hotkey::set_recording_target(Some(target));
+}
+
+#[tauri::command]
+fn stop_recording_hotkey() {
+    hotkey::set_recording_target(None);
 }
 
 #[tauri::command]
@@ -450,7 +474,22 @@ fn get_pending_arg_request() -> Option<expansion::ArgPromptRequest> {
 
 #[tauri::command]
 fn get_hotkey_status() -> Option<hotkey::HotkeyStatus> {
-    hotkey::get_hotkey_status()
+    shortcuts::get_hotkey_status()
+}
+
+/// Drop all global shortcuts temporarily — used by the settings UI while it is
+/// recording a new combo, so Carbon's own registered bindings don't swallow
+/// the keystrokes before the recorder ever sees them.
+#[tauri::command]
+fn suspend_global_shortcuts(app: AppHandle) {
+    shortcuts::unregister_all(&app);
+}
+
+/// Re-arm global shortcuts from current settings after a recording session
+/// ends. Tolerant: a combo owned elsewhere is flagged via hotkey-status.
+#[tauri::command]
+fn resume_global_shortcuts(app: AppHandle) -> Result<(), String> {
+    shortcuts::reapply(&app, false)
 }
 
 /// Remembers which tab ("clips" | "snippets") the Quick Overlay opens with.
@@ -959,6 +998,7 @@ fn paste_snippet_text(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             let app_handle = app.handle().clone();
 
@@ -981,7 +1021,9 @@ pub fn run() {
             );
 
             HistoryManager::start_cleanup_task(db_state.clone(), settings_state.clone());
-            HotkeyManager::start(app_handle.clone(), settings_state.clone());
+            // LL keyboard hook thread (paste queue). Hotkey registration itself
+            // happens below, once AppState is managed.
+            HotkeyManager::start(app_handle.clone());
 
             settings::set_autostart(settings_state.get().start_with_windows).ok();
 
@@ -997,6 +1039,11 @@ pub fn run() {
             // System-wide snippet expansion (Phase B) — hook is off by default
             // and only installed when the user explicitly enables it in Settings.
             expansion::init_expansion(app_handle.clone(), db_state.clone(), settings_state.clone());
+
+            // Global shortcuts (quick overlay + enlarged window) from settings.
+            // Tolerant at startup: a genuinely claimed combo is logged and the
+            // conflict is surfaced via the hotkey-status event.
+            shortcuts::register(&app_handle);
 
             // Build Tray Icon
             let show_i = MenuItem::with_id(app, "show", "Open Carbon", true, None::<&str>)?;
@@ -1091,6 +1138,10 @@ pub fn run() {
             submit_arg_prompt,
             get_pending_arg_request,
             get_hotkey_status,
+            suspend_global_shortcuts,
+            resume_global_shortcuts,
+            start_recording_hotkey,
+            stop_recording_hotkey,
             get_target_app_name,
             set_overlay_preview,
             set_overlay_default_tab,

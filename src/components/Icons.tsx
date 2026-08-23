@@ -1,5 +1,7 @@
 import React from 'react';
 import { ContentType } from '../types';
+import carbonBadgeDarkPng from '../assets/carbon-badge-dark.png';
+import carbonBadgeLightPng from '../assets/carbon-badge-light.png';
 
 export const SearchIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
@@ -433,3 +435,50 @@ export const SNIPPET_ICONS: SnippetIconsEntry[] = [
 export function snippetIconFor(key: string | null): React.FC<{ className?: string }> {
   return SNIPPET_ICONS.find((i) => i.key === (key || 'snippet'))?.icon ?? SnippetIcon;
 }
+
+// Carbon brand mark: a simplified clipboard glyph distilled from the full
+// layered-clipboard illustration — just the board and its latch, bold enough
+// to stay legible at the small sidebar-header size (~24px), where the full
+// illustration's gradients and fine text lines would turn to noise. Stroke
+// uses currentColor so the mark inherits the active accent theme via the
+// .brand-mark CSS color (var(--accent)) instead of a hardcoded hex.
+export const CarbonMarkIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M15.5 4H17a2.5 2.5 0 0 1 2.5 2.5v12A2.5 2.5 0 0 1 17 21H7a2.5 2.5 0 0 1-2.5-2.5v-12A2.5 2.5 0 0 1 7 4h1.5" />
+    <rect x="8.5" y="2" width="7" height="4.5" rx="1.4" />
+  </svg>
+);
+
+// Full-colour Carbon app badge — PNG at highest quality, not SVG. Two PNGs
+// ship: dark for dark theme, light for light theme. CSS shows exactly one
+// via html[data-theme], so the icon swaps automatically when the user
+// switches theme — no React state needed. PNGs are the original Glint
+// exports (1.2–1.3 MB) at native resolution for crisp rendering.
+export const BrandBadgeIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
+  <>
+    <img
+      src={carbonBadgeDarkPng}
+      className={`${className} carbon-badge-dark`}
+      alt="Carbon"
+      draggable={false}
+      decoding="sync"
+      style={{ width: '100%', height: '100%', objectFit: 'contain', imageRendering: 'auto' }}
+    />
+    <img
+      src={carbonBadgeLightPng}
+      className={`${className} carbon-badge-light`}
+      alt="Carbon"
+      draggable={false}
+      decoding="sync"
+      style={{ width: '100%', height: '100%', objectFit: 'contain', imageRendering: 'auto' }}
+    />
+  </>
+);
+
+export const AlertTriangleIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+    <line x1="12" y1="9" x2="12" y2="13" />
+    <line x1="12" y1="17" x2="12.01" y2="17" />
+  </svg>
+);

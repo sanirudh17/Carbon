@@ -2,13 +2,81 @@ import React, { useEffect, useState, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { AppSettings, DbStats } from '../types';
-import { ChevronLeftIcon, SpinnerIcon, CheckIcon } from './Icons';
+import { ChevronLeftIcon, SpinnerIcon, CheckIcon, AlertTriangleIcon } from './Icons';
 
 interface SettingsProps {
   onBack: () => void;
   onThemeToggle: () => void;
   currentTheme: string;
 }
+
+// Canonical form for comparing hotkey combos regardless of modifier order or
+// casing: "shift+ctrl+x" and "Ctrl+Shift+X" compare equal.
+const normalizeCombo = (combo: string): string => {
+  const parts = combo.split('+').map((p) => p.trim()).filter(Boolean);
+  if (parts.length <= 1) return parts.join('').toLowerCase();
+  const key = parts[parts.length - 1].toLowerCase();
+  const mods = parts.slice(0, -1).map((m) => m.toLowerCase()).sort();
+  return [...mods, key].join('+');
+};
+
+const DEFAULT_HOTKEYS = {
+  quick_hotkey: 'Ctrl+Shift+Z',
+  enlarged_hotkey: 'Ctrl+Alt+X',
+};
+
+const isDefaultHotkey = (field: 'quick_hotkey' | 'enlarged_hotkey', current: string | undefined): boolean => {
+  if (!current) return false;
+  return normalizeCombo(current) === normalizeCombo(DEFAULT_HOTKEYS[field]);
+};
+
+// Mirrors hotkey::HotkeyStatus on the Rust side.
+interface HotkeyStatusInfo {
+  overlay: string;
+  enlarged: string;
+  overlay_preferred: string;
+  enlarged_preferred: string;
+  overlay_conflict: boolean;
+  enlarged_conflict: boolean;
+}
+
+// Physical-key (e.code) → display token for non-alphanumeric keys.
+const CODE_KEY: Record<string, string> = {
+  Minus: '-', Equal: '=', Comma: ',', Period: '.', Slash: '/', Backslash: '\\',
+  Semicolon: ';', Quote: "'", BracketLeft: '[', BracketRight: ']', Backquote: '`',
+  Space: 'Space', Tab: 'Tab', Enter: 'Enter',
+  ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+};
+
+// Convert a KeyboardEvent into a Carbon combo string using e.code — the
+// PHYSICAL key — rather than e.key. With Ctrl+Alt held (AltGr on many
+// layouts) e.key can turn into a different character or symbol, which is why
+// Ctrl+Alt combos previously failed to record; e.code is layout-independent
+// and always identifies the key that was pressed. On Windows, Ctrl+Alt is
+// delivered as AltGr for keys that have an AltGr character on the active
+// layout (e.g. M→µ, N→ñ, I→í): the event reports ctrlKey=false/altKey=false
+// but AltGraph=true. We mirror Typr's proven fix and treat AltGraph as its
+// physical components — Ctrl+Alt — so every Ctrl+Alt+letter captures.
+const keyEventToCombo = (e: KeyboardEvent): string | null => {
+  const altGraph = (e as KeyboardEvent).getModifierState?.('AltGraph') ?? false;
+  const mods: string[] = [];
+  if (e.ctrlKey || altGraph) mods.push('Ctrl');
+  if (e.altKey || altGraph) mods.push('Alt');
+  if (e.shiftKey) mods.push('Shift');
+  if (e.metaKey) mods.push('Win');
+
+  const code = e.code;
+  let key: string | null = null;
+  if (/^Key[A-Z]$/.test(code)) key = code.slice(3);
+  else if (/^Digit[0-9]$/.test(code)) key = code.slice(5);
+  else if (/^Numpad[0-9]$/.test(code)) key = code.slice(6);
+  else if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) key = code;
+  else if (code in CODE_KEY) key = CODE_KEY[code];
+  if (!key || mods.length === 0) return null;
+
+  return [...mods, key].join('+');
+};
+
 
 const ACCENT_SWATCHES = [
   { name: 'Periwinkle', color: '#5B7CFA' },
@@ -21,7 +89,7 @@ const ACCENT_SWATCHES = [
 
 export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, currentTheme }) => {
   const [settings, setSettings] = useState<AppSettings>({
-    quick_hotkey: 'Ctrl+Shift+X',
+    quick_hotkey: 'Ctrl+Shift+Z',
     enlarged_hotkey: 'Ctrl+Alt+X',
     paste_plain_text: false,
     move_to_top_on_paste: true,
@@ -48,6 +116,8 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   const [savedMessage, setSavedMessage] = useState(false);
   const [recording, setRecording] = useState<'quick' | 'enlarged' | null>(null);
   const [draftCombo, setDraftCombo] = useState('');
+  const [hotkeyError, setHotkeyError] = useState<{ field: 'quick' | 'enlarged'; message: string } | null>(null);
+  const [hotkeyStatus, setHotkeyStatus] = useState<HotkeyStatusInfo | null>(null);
   const [expansionStatus, setExpansionStatus] = useState<'off' | 'not_yet_active' | 'active'>('off');
   const [showExpansionConsent, setShowExpansionConsent] = useState(false);
 
@@ -69,50 +139,113 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     };
   }, []);
 
+  const committedRef = useRef(false);
+  // Ref mirror of settings so Tauri event listeners (registered once) always
+  // see the latest hotkey values without re-subscribing on every keystroke,
+  // which would otherwise drop events mid-flight and lose conflict banners.
+  const settingsRef = useRef(settings);
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
+
+  const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const showToast = (type: 'success' | 'error' | 'info', message: string, duration = 4000) => {
+    setToast({ type, message });
+    setTimeout(() => {
+      setToast((curr) => (curr?.message === message ? null : curr));
+    }, duration);
+  };
+
   // Key recorder: while recording, capture the next non-modifier key press
-  // together with its modifiers and commit it as the new hotkey.
+  // together with its modifiers and commit it as the new hotkey. Both webview
+  // keydown events AND the low-level WH_KEYBOARD_LL hook are active so keystrokes
+  // are captured even if an external application (like AMD/NVIDIA) holds a hotkey.
   useEffect(() => {
     if (!recording) return;
+    committedRef.current = false;
+
+    invoke('suspend_global_shortcuts').catch(() => {});
+    invoke('start_recording_hotkey', { target: recording }).catch(() => {});
 
     const onKeyDown = (e: KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
 
-      const key = e.key;
-      if (key === 'Escape') {
+      if (e.key === 'Escape') {
+        committedRef.current = false;
+        invoke('stop_recording_hotkey').catch(() => {});
         setRecording(null);
         setDraftCombo('');
+        setHotkeyError(null);
         return;
       }
-      if (key === 'Backspace') {
+      if (e.key === 'Backspace' && !e.ctrlKey && !e.altKey && !e.metaKey) {
         setDraftCombo('');
+        setHotkeyError(null);
         return;
-      }
-      if (['Control', 'Shift', 'Alt', 'Meta'].includes(key)) {
-        return; // wait for the actual key
       }
 
+      const altGraph = (e as KeyboardEvent).getModifierState?.('AltGraph') ?? false;
       const mods: string[] = [];
-      if (e.ctrlKey) mods.push('Ctrl');
+      if (e.ctrlKey || altGraph) mods.push('Ctrl');
+      if (e.altKey || altGraph) mods.push('Alt');
       if (e.shiftKey) mods.push('Shift');
-      if (e.altKey) mods.push('Alt');
       if (e.metaKey) mods.push('Win');
 
-      const keyLabel = key === ' ' ? 'Space' : key.length === 1 ? key.toUpperCase() : key;
-      if (mods.length === 0) {
-        setDraftCombo(keyLabel); // show, but don't commit — needs a modifier
+      const combo = keyEventToCombo(e);
+      if (!combo) {
+        // Show live visual feedback while holding modifiers (e.g. "Ctrl+Alt+…")
+        if (mods.length > 0) {
+          setDraftCombo(mods.join('+') + '+…');
+          setHotkeyError(null);
+        }
         return;
       }
 
-      const combo = [...mods, keyLabel].join('+');
+      // Reject bare keys with an explicit reason instead of silently waiting.
+      const keyLabel = combo.split('+').pop() as string;
+      if (!e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey && !altGraph) {
+        setDraftCombo(keyLabel);
+        setHotkeyError({
+          field: recording,
+          message: `"${keyLabel}" needs at least one modifier (Ctrl/Alt/Shift/Win) — a bare key can't be a global hotkey.`,
+        });
+        return;
+      }
+
+      // Reject duplicates of Carbon's own other global hotkey — that conflict
+      // is internal, so Carbon catches it before even trying to register.
+      const other = recording === 'quick' ? settings.enlarged_hotkey : settings.quick_hotkey;
+      const otherName = recording === 'quick' ? 'Enlarged Window' : 'Quick Overlay';
+      if (other && normalizeCombo(combo) === normalizeCombo(other)) {
+        const msg = `“${combo}” is already the ${otherName} hotkey — pick a different combination.`;
+        setDraftCombo(combo);
+        setHotkeyError({
+          field: recording,
+          message: msg,
+        });
+        showToast('error', msg, 8000);
+        return;
+      }
+
+      committedRef.current = true;
+      invoke('stop_recording_hotkey').catch(() => {});
+      setHotkeyError(null);
       setRecording(null);
       setDraftCombo('');
       updateSetting(recording === 'quick' ? 'quick_hotkey' : 'enlarged_hotkey', combo);
     };
 
     window.addEventListener('keydown', onKeyDown, true);
-    return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [recording]);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+      invoke('stop_recording_hotkey').catch(() => {});
+      // Re-arm shortcuts ONLY if recording was canceled or toggled off without
+      // committing a new hotkey. When a combo was accepted, updateSetting ->
+      // save_settings re-arms shortcuts with the NEW binding atomically.
+      if (!committedRef.current) {
+        invoke('resume_global_shortcuts').catch(() => {});
+      }
+    };
+  }, [recording, settings]);
 
   const fetchSettings = async () => {
     try {
@@ -207,9 +340,28 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
     try {
       await invoke('save_settings', { newSettings: updated });
+      if (key === 'quick_hotkey' || key === 'enlarged_hotkey') {
+        setHotkeyError(null);
+      }
     } catch (err) {
       console.error('Failed to auto-save setting:', err);
+      if (key === 'quick_hotkey' || key === 'enlarged_hotkey') {
+        const msg = String(err);
+        setHotkeyError({
+          field: key === 'quick_hotkey' ? 'quick' : 'enlarged',
+          message: msg,
+        });
+        showToast('error', msg, 8000);
+      }
+      fetchSettings();
     }
+  };
+
+  const handleResetHotkey = async (field: 'quick_hotkey' | 'enlarged_hotkey') => {
+    setHotkeyError(null);
+    setRecording(null);
+    setDraftCombo('');
+    await updateSetting(field, DEFAULT_HOTKEYS[field]);
   };
 
   const handleClearHistory = async () => {
@@ -225,15 +377,78 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [isImporting, setIsImporting] = useState<boolean>(false);
-  const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const showToast = (type: 'success' | 'error' | 'info', message: string, duration = 4000) => {
-    setToast({ type, message });
-    setTimeout(() => {
-      setToast((curr) => (curr?.message === message ? null : curr));
-    }, duration);
-  };
+  // Mirror the backend shortcut manager's registration status: after every
+  // settings save it swaps both global shortcuts atomically and emits the
+  // result. A conflict flag means Windows refused the preferred combo because
+  // another app genuinely holds it — Carbon kept the previous binding, and we
+  // surface that clearly instead of pretending the rebind succeeded.
+  useEffect(() => {
+    invoke<HotkeyStatusInfo | null>('get_hotkey_status')
+      .then((s) => {
+        if (s) setHotkeyStatus(s);
+      })
+      .catch(() => {});
+    let unlistenStatus: (() => void) | undefined;
+    let unlistenError: (() => void) | undefined;
+    let unlistenRecorded: (() => void) | undefined;
+    let unlistenDraft: (() => void) | undefined;
+    let unlistenCancel: (() => void) | undefined;
+
+    listen<HotkeyStatusInfo>('hotkey-status', (e) => setHotkeyStatus(e.payload)).then((fn) => {
+      unlistenStatus = fn;
+    });
+    listen<string>('hotkey-error', (e) => showToast('error', e.payload, 8000)).then((fn) => {
+      unlistenError = fn;
+    });
+    listen<{ target: 'quick' | 'enlarged'; combo: string }>('hotkey-recorded', (e) => {
+      const { target, combo } = e.payload;
+      const cur = settingsRef.current;
+      const other = target === 'quick' ? cur.enlarged_hotkey : cur.quick_hotkey;
+      const otherName = target === 'quick' ? 'Enlarged Window' : 'Quick Overlay';
+      if (other && normalizeCombo(combo) === normalizeCombo(other)) {
+        const msg = `“${combo}” is already the ${otherName} hotkey — pick a different combination.`;
+        setHotkeyError({
+          field: target,
+          message: msg,
+        });
+        showToast('error', msg, 8000);
+        setRecording(null);
+        setDraftCombo('');
+        invoke('stop_recording_hotkey').catch(() => {});
+        invoke('resume_global_shortcuts').catch(() => {});
+        return;
+      }
+      committedRef.current = true;
+      invoke('stop_recording_hotkey').catch(() => {});
+      setHotkeyError(null);
+      setRecording(null);
+      setDraftCombo('');
+      updateSetting(target === 'quick' ? 'quick_hotkey' : 'enlarged_hotkey', combo);
+    }).then((fn) => {
+      unlistenRecorded = fn;
+    });
+    listen<{ draft: string }>('hotkey-draft-update', (e) => {
+      setDraftCombo(e.payload.draft);
+    }).then((fn) => {
+      unlistenDraft = fn;
+    });
+    listen('hotkey-record-canceled', () => {
+      setRecording(null);
+      setDraftCombo('');
+    }).then((fn) => {
+      unlistenCancel = fn;
+    });
+
+    return () => {
+      unlistenStatus?.();
+      unlistenError?.();
+      unlistenRecorded?.();
+      unlistenDraft?.();
+      unlistenCancel?.();
+    };
+  }, []);
 
   const handleExportBackup = async () => {
     if (isExporting) return;
@@ -300,6 +515,23 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
         {/* Shortcuts */}
         <section>
           <div className="sec-title">Shortcuts</div>
+          <div className="hotkey-guide">
+            <div className="hotkey-guide-title">How to change a shortcut</div>
+            <ol>
+              <li>Click a key chip, then press the key combination you want.</li>
+              <li>
+                Every shortcut needs <kbd>Ctrl</kbd>, <kbd>Alt</kbd>, or <kbd>Win</kbd> plus one more key (
+                <kbd>Shift</kbd> is optional). Letters, numbers and F-keys all work.
+              </li>
+              <li>
+                Press <kbd>Esc</kbd> to cancel, or <kbd>Backspace</kbd> to start over.
+              </li>
+            </ol>
+            <p>
+              Changes apply instantly and survive restarts. If another app already owns the combo you picked, Carbon
+              keeps your previous shortcut and tells you right here.
+            </p>
+          </div>
           <div className="set-row">
             <div className="set-label">
               Quick paste hotkey
@@ -311,12 +543,40 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                 onClick={() => {
                   setRecording(recording === 'quick' ? null : 'quick');
                   setDraftCombo('');
+                  setHotkeyError(null);
                 }}
               >
                 {recording === 'quick' ? draftCombo || 'Press keys…' : settings.quick_hotkey}
               </button>
+              {recording === 'quick' ? (
+                <button
+                  type="button"
+                  className="btn subtle small"
+                  onClick={() => {
+                    setRecording(null);
+                    setDraftCombo('');
+                    setHotkeyError(null);
+                  }}
+                >
+                  Cancel
+                </button>
+              ) : !isDefaultHotkey('quick_hotkey', settings.quick_hotkey) ? (
+                <button
+                  type="button"
+                  className="btn subtle small"
+                  title="Reset to default (Ctrl+Shift+Z)"
+                  onClick={() => handleResetHotkey('quick_hotkey')}
+                >
+                  Reset
+                </button>
+              ) : null}
             </div>
           </div>
+          {hotkeyError?.field === 'quick' && (
+            <div className="hotkey-error" role="alert">
+              <AlertTriangleIcon /> {hotkeyError.message}
+            </div>
+          )}
           <div className="set-row">
             <div className="set-label">
               Enlarged window hotkey
@@ -328,12 +588,57 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                 onClick={() => {
                   setRecording(recording === 'enlarged' ? null : 'enlarged');
                   setDraftCombo('');
+                  setHotkeyError(null);
                 }}
               >
                 {recording === 'enlarged' ? draftCombo || 'Press keys…' : settings.enlarged_hotkey}
               </button>
+              {recording === 'enlarged' ? (
+                <button
+                  type="button"
+                  className="btn subtle small"
+                  onClick={() => {
+                    setRecording(null);
+                    setDraftCombo('');
+                    setHotkeyError(null);
+                  }}
+                >
+                  Cancel
+                </button>
+              ) : !isDefaultHotkey('enlarged_hotkey', settings.enlarged_hotkey) ? (
+                <button
+                  type="button"
+                  className="btn subtle small"
+                  title="Reset to default (Ctrl+Alt+X)"
+                  onClick={() => handleResetHotkey('enlarged_hotkey')}
+                >
+                  Reset
+                </button>
+              ) : null}
             </div>
           </div>
+          {hotkeyError?.field === 'enlarged' && (
+            <div className="hotkey-error" role="alert">
+              <AlertTriangleIcon /> {hotkeyError.message}
+            </div>
+          )}
+          {(hotkeyStatus?.overlay_conflict || hotkeyStatus?.enlarged_conflict) && (
+            <div className="hotkey-conflict-note" role="alert">
+              <div className="hotkey-conflict-header">
+                <AlertTriangleIcon /> Shortcut Conflict Detected
+              </div>
+              {hotkeyStatus.overlay_conflict && (
+                <div className="hotkey-conflict-item">
+                  Windows could not register <strong>“{hotkeyStatus.overlay_preferred}”</strong> for Quick Overlay because another app owns it. Carbon kept <strong>“{hotkeyStatus.overlay}”</strong>.
+                </div>
+              )}
+              {hotkeyStatus.enlarged_conflict && (
+                <div className="hotkey-conflict-item">
+                  Windows could not register <strong>“{hotkeyStatus.enlarged_preferred}”</strong> for Enlarged Window because another app owns it. Carbon kept <strong>“{hotkeyStatus.enlarged}”</strong>.
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         {/* Behavior */}

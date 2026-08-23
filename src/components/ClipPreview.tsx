@@ -295,7 +295,7 @@ export function isMarkdownContent(text: string): boolean {
     // Horizontal rules (---, ***, ___)
     /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/m.test(t) ||
     // Bold, Italic, Strikethrough, Highlight (***, **, *, ___, __, _, ~~, ==)
-    /(\*{1,3}|_{1,3}|~~|==)[\s\S]+?\1/.test(t) ||
+    /(?:^|\s)(\*{1,3}|_{1,3}|~~|==)[^\s\n][\s\S]*?[^\s\n]\1(?:\s|$|[.,!?;:])/m.test(t) ||
     // Markdown links [text](url) or images ![alt](url) or reference [text][ref]
     /!?\[[^\]]*\]\([^)]+\)/.test(t) ||
     /\[[^\]]+\]:\s*\S+/.test(t) ||
@@ -668,6 +668,14 @@ export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ 
           );
         }
       }
+    }
+
+    if (!text.trim()) {
+      return (
+        <div className="preview-text-empty" style={{ opacity: 0.45, fontStyle: 'italic', padding: 8 }}>
+          (No text content)
+        </div>
+      );
     }
 
     // Plain text / code / link / email (and raw fallback)

@@ -704,13 +704,49 @@ input, textarea, select, button {
   height: 24px;
   border-radius: 6px;
   flex-shrink: 0;
-  font-size: 13px;
   display: grid;
   place-items: center;
   background: color-mix(in srgb, var(--accent) 22%, transparent);
-  color: var(--accent-text);
+  /* The mark is a live brand glyph, not fixed lettering: it picks up whichever
+     accent theme is active, same as the other themed elements in the sidebar. */
+  color: var(--accent);
   border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
-  font-weight: 700;
+}
+
+/* Badge variant: the full-colour layered-clipboard illustration fills the whole
+   mark, so the accent tint behind it would only peek at the corners. */
+.brand .brand-mark.brand-badge {
+  background: transparent;
+  border: none;
+  overflow: hidden;
+}
+
+.brand .brand-mark.brand-badge .brand-badge-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Theme-aware badge: both PNGs ship (dark+light); exactly one
+   is displayed based on the html[data-theme] attribute App.tsx maintains.
+   Specificity matches .brand .brand-mark.brand-badge .brand-badge-svg so
+   the theme toggle correctly overrides the default block display. */
+.brand .brand-mark.brand-badge .carbon-badge-light {
+  display: none;
+}
+
+[data-theme='light'] .brand .brand-mark.brand-badge .carbon-badge-dark {
+  display: none;
+}
+
+[data-theme='light'] .brand .brand-mark.brand-badge .carbon-badge-light {
+  display: block;
+}
+
+.brand .brand-mark svg {
+  width: 15px;
+  height: 15px;
+  display: block;
 }
 
 .brand-name {
@@ -1201,6 +1237,7 @@ section:last-child {
 
 .sec-title {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   font-size: 10px;
@@ -1229,6 +1266,77 @@ section:last-child {
   color: var(--text-3);
   margin-top: 1px;
   line-height: 1.35;
+}
+
+/* Inline rejection reason shown while recording a new global hotkey. */
+.hotkey-error {
+  font-size: 10.5px;
+  color: var(--danger);
+  line-height: 1.45;
+  padding: 0 12px 8px;
+}
+
+/* Persistent notice when Windows refused a configured hotkey and Carbon
+   fell back to a free combo (registration conflict with another app). */
+.hotkey-conflict-note {
+  margin: 2px 12px 4px;
+  padding: 7px 9px;
+  border-radius: var(--r-btn);
+  background: color-mix(in srgb, #F59E0B 12%, transparent);
+  border: 1px solid color-mix(in srgb, #F59E0B 35%, transparent);
+  color: color-mix(in srgb, #F59E0B 75%, var(--text));
+  font-size: 10.5px;
+  line-height: 1.45;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* Hotkey setup guide — a single static instruction panel under the Shortcuts
+   section title (Glint-style). Always visible, inline in the flow, so it
+   never floats over content or gets clipped by container edges. */
+.hotkey-guide {
+  margin: 2px 0 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--text-2);
+}
+
+.hotkey-guide-title {
+  font-weight: 650;
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.hotkey-guide ol {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hotkey-guide p {
+  margin: 8px 0 0;
+  color: var(--text-3);
+}
+
+.hotkey-guide kbd {
+  display: inline-block;
+  padding: 0 6px;
+  margin: 0 2px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--elev, #1c1f27);
+  font-family: inherit;
+  font-size: 10.5px;
+  line-height: 1.7;
+  color: var(--text);
 }
 
 .set-control {
@@ -1391,9 +1499,69 @@ section:last-child {
 
 .hotkey-control {
   display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.hotkey-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger, #ef4444) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger, #ef4444) 30%, transparent);
+  color: var(--danger, #ef4444);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.hotkey-error .icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.hotkey-conflict-note {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #f59e0b 10%, transparent);
+  border: 1px solid color-mix(in srgb, #f59e0b 35%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  gap: 5px;
+  gap: 6px;
+}
+
+.hotkey-conflict-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: #f59e0b;
+  font-size: 12px;
+}
+
+.hotkey-conflict-header .icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.hotkey-conflict-item {
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.hotkey-conflict-item strong {
+  color: var(--text);
 }
 
 .hotkey-status {
