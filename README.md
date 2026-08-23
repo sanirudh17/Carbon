@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>A fast, local-first clipboard manager for Windows.</strong><br/>
-  Overlay, searchable history, snippets & OCR — everything stays on your machine.
+  Overlay, searchable history, collections, snippets & OCR — everything stays on your machine.
 </p>
 
 <p align="center">
