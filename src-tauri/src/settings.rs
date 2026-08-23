@@ -28,8 +28,16 @@ fn default_merge_window() -> u64 {
     2500
 }
 
+fn deserialize_clip_merge_window<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = u64::deserialize(deserializer)?;
+    Ok(v.clamp(500, 10000))
+}
+
 fn default_expansion_enabled() -> bool {
-    true
+    false
 }
 
 fn default_show_snippets() -> bool {
@@ -42,7 +50,9 @@ pub struct AppSettings {
     pub enlarged_hotkey: String,
     pub paste_plain_text: bool,
     pub move_to_top_on_paste: bool,
+    #[serde(default = "default_true")]
     pub keep_window_warm: bool,
+    #[serde(default = "default_true")]
     pub start_with_windows: bool,
     pub retention_days: u32,
     pub max_entries: u32,
@@ -63,7 +73,7 @@ pub struct AppSettings {
     #[serde(default = "default_false")]
     pub clip_merge_enabled: bool,
     /// Time window in milliseconds to trigger ClipMerge (e.g. 2500ms).
-    #[serde(default = "default_merge_window")]
+    #[serde(default = "default_merge_window", deserialize_with = "deserialize_clip_merge_window")]
     pub clip_merge_window_ms: u64,
     /// Strip URL tracking parameters (utm_source, fbclid, etc.) at capture time.
     #[serde(default = "default_false")]
@@ -89,6 +99,18 @@ fn default_false() -> bool {
 
 fn default_overlay_tab() -> String {
     "clips".to_string()
+}
+
+fn sanitize_settings(s: &mut AppSettings) {
+    s.overlay_default_tab = s.overlay_default_tab.trim().to_lowercase();
+    if s.overlay_default_tab != "snippets" {
+        s.overlay_default_tab = "clips".to_string();
+    }
+    s.clip_merge_window_ms = s.clip_merge_window_ms.clamp(500, 10000);
+    s.quick_hotkey = s.quick_hotkey.trim().to_string();
+    s.enlarged_hotkey = s.enlarged_hotkey.trim().to_string();
+    s.accent_color = s.accent_color.trim().to_string();
+    s.theme = s.theme.trim().to_string();
 }
 
 impl Default for AppSettings {
@@ -121,7 +143,7 @@ impl Default for AppSettings {
             clip_merge_window_ms: 2500,
             strip_tracking_params: false,
             capture_rules: Vec::new(),
-            snippet_expansion_enabled: true,
+            snippet_expansion_enabled: false,
             show_snippets: true,
         }
     }
@@ -138,6 +160,10 @@ impl SettingsState {
             fs::read_to_string(&file_path)
                 .ok()
                 .and_then(|content| serde_json::from_str::<AppSettings>(&content).ok())
+                .map(|mut s| {
+                    sanitize_settings(&mut s);
+                    s
+                })
                 .unwrap_or_default()
         } else {
             AppSettings::default()
@@ -156,7 +182,8 @@ impl SettingsState {
         self.settings.lock().unwrap().clone()
     }
 
-    pub fn update(&self, new_settings: AppSettings) -> Result<(), String> {
+    pub fn update(&self, mut new_settings: AppSettings) -> Result<(), String> {
+        sanitize_settings(&mut new_settings);
         let old_start_with_win = self.settings.lock().unwrap().start_with_windows;
         
         {

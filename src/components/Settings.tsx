@@ -140,11 +140,18 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   }, []);
 
   const committedRef = useRef(false);
+  const clipMergeDebounceRef = useRef<number | null>(null);
+  const clipMergePendingRef = useRef<number | null>(null);
   // Ref mirror of settings so Tauri event listeners (registered once) always
   // see the latest hotkey values without re-subscribing on every keystroke,
   // which would otherwise drop events mid-flight and lose conflict banners.
   const settingsRef = useRef(settings);
   useEffect(() => { settingsRef.current = settings; }, [settings]);
+  useEffect(() => {
+    return () => {
+      if (clipMergeDebounceRef.current) window.clearTimeout(clipMergeDebounceRef.current);
+    };
+  }, []);
 
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const showToast = (type: 'success' | 'error' | 'info', message: string, duration = 4000) => {
@@ -291,18 +298,24 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       if (st) setExpansionStatus(st as 'off' | 'not_yet_active' | 'active');
     } catch (err) {
       console.error('Failed to disable expansion:', err);
+      // Revert optimistic UI on failure
+      fetchSettings();
+      fetchExpansionStatus();
     }
   };
 
   const confirmEnableExpansion = async () => {
     setShowExpansionConsent(false);
     setSettings((prev) => ({ ...prev, snippet_expansion_enabled: true }));
-    setExpansionStatus('active');
+    setExpansionStatus('not_yet_active');
     try {
       const st = await invoke<string>('set_snippet_expansion_enabled', { enabled: true });
       if (st) setExpansionStatus(st as 'off' | 'not_yet_active' | 'active');
     } catch (err) {
       console.error('Failed to enable expansion:', err);
+      setSettings((prev) => ({ ...prev, snippet_expansion_enabled: false }));
+      setExpansionStatus('off');
+      showToast('error', String(err));
     }
   };
 
@@ -345,13 +358,15 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       }
     } catch (err) {
       console.error('Failed to auto-save setting:', err);
+      const msg = String(err);
       if (key === 'quick_hotkey' || key === 'enlarged_hotkey') {
-        const msg = String(err);
         setHotkeyError({
           field: key === 'quick_hotkey' ? 'quick' : 'enlarged',
           message: msg,
         });
         showToast('error', msg, 8000);
+      } else {
+        showToast('error', msg, 6000);
       }
       fetchSettings();
     }
@@ -655,7 +670,11 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                   className={`seg-btn ${settings.overlay_default_tab !== 'snippets' ? 'active' : ''}`}
                   onClick={() => {
                     setSettings((prev) => ({ ...prev, overlay_default_tab: 'clips' }));
-                    invoke('set_overlay_default_tab', { tab: 'clips' }).catch(console.error);
+                    invoke('set_overlay_default_tab', { tab: 'clips' }).catch((err) => {
+                      console.error(err);
+                      showToast('error', String(err));
+                      fetchSettings();
+                    });
                   }}
                 >
                   Clips
@@ -664,7 +683,11 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                   className={`seg-btn ${settings.overlay_default_tab === 'snippets' ? 'active' : ''}`}
                   onClick={() => {
                     setSettings((prev) => ({ ...prev, overlay_default_tab: 'snippets' }));
-                    invoke('set_overlay_default_tab', { tab: 'snippets' }).catch(console.error);
+                    invoke('set_overlay_default_tab', { tab: 'snippets' }).catch((err) => {
+                      console.error(err);
+                      showToast('error', String(err));
+                      fetchSettings();
+                    });
                   }}
                 >
                   Snippets
@@ -705,6 +728,36 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
           <div className="set-row">
             <div className="set-label">
+              Paste as plain text
+              <div className="set-hint">Strip formatting by default when pasting (can still override per-paste)</div>
+            </div>
+            <div className="set-control">
+              <button
+                className={`toggle ${settings.paste_plain_text ? 'on' : ''}`}
+                onClick={() => updateSetting('paste_plain_text', !settings.paste_plain_text)}
+              >
+                <span className="knob" />
+              </button>
+            </div>
+          </div>
+
+          <div className="set-row">
+            <div className="set-label">
+              Move to top on paste
+              <div className="set-hint">Bump the pasted clip to the top of history</div>
+            </div>
+            <div className="set-control">
+              <button
+                className={`toggle ${settings.move_to_top_on_paste ? 'on' : ''}`}
+                onClick={() => updateSetting('move_to_top_on_paste', !settings.move_to_top_on_paste)}
+              >
+                <span className="knob" />
+              </button>
+            </div>
+          </div>
+
+          <div className="set-row">
+            <div className="set-label">
               ClipMerge (append on repeat copy)
               <div className="set-hint">
                 Copying text repeatedly within a short window appends to the top clip rather than creating separate entries.
@@ -733,8 +786,45 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                   min={500}
                   max={10000}
                   step={250}
-                  value={settings.clip_merge_window_ms || 2500}
-                  onChange={(e) => updateSetting('clip_merge_window_ms', Math.max(500, parseInt(e.target.value) || 2500))}
+                  value={settings.clip_merge_window_ms ?? 2500}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    const trimmed = raw.trim();
+                    if (trimmed === '') {
+                      setSettings((prev) => ({ ...prev, clip_merge_window_ms: 2500 }));
+                      clipMergePendingRef.current = 2500;
+                      if (clipMergeDebounceRef.current) window.clearTimeout(clipMergeDebounceRef.current);
+                      clipMergeDebounceRef.current = window.setTimeout(() => {
+                        const pending = clipMergePendingRef.current;
+                        clipMergePendingRef.current = null;
+                        clipMergeDebounceRef.current = null;
+                        if (pending !== null) updateSetting('clip_merge_window_ms', pending);
+                      }, 400) as unknown as number;
+                      return;
+                    }
+                    const parsed = Number.parseInt(trimmed, 10);
+                    if (Number.isNaN(parsed)) return;
+                    // Show raw parsed value immediately for smooth typing;
+                    // backend save is clamped via debounce.
+                    setSettings((prev) => ({ ...prev, clip_merge_window_ms: parsed }));
+                    clipMergePendingRef.current = Math.min(10000, Math.max(500, parsed));
+                    if (clipMergeDebounceRef.current) window.clearTimeout(clipMergeDebounceRef.current);
+                    clipMergeDebounceRef.current = window.setTimeout(() => {
+                      const pending = clipMergePendingRef.current;
+                      clipMergePendingRef.current = null;
+                      clipMergeDebounceRef.current = null;
+                      if (pending !== null) updateSetting('clip_merge_window_ms', pending);
+                    }, 400) as unknown as number;
+                  }}
+                  onBlur={() => {
+                    if (clipMergeDebounceRef.current) {
+                      window.clearTimeout(clipMergeDebounceRef.current);
+                      clipMergeDebounceRef.current = null;
+                      const pending = clipMergePendingRef.current;
+                      clipMergePendingRef.current = null;
+                      if (pending !== null) updateSetting('clip_merge_window_ms', pending);
+                    }
+                  }}
                 />
                 <span className="unit">ms</span>
               </div>
@@ -811,8 +901,9 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                 className="btn subtle"
                 style={{ fontSize: 11, padding: '4px 10px', height: 26 }}
                 onClick={() => {
+                  const uid = (globalThis.crypto as Crypto | undefined)?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
                   const newRule = {
-                    id: String(Date.now()),
+                    id: uid,
                     name: `Rule ${(settings.capture_rules || []).length + 1}`,
                     pattern: '',
                     replacement: '',
@@ -852,8 +943,18 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                             type="checkbox"
                             checked={rule.is_regex}
                             onChange={(e) => {
+                              const checked = e.target.checked;
+                              if (checked && rule.pattern) {
+                                try {
+                                  // Validate Rust regex is close to JS; use JS as quick check
+                                  new RegExp(rule.pattern);
+                                } catch (err) {
+                                  showToast('error', `Invalid regex in "${rule.name}": ${String(err).replace(/^.*?:\s*/, '')}`);
+                                  return;
+                                }
+                              }
                               const updated = [...settings.capture_rules];
-                              updated[idx] = { ...updated[idx], is_regex: e.target.checked };
+                              updated[idx] = { ...updated[idx], is_regex: checked };
                               updateSetting('capture_rules', updated);
                             }}
                           />
@@ -894,10 +995,22 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                           placeholder={rule.is_regex ? 'e.g. \\s+$' : 'e.g. old_prefix_'}
                           value={rule.pattern}
                           onChange={(e) => {
+                            const newVal = e.target.value;
+                            if (rule.is_regex && newVal) {
+                              try {
+                                new RegExp(newVal);
+                              } catch (err) {
+                                showToast('error', `Invalid regex pattern: ${String(err).replace(/^.*?:\s*/, '')}`);
+                              }
+                            }
                             const updated = [...settings.capture_rules];
-                            updated[idx] = { ...updated[idx], pattern: e.target.value };
+                            updated[idx] = { ...updated[idx], pattern: newVal };
                             updateSetting('capture_rules', updated);
                           }}
+                          style={(() => {
+                            if (!rule.is_regex || !rule.pattern) return {};
+                            try { new RegExp(rule.pattern); return {}; } catch { return { borderColor: '#e53e3e', background: 'rgba(229,62,62,0.06)' } as React.CSSProperties; }
+                          })()}
                         />
                       </div>
                       <div className="capture-rule-field">
@@ -955,8 +1068,13 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               <input
                 className="num"
                 type="number"
+                min={0}
                 value={settings.retention_days}
-                onChange={(e) => updateSetting('retention_days', parseInt(e.target.value) || 0)}
+                onChange={(e) => {
+                  const parsed = parseInt(e.target.value, 10);
+                  const v = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
+                  updateSetting('retention_days', v);
+                }}
               />
               <span className="unit">days</span>
             </div>
@@ -971,8 +1089,13 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               <input
                 className="num"
                 type="number"
+                min={0}
                 value={settings.max_entries}
-                onChange={(e) => updateSetting('max_entries', parseInt(e.target.value) || 0)}
+                onChange={(e) => {
+                  const parsed = parseInt(e.target.value, 10);
+                  const v = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
+                  updateSetting('max_entries', v);
+                }}
               />
             </div>
           </div>
@@ -980,14 +1103,19 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="set-row">
             <div className="set-label">
               Image size limit
-              <div className="set-hint">Copies larger than this are skipped</div>
+              <div className="set-hint">Copies larger than this are skipped (0 = unlimited)</div>
             </div>
             <div className="set-control">
               <input
                 className="num"
                 type="number"
+                min={0}
                 value={settings.image_size_limit_mb}
-                onChange={(e) => updateSetting('image_size_limit_mb', parseInt(e.target.value) || 1)}
+                onChange={(e) => {
+                  const parsed = parseInt(e.target.value, 10);
+                  const v = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
+                  updateSetting('image_size_limit_mb', v);
+                }}
               />
               <span className="unit">MB</span>
             </div>
@@ -1081,7 +1209,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               Accent theme
               <div className="set-hint">Currently active: {currentSwatchName}</div>
             </div>
-            <div className="set-control">
+            <div className="set-control" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
               <div className="accents">
                 {ACCENT_SWATCHES.map((swatch) => (
                   <button
@@ -1093,6 +1221,16 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                   />
                 ))}
               </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--text-2)', cursor: 'pointer' }}>
+                Custom
+                <input
+                  type="color"
+                  value={settings.accent_color}
+                  onChange={(e) => updateSetting('accent_color', e.target.value)}
+                  style={{ width: 28, height: 28, padding: 0, border: '1px solid var(--line)', borderRadius: 6, cursor: 'pointer', background: 'transparent' }}
+                  title="Pick custom accent color"
+                />
+              </label>
             </div>
           </div>
 

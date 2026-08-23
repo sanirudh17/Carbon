@@ -1711,6 +1711,21 @@ impl DbState {
     pub fn clear_unpinned(&self) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
 
+        // Collect image paths of unpinned entries so we can delete orphaned PNGs from media dir.
+        let image_paths: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT image_path FROM entries WHERE is_pinned = 0 AND image_path IS NOT NULL")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+
+        for p in image_paths {
+            let _ = fs::remove_file(p);
+        }
+
         conn.execute("DELETE FROM entries WHERE is_pinned = 0", [])
             .map_err(|e| e.to_string())?;
 

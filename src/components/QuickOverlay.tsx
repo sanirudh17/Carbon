@@ -647,11 +647,18 @@ export const QuickOverlay: React.FC = () => {
       loadTargetApp();
       fetchLatest();
       fetchSnippets();
-      // Restore the previous view: the active tab and the preview state
-      // stay exactly as the user left them — reopening never resets back
-      // to the default tab. The Rust-side overlay-data / overlay-snippets
-      // pushes keep both lists instant. Just focus the search bar.
-      focusSearchInput();
+      // Always open on the user's chosen default tab (Behavior -> "Overlay opens on")
+      // so the overlay reliably shows the expected first tab on every summon.
+      invoke<AppSettings>('get_settings')
+        .then((s) => {
+          if (s && typeof s.overlay_default_tab === 'string') {
+            applyOverlaySettings(s);
+          }
+          focusSearchInput();
+        })
+        .catch(() => {
+          focusSearchInput();
+        });
     });
 
     const unlistenSettings = safeListen<AppSettings>('settings-updated', (e) => {

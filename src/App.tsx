@@ -79,7 +79,7 @@ export function App() {
     };
   }, []);
 
-  const toggleTheme = () => {
+  const toggleTheme = async () => {
     const nextTheme = theme === 'dark' ? 'light' : 'dark';
     setTheme(nextTheme);
     if (nextTheme === 'light') {
@@ -87,7 +87,12 @@ export function App() {
     } else {
       document.documentElement.removeAttribute('data-theme');
     }
-    invoke('save_settings', { newSettings: { theme: nextTheme } }).catch(console.error);
+    try {
+      const current = await invoke<Record<string, unknown>>('get_settings');
+      await invoke('save_settings', { newSettings: { ...current, theme: nextTheme } });
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   // 1. Overlay Window View

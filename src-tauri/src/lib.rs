@@ -189,12 +189,19 @@ fn queue_paste_next(
             state.db.bump_entry(&target_id).ok();
         }
 
+        let keep_warm = settings.keep_window_warm;
         if window.label() == "overlay" {
             if let Some(win) = app_handle.get_webview_window("overlay") {
-                win.hide().ok();
+                if keep_warm {
+                    win.hide().ok();
+                } else {
+                    win.close().ok();
+                }
             }
-        } else {
+        } else if keep_warm {
             window.hide().ok();
+        } else {
+            window.close().ok();
         }
 
         paste::paste_item(&item, transform)?;
@@ -272,14 +279,23 @@ fn paste_clip(
 
         // Dismiss whichever surface initiated the paste BEFORE triggering paste_item,
         // so the OS can smoothly transition foreground focus to the target window.
+        let keep_warm = settings.keep_window_warm;
         if window.label() == "overlay" {
             if let Some(win) = app_handle.get_webview_window("overlay") {
-                let hide_res = win.hide();
-                paste::log_diag(&format!("[PASTE_CLIP] overlay win.hide() returned {:?}", hide_res));
+                if keep_warm {
+                    let hide_res = win.hide();
+                    paste::log_diag(&format!("[PASTE_CLIP] overlay win.hide() returned {:?}", hide_res));
+                } else {
+                    let close_res = win.close();
+                    paste::log_diag(&format!("[PASTE_CLIP] overlay win.close() (cold) -> {:?}", close_res));
+                }
             }
-        } else {
+        } else if keep_warm {
             let hide_res = window.hide();
             paste::log_diag(&format!("[PASTE_CLIP] main win.hide() returned {:?}", hide_res));
+        } else {
+            let close_res = window.close();
+            paste::log_diag(&format!("[PASTE_CLIP] main win.close() (cold) -> {:?}", close_res));
         }
 
         paste::log_diag("[PASTE_CLIP] Calling paste_item...");
@@ -368,8 +384,10 @@ fn import_backup_json(
 }
 
 #[tauri::command]
-fn clear_history(state: State<'_, AppState>) -> Result<(), String> {
-    state.db.clear_unpinned()
+fn clear_history(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    state.db.clear_unpinned()?;
+    let _ = app.emit("clipboard-updated", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -383,7 +401,17 @@ fn save_settings(
     new_settings: AppSettings,
     app: AppHandle,
 ) -> Result<(), String> {
+    // Validate capture rules up front so the user gets immediate feedback
+    // instead of a silently-broken rule that never matches at capture time.
+    for rule in &new_settings.capture_rules {
+        if rule.is_regex && rule.enabled && !rule.pattern.is_empty() {
+            if let Err(e) = regex::Regex::new(&rule.pattern) {
+                return Err(format!("Invalid regex in rule \"{}\": {}", rule.name, e));
+            }
+        }
+    }
     let old_expansion = state.settings.get().snippet_expansion_enabled;
+    let old_keep_warm = state.settings.get().keep_window_warm;
     let old_hotkeys = {
         let s = state.settings.get();
         (s.quick_hotkey, s.enlarged_hotkey)
@@ -393,6 +421,18 @@ fn save_settings(
 
     let mut current = state.settings.get();
     state.db.trim_history(current.retention_days, current.max_entries).ok();
+
+    // keep_window_warm transition: warm -> cold frees hidden windows immediately.
+    if old_keep_warm != current.keep_window_warm && !current.keep_window_warm {
+        if let Some(win) = app.get_webview_window("overlay") {
+            if !win.is_visible().unwrap_or(true) {
+                let _ = win.close();
+                crate::paste::log_diag(
+                    "[SAVE_SETTINGS] keep_window_warm=false, closed hidden overlay to free memory",
+                );
+            }
+        }
+    }
 
     // Swappable hotkeys (Glint-style): on save, clear everything and
     // re-apply strictly. If Windows rejects a combo, roll back to the
@@ -439,10 +479,11 @@ fn set_snippet_expansion_enabled(
     enabled: bool,
 ) -> Result<expansion::ExpansionStatus, String> {
     // Single toggle is the consent — explain in Settings UI before calling.
+    // Persist once, then toggle the hook directly (no second settings write).
     let mut s = state.settings.get();
     s.snippet_expansion_enabled = enabled;
     state.settings.update(s)?;
-    expansion::set_expansion_enabled(enabled)?;
+    expansion::set_hook_enabled(enabled);
     let st = expansion::get_expansion_status();
     let _ = app_handle.emit("settings-updated", &state.settings.get());
     let _ = app_handle.emit("expansion-status-changed", st.clone());
@@ -656,7 +697,16 @@ fn hide_overlay(app_handle: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn hide_enlarged(window: WebviewWindow) -> Result<(), String> {
     paste::restore_target_window();
-    window.hide().map_err(|e| e.to_string())?;
+    let keep_warm = window
+        .app_handle()
+        .try_state::<AppState>()
+        .map(|s| s.settings.get().keep_window_warm)
+        .unwrap_or(true);
+    if keep_warm {
+        window.hide().map_err(|e| e.to_string())?;
+    } else {
+        window.close().map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -984,11 +1034,23 @@ fn paste_snippet_text(
         "[PASTE_SNIPPET] Hiding window '{}' before snippet paste...",
         window.label()
     ));
-    let hide_res = window.hide();
-    paste::log_diag(&format!(
-        "[PASTE_SNIPPET] window.hide() returned {:?}",
-        hide_res
-    ));
+    let keep_warm = app_handle
+        .try_state::<AppState>()
+        .map(|s| s.settings.get().keep_window_warm)
+        .unwrap_or(true);
+    if keep_warm {
+        let hide_res = window.hide();
+        paste::log_diag(&format!(
+            "[PASTE_SNIPPET] window.hide() returned {:?}",
+            hide_res
+        ));
+    } else {
+        let close_res = window.close();
+        paste::log_diag(&format!(
+            "[PASTE_SNIPPET] window.close() (cold) -> {:?}",
+            close_res
+        ));
+    }
     let res = paste::paste_text_into_target(&pre, post.as_deref())?;
     expansion::show_placement_pill(&app_handle, Some("text has been placed successfully"));
     Ok(res)
@@ -1078,8 +1140,20 @@ pub fn run() {
         })
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
-                api.prevent_close();
-                window.hide().ok();
+                let keep_warm = window
+                    .app_handle()
+                    .try_state::<AppState>()
+                    .map(|s| s.settings.get().keep_window_warm)
+                    .unwrap_or(true);
+                if keep_warm {
+                    api.prevent_close();
+                    window.hide().ok();
+                } else {
+                    crate::paste::log_diag(&format!(
+                        "[WINDOW_EVENT] CloseRequested for '{}' keep_window_warm=false -> allowing close (cold destroy)",
+                        window.label()
+                    ));
+                }
             }
             WindowEvent::Focused(focused) => {
                 paste::log_diag(&format!(

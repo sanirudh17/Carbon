@@ -26,6 +26,131 @@ pub fn set_recording_target(target: Option<String>) {
     *RECORDING_TARGET.lock().unwrap() = target;
 }
 
+fn should_keep_warm(app: &AppHandle) -> bool {
+    app.try_state::<crate::AppState>()
+        .map(|s| s.settings.get().keep_window_warm)
+        .unwrap_or(true)
+}
+
+fn ensure_overlay_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
+    if let Some(win) = app.get_webview_window("overlay") {
+        return Some(win);
+    }
+    crate::paste::log_diag(
+        "[HOTKEY] Overlay window not found — recreating (keep_window_warm=false).",
+    );
+    if let Some(cfg) = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "overlay")
+        .cloned()
+    {
+        match tauri::WebviewWindowBuilder::from_config(app, &cfg) {
+            Ok(builder) => match builder.build() {
+                Ok(w) => {
+                    crate::paste::log_diag("[HOTKEY] Recreated overlay from tauri.conf");
+                    return Some(w);
+                }
+                Err(e) => crate::paste::log_diag(&format!(
+                    "[HOTKEY] Failed to build overlay from config: {:?}",
+                    e
+                )),
+            },
+            Err(e) => crate::paste::log_diag(&format!(
+                "[HOTKEY] from_config for overlay failed: {:?}",
+                e
+            )),
+        }
+    }
+    match tauri::WebviewWindowBuilder::new(
+        app,
+        "overlay",
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("Carbon Quick Paste")
+    .inner_size(680.0, 440.0)
+    .resizable(false)
+    .decorations(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .visible(false)
+    .transparent(true)
+    .build()
+    {
+        Ok(w) => {
+            crate::paste::log_diag("[HOTKEY] Recreated overlay via manual builder");
+            Some(w)
+        }
+        Err(e) => {
+            crate::paste::log_diag(&format!(
+                "[HOTKEY] Manual overlay creation failed: {:?}",
+                e
+            ));
+            None
+        }
+    }
+}
+
+fn ensure_main_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
+    if let Some(win) = app.get_webview_window("main") {
+        return Some(win);
+    }
+    crate::paste::log_diag(
+        "[HOTKEY] Main window not found — recreating (keep_window_warm=false).",
+    );
+    if let Some(cfg) = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .cloned()
+    {
+        match tauri::WebviewWindowBuilder::from_config(app, &cfg) {
+            Ok(builder) => match builder.build() {
+                Ok(w) => {
+                    crate::paste::log_diag("[HOTKEY] Recreated main from tauri.conf");
+                    return Some(w);
+                }
+                Err(e) => crate::paste::log_diag(&format!(
+                    "[HOTKEY] Failed to build main from config: {:?}",
+                    e
+                )),
+            },
+            Err(e) => crate::paste::log_diag(&format!(
+                "[HOTKEY] from_config for main failed: {:?}",
+                e
+            )),
+        }
+    }
+    match tauri::WebviewWindowBuilder::new(
+        app,
+        "main",
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("Carbon — Clipboard Manager")
+    .inner_size(1240.0, 740.0)
+    .resizable(true)
+    .decorations(false)
+    .visible(false)
+    .build()
+    {
+        Ok(w) => {
+            crate::paste::log_diag("[HOTKEY] Recreated main via manual builder");
+            Some(w)
+        }
+        Err(e) => {
+            crate::paste::log_diag(&format!(
+                "[HOTKEY] Manual main creation failed: {:?}",
+                e
+            ));
+            None
+        }
+    }
+}
+
 // Registration status of the global hotkeys. Owned by the global-shortcut
 // swap in crate::shortcuts; kept here so the settings UI command can read it.
 #[derive(Serialize, Clone, Debug)]
@@ -40,9 +165,15 @@ pub struct HotkeyStatus {
 
 pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     crate::paste::log_diag("[HOTKEY] handle_overlay_hotkey triggered.");
-    if let Some(overlay_win) = app_handle.get_webview_window("overlay") {
-        let is_visible = overlay_win.is_visible().unwrap_or(false);
-        let is_focused = overlay_win.is_focused().unwrap_or(false);
+    let overlay_win = match ensure_overlay_window(app_handle) {
+        Some(w) => w,
+        None => {
+            crate::paste::log_diag("[HOTKEY] ERROR: overlay window not found and recreation failed!");
+            return;
+        }
+    };
+    let is_visible = overlay_win.is_visible().unwrap_or(false);
+    let is_focused = overlay_win.is_focused().unwrap_or(false);
         crate::paste::log_diag(&format!(
             "[HOTKEY] Overlay state: is_visible={}, is_focused={}",
             is_visible, is_focused
@@ -100,21 +231,28 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
                 }
             }
         }
-    } else {
-        crate::paste::log_diag("[HOTKEY] ERROR: overlay window not found in app_handle!");
-    }
 }
 
 pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
     dismiss_overlay(app_handle);
 
-    if let Some(main_win) = app_handle.get_webview_window("main") {
+    let main_win = match ensure_main_window(app_handle) {
+        Some(w) => w,
+        None => {
+            eprintln!("[carbon] main window not found and recreation failed — hotkey did nothing");
+            return;
+        }
+    };
+    {
         let is_visible = main_win.is_visible().unwrap_or(false);
         let is_focused = main_win.is_focused().unwrap_or(false);
-
         if is_visible && is_focused {
             restore_target_window();
-            let _ = main_win.hide();
+            if should_keep_warm(app_handle) {
+                let _ = main_win.hide();
+            } else {
+                let _ = main_win.close();
+            }
         } else {
             save_target_window(app_handle);
             crate::paste::capture_selection_snapshot();
@@ -136,8 +274,6 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
             });
             let _ = app_handle.emit("enlarged-opened", ());
         }
-    } else {
-        eprintln!("[carbon] main window not found — hotkey did nothing");
     }
 }
 
@@ -156,8 +292,16 @@ pub fn hide_overlay_window(app: &AppHandle) {
     crate::paste::log_diag("[HIDE_OVERLAY] hide_overlay_window entered. Hiding window...");
 
     if let Some(win) = app.get_webview_window("overlay") {
-        let hide_res = win.hide();
-        crate::paste::log_diag(&format!("[HIDE_OVERLAY] win.hide() returned {:?}", hide_res));
+        if should_keep_warm(app) {
+            let hide_res = win.hide();
+            crate::paste::log_diag(&format!("[HIDE_OVERLAY] win.hide() returned {:?}", hide_res));
+        } else {
+            let close_res = win.close();
+            crate::paste::log_diag(&format!(
+                "[HIDE_OVERLAY] keep_window_warm=false, win.close() -> {:?}",
+                close_res
+            ));
+        }
     } else {
         crate::paste::log_diag("[HIDE_OVERLAY] overlay window not found!");
     }
@@ -179,7 +323,11 @@ pub fn is_overlay_hiding() -> bool {
 fn dismiss_overlay(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("overlay") {
         if win.is_visible().unwrap_or(false) {
-            let _ = win.hide();
+            if should_keep_warm(app) {
+                let _ = win.hide();
+            } else {
+                let _ = win.close();
+            }
         }
     }
 }
