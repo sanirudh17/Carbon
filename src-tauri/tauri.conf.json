@@ -84,6 +84,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -93,6 +94,17 @@
     ],
     "resources": {
       "binaries/tesseract": "tesseract"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhBNzRFRkQ0Njk1RjkxQzUKUldURmtWOXAxTzkwaXU0QVh5N1poVmZqZ3ZqYnl3cUN1NFMwNUtSS1AvZXFrektPY25KQXpQNGwK",
+      "endpoints": [
+        "https://github.com/sanirudh17/Carbon/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

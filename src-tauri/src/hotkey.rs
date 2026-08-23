@@ -151,6 +151,76 @@ fn ensure_main_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     }
 }
 
+/// Pre-warm hidden windows so the first hotkey press is instant.
+/// Forces each hidden window's WebView2 to present its first frame while
+/// off-screen: an un-presented surface renders as a white rectangle on first
+/// show. Also warms the DB cache so the first overlay-data emit is instant.
+pub fn prewarm_windows(app: &AppHandle) {
+    crate::paste::log_diag("[PREWARM] Starting window & DB prewarm");
+    // Warm DB cache in parallel so first queries are instant.
+    // Overlay uses fast limited path (250); main window may load full history.
+    if let Some(state) = app.try_state::<crate::AppState>() {
+        let db_clone = state.db.clone();
+        std::thread::spawn(move || {
+            let _ = db_clone.get_overlay_entries(250);
+            let _ = db_clone.list_snippets();
+            crate::paste::log_diag("[PREWARM] Overlay DB cache warmed");
+        });
+        let db_clone2 = state.db.clone();
+        std::thread::spawn(move || {
+            // Warm full history in background without blocking overlay
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            let _ = db_clone2.get_all_entries(None, None, false, None);
+            crate::paste::log_diag("[PREWARM] Full DB cache warmed");
+        });
+    }
+    // Ensure windows exist (creates them if keep_window_warm=false destroyed them)
+    let _ = ensure_overlay_window(app);
+    let _ = ensure_main_window(app);
+
+    // Off-screen first-paint warm: show hidden windows with SW_SHOWNOACTIVATE
+    // so WebView2 composites without stealing focus, then hide again.
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::HWND as WinHWND;
+        use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOWNOACTIVATE};
+        for label in ["overlay", "main"] {
+            let Some(win) = app.get_webview_window(label) else {
+                continue;
+            };
+            if win.is_visible().unwrap_or(false) {
+                continue;
+            }
+            let Ok(hwnd) = win.hwnd() else {
+                continue;
+            };
+            let orig = win.outer_position().ok();
+            // Park off-screen so even SW_SHOWNOACTIVATE is not visible
+            let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                x: -32000,
+                y: -32000,
+            }));
+            let h_raw: isize = hwnd.0 as isize;
+            let h = WinHWND(h_raw as *mut _);
+            unsafe {
+                let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            unsafe {
+                let _ = ShowWindow(h, SW_HIDE);
+            }
+            if let Some(p) = orig {
+                let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                    x: p.x,
+                    y: p.y,
+                }));
+            }
+            crate::paste::log_diag(&format!("[PREWARM] Warmed '{}' first paint", label));
+        }
+    }
+    crate::paste::log_diag("[PREWARM] Complete");
+}
+
 // Registration status of the global hotkeys. Owned by the global-shortcut
 // swap in crate::shortcuts; kept here so the settings UI command can read it.
 #[derive(Serialize, Clone, Debug)]
@@ -174,63 +244,80 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     };
     let is_visible = overlay_win.is_visible().unwrap_or(false);
     let is_focused = overlay_win.is_focused().unwrap_or(false);
-        crate::paste::log_diag(&format!(
-            "[HOTKEY] Overlay state: is_visible={}, is_focused={}",
-            is_visible, is_focused
-        ));
+    crate::paste::log_diag(&format!(
+        "[HOTKEY] Overlay state: is_visible={}, is_focused={}",
+        is_visible, is_focused
+    ));
 
-        if is_visible && is_focused {
-            crate::paste::log_diag("[HOTKEY] Overlay is visible+focused. Calling hide_overlay_window...");
-            hide_overlay_window(app_handle);
-        } else {
-            crate::paste::log_diag("[HOTKEY] Overlay opening. Calling save_target_window...");
-            save_target_window(app_handle);
-            crate::paste::capture_selection_snapshot();
-            CURRENT_CYCLE_INDEX.store(0, Ordering::Relaxed);
+    if is_visible && is_focused {
+        crate::paste::log_diag("[HOTKEY] Overlay is visible+focused. Calling hide_overlay_window...");
+        hide_overlay_window(app_handle);
+        return;
+    }
 
-            let (cx, cy) = get_cursor_position();
-            let preview_on = app_handle
-                .try_state::<crate::AppState>()
-                .map(|s| s.settings.get().preview_enabled)
-                .unwrap_or(false);
-            let (win_w, win_h) = if preview_on { (1020, 560) } else { (680, 440) };
-            let scale_factor = overlay_win.scale_factor().unwrap_or(1.0);
-            let phys_w = (win_w as f64 * scale_factor).round() as u32;
-            let phys_h = (win_h as f64 * scale_factor).round() as u32;
-            let _ = overlay_win.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                width: phys_w,
-                height: phys_h,
-            }));
+    // Fast path: save target HWND while it is still foreground (must be before show)
+    crate::paste::log_diag("[HOTKEY] Overlay opening. Calling save_target_window...");
+    save_target_window(app_handle);
+    // Capture selected text while target is still focused. UIA is instant; clipboard
+    // fallback (Ctrl+C + 120ms) is rare and only runs when UIA has no selection.
+    crate::paste::capture_selection_snapshot();
+    CURRENT_CYCLE_INDEX.store(0, Ordering::Relaxed);
 
-            let (pos_x, pos_y) = calculate_overlay_position(cx, cy, win_w, win_h, scale_factor);
-            crate::paste::log_diag(&format!(
-                "[HOTKEY] Calculated pos: ({}, {}), size: {}x{}, scale: {}",
-                pos_x, pos_y, phys_w, phys_h, scale_factor
-            ));
+    let (cx, cy) = get_cursor_position();
+    let preview_on = app_handle
+        .try_state::<crate::AppState>()
+        .map(|s| s.settings.get().preview_enabled)
+        .unwrap_or(false);
+    let (win_w, win_h) = if preview_on { (1020, 560) } else { (680, 440) };
+    let scale_factor = overlay_win.scale_factor().unwrap_or(1.0);
+    let phys_w = (win_w as f64 * scale_factor).round() as u32;
+    let phys_h = (win_h as f64 * scale_factor).round() as u32;
+    // Resize ONLY when target size actually differs: resizing a hidden WebView2
+    // reallocates its composition surface, and the next present after show()
+    // comes out white until the renderer catches up (the white flash).
+    let want = tauri::PhysicalSize {
+        width: phys_w,
+        height: phys_h,
+    };
+    if overlay_win.outer_size().ok() != Some(want) {
+        let _ = overlay_win.set_size(tauri::Size::Physical(want));
+    }
 
-            let _ = overlay_win.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                x: pos_x,
-                y: pos_y,
-            }));
+    let (pos_x, pos_y) = calculate_overlay_position(cx, cy, win_w, win_h, scale_factor);
+    crate::paste::log_diag(&format!(
+        "[HOTKEY] Calculated pos: ({}, {}), size: {}x{}, scale: {}",
+        pos_x, pos_y, phys_w, phys_h, scale_factor
+    ));
 
-            let _ = overlay_win.unminimize();
-            let show_res = overlay_win.show();
-            let focus_res = overlay_win.set_focus();
-            crate::paste::log_diag(&format!(
-                "[HOTKEY] overlay_win.show() -> {:?}, set_focus() -> {:?}",
-                show_res, focus_res
-            ));
-            let _ = app_handle.emit("overlay-opened", ());
+    // Position BEFORE show so window appears at correct monitor instantly (no flicker)
+    let _ = overlay_win.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+        x: pos_x,
+        y: pos_y,
+    }));
 
-            if let Some(state) = app_handle.try_state::<crate::AppState>() {
-                if let Ok(entries) = state.db.get_all_entries(None, None, false, None) {
-                    let _ = app_handle.emit("overlay-data", &entries);
-                }
-                if let Ok(snips) = state.db.list_snippets() {
-                    let _ = app_handle.emit("overlay-snippets", &snips);
-                }
+    let _ = overlay_win.unminimize();
+    let show_res = overlay_win.show();
+    let focus_res = overlay_win.set_focus();
+    crate::paste::log_diag(&format!(
+        "[HOTKEY] overlay_win.show() -> {:?}, set_focus() -> {:?}",
+        show_res, focus_res
+    ));
+    // Emit opened immediately so frontend can render skeleton instantly;
+    // data follows in background without blocking the show path.
+    let _ = app_handle.emit("overlay-opened", ());
+
+    let app_clone = app_handle.clone();
+    std::thread::spawn(move || {
+        if let Some(state) = app_clone.try_state::<crate::AppState>() {
+            // Fast limited query (250) — instant even with 5000+ history rows.
+            if let Ok(entries) = state.db.get_overlay_entries(250) {
+                let _ = app_clone.emit("overlay-data", &entries);
+            }
+            if let Ok(snips) = state.db.list_snippets() {
+                let _ = app_clone.emit("overlay-snippets", &snips);
             }
         }
+    });
 }
 
 pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
@@ -243,37 +330,35 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
             return;
         }
     };
-    {
-        let is_visible = main_win.is_visible().unwrap_or(false);
-        let is_focused = main_win.is_focused().unwrap_or(false);
-        if is_visible && is_focused {
-            restore_target_window();
-            if should_keep_warm(app_handle) {
-                let _ = main_win.hide();
-            } else {
-                let _ = main_win.close();
-            }
+    let is_visible = main_win.is_visible().unwrap_or(false);
+    let is_focused = main_win.is_focused().unwrap_or(false);
+    if is_visible && is_focused {
+        restore_target_window();
+        if should_keep_warm(app_handle) {
+            let _ = main_win.hide();
         } else {
-            save_target_window(app_handle);
-            crate::paste::capture_selection_snapshot();
-            let _ = main_win.unminimize();
-            let _ = main_win.show();
-            let _ = main_win.set_focus();
-            // Windows sometimes refuses the first SetForegroundWindow while the
-            // window is still materializing. One gentle retry after it settles
-            // keeps Enter-to-paste reliable when the user keys in immediately.
-            let win = main_win.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(180));
-                match win.is_focused() {
-                    Ok(true) => {}
-                    _ => {
-                        let _ = win.set_focus();
-                    }
-                }
-            });
-            let _ = app_handle.emit("enlarged-opened", ());
+            let _ = main_win.close();
         }
+    } else {
+        save_target_window(app_handle);
+        crate::paste::capture_selection_snapshot();
+        let _ = main_win.unminimize();
+        let _ = main_win.show();
+        let _ = main_win.set_focus();
+        // Windows sometimes refuses the first SetForegroundWindow while the
+        // window is still materializing. One gentle retry after it settles
+        // keeps Enter-to-paste reliable when the user keys in immediately.
+        let win = main_win.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            match win.is_focused() {
+                Ok(true) => {}
+                _ => {
+                    let _ = win.set_focus();
+                }
+            }
+        });
+        let _ = app_handle.emit("enlarged-opened", ());
     }
 }
 

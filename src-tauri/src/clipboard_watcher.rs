@@ -594,11 +594,29 @@ fn process_clipboard_change(
                 *last_hash = Some(hash);
 
                 let now = now_ms();
-                let mut merged = false;
+                let mut handled = false;
 
-                // ClipMerge: check if repeat copy within time window
-                if settings.clip_merge_enabled
-                    && (new_item.content_type == "text" || new_item.content_type == "code" || new_item.content_type == "link")
+                // 1. Exact duplicate -> bump and never merge (prevents duplicate tail).
+                //    Must run before ClipMerge so copying the same text twice doesn't create "A\nA".
+                if let Ok(Some(existing_bumped)) = db_state.find_and_bump_duplicate(&new_item) {
+                    if let (Some(ref new_p), Some(ref exist_p)) = (&new_item.image_path, &existing_bumped.image_path) {
+                        if new_p != exist_p {
+                            let _ = fs::remove_file(new_p);
+                        }
+                    }
+                    let _ = db_state.trim_history(settings.retention_days, settings.max_entries);
+                    *LAST_CAPTURED_CLIP.lock().unwrap() =
+                        Some((existing_bumped.id.clone(), now, existing_bumped.content_type.clone()));
+                    let _ = app_handle.emit("clipboard-updated", &existing_bumped);
+                    handled = true;
+                }
+
+                // 2. ClipMerge: rapid successive text copies within window append to top clip.
+                if !handled
+                    && settings.clip_merge_enabled
+                    && (new_item.content_type == "text"
+                        || new_item.content_type == "code"
+                        || new_item.content_type == "link")
                 {
                     let last_cap = LAST_CAPTURED_CLIP.lock().unwrap().clone();
                     if let Some((ref last_id, last_ts, ref last_type)) = last_cap {
@@ -611,32 +629,19 @@ fn process_clipboard_change(
                                         Some((last_id.clone(), now, last_type.clone()));
                                     let _ = app_handle.emit("clipboard-updated", &merged_item);
                                     let _ = app_handle.emit("clip-merged", &merged_item);
-                                    merged = true;
+                                    let _ = db_state.trim_history(settings.retention_days, settings.max_entries);
+                                    handled = true;
                                 }
                             }
                         }
                     }
                 }
 
-                if !merged {
-                    // 1. Try finding and bumping an existing exact duplicate
-                    if let Ok(Some(existing_bumped)) = db_state.find_and_bump_duplicate(&new_item) {
-                        // If the new capture was an image that created a new file, remove the newly created file
-                        // since we are reusing the existing entry's file
-                        if let (Some(ref new_p), Some(ref exist_p)) = (&new_item.image_path, &existing_bumped.image_path) {
-                            if new_p != exist_p {
-                                let _ = fs::remove_file(new_p);
-                            }
-                        }
-                        let _ = db_state.trim_history(settings.retention_days, settings.max_entries);
-                        *LAST_CAPTURED_CLIP.lock().unwrap() =
-                            Some((existing_bumped.id.clone(), now, existing_bumped.content_type.clone()));
-                        let _ = app_handle.emit("clipboard-updated", &existing_bumped);
-                    } else if db_state.insert_entry(&mut new_item).is_ok() {
+                if !handled {
+                    if db_state.insert_entry(&mut new_item).is_ok() {
                         let _ = db_state.trim_history(settings.retention_days, settings.max_entries);
                         *LAST_CAPTURED_CLIP.lock().unwrap() =
                             Some((new_item.id.clone(), now, new_item.content_type.clone()));
-                        // Notify frontend
                         let _ = app_handle.emit("clipboard-updated", &new_item);
                     }
                 }

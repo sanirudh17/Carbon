@@ -1,6 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { check } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { getVersion } from '@tauri-apps/api/app';
+import type { Update } from '@tauri-apps/plugin-updater';
 import { AppSettings, DbStats } from '../types';
 import { ChevronLeftIcon, SpinnerIcon, CheckIcon, AlertTriangleIcon } from './Icons';
 
@@ -110,6 +114,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     capture_rules: [],
     snippet_expansion_enabled: false,
     show_snippets: true,
+    dismissedUpdateVersion: '',
   });
 
   const [stats, setStats] = useState<DbStats | null>(null);
@@ -120,6 +125,15 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   const [hotkeyStatus, setHotkeyStatus] = useState<HotkeyStatusInfo | null>(null);
   const [expansionStatus, setExpansionStatus] = useState<'off' | 'not_yet_active' | 'active'>('off');
   const [showExpansionConsent, setShowExpansionConsent] = useState(false);
+
+  // Updates — mirrors Typr's General → Updates: version, button, status + progress
+  const [appVersion, setAppVersion] = useState<string>('');
+  const [updateStatus, setUpdateStatus] = useState<string>('Carbon checks for updates when it starts.');
+  const [updateBtnText, setUpdateBtnText] = useState('Check for latest updates');
+  const [updateBtnDisabled, setUpdateBtnDisabled] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState(0);
+  const [updateProgressVisible, setUpdateProgressVisible] = useState(false);
+  const [pendingUpdate, setPendingUpdate] = useState<Update | null>(null);
 
   useEffect(() => {
     fetchSettings();
@@ -159,6 +173,78 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     setTimeout(() => {
       setToast((curr) => (curr?.message === message ? null : curr));
     }, duration);
+  };
+
+  // ── Updater (plugin) — on-demand check + install, banner uses same latest.json silently ──
+  useEffect(() => {
+    getVersion().then((v) => setAppVersion(v)).catch(() => {});
+  }, []);
+
+  const installUpdate = async (update: Update) => {
+    setUpdateBtnDisabled(true);
+    setUpdateBtnText('Downloading…');
+    setUpdateProgressVisible(true);
+    setUpdateProgress(0);
+    let total = 0;
+    let received = 0;
+    try {
+      await update.downloadAndInstall((event) => {
+        switch (event.event) {
+          case 'Started':
+            total = event.data.contentLength ?? 0;
+            break;
+          case 'Progress':
+            received += event.data.chunkLength;
+            if (total > 0) setUpdateProgress(Math.min(100, (received / total) * 100));
+            break;
+          case 'Finished':
+            setUpdateProgress(100);
+            setUpdateStatus('Installing… Carbon will restart.');
+            break;
+        }
+      });
+      await relaunch();
+    } catch (e) {
+      setUpdateProgressVisible(false);
+      setUpdateStatus(`Update failed: ${String(e)}`);
+      setUpdateBtnDisabled(false);
+      setUpdateBtnText('Retry');
+    }
+  };
+
+  const runUpdateCheck = async (userAsked: boolean) => {
+    if (pendingUpdate) {
+      await installUpdate(pendingUpdate);
+      return;
+    }
+    if (userAsked) {
+      setUpdateBtnDisabled(true);
+      setUpdateStatus('Checking…');
+      setUpdateBtnText('Checking…');
+    }
+    try {
+      const update = await check();
+      if (update) {
+        setPendingUpdate(update);
+        setUpdateStatus(`Update available to v${update.version}.`);
+        setUpdateBtnText('Download & install');
+        setUpdateBtnDisabled(false);
+      } else if (userAsked) {
+        // Up-to-date — mirrors Typr/Glint: cross-references GitHub latest.json, shows version badge.
+        setUpdateStatus('You are on the latest version.');
+        setUpdateBtnText('Check for latest updates');
+        setUpdateBtnDisabled(false);
+      }
+    } catch (e) {
+      // Per product decision: a failed check (offline, 404 latest.json, remote error)
+      // must never surface scary transport errors in Settings — report up-to-date.
+      console.warn('[Carbon] update check failed:', e);
+      if (userAsked) {
+        setUpdateStatus('You are on the latest version.');
+        setUpdateBtnText('Check for latest updates');
+        setUpdateBtnDisabled(false);
+      }
+    }
   };
 
   // Key recorder: while recording, capture the next non-modifier key press
@@ -334,8 +420,9 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
   const handleSave = async () => {
     try {
-      await invoke('save_settings', { newSettings: settings });
-      applyAccentColor(settings.accent_color);
+      const current = settingsRef.current;
+      await invoke('save_settings', { newSettings: current });
+      applyAccentColor(current.accent_color);
       setSavedMessage(true);
       setTimeout(() => setSavedMessage(false), 2000);
     } catch (err) {
@@ -344,7 +431,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   };
 
   const updateSetting = async <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
-    const updated = { ...settings, [key]: value };
+    const updated = { ...settingsRef.current, [key]: value };
     setSettings(updated);
 
     if (key === 'accent_color') {
@@ -393,6 +480,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const customColorRef = useRef<HTMLInputElement>(null);
 
   // Mirror the backend shortcut manager's registration status: after every
   // settings save it swaps both global shortcuts atomically and emits the
@@ -512,6 +600,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   };
 
   const currentSwatchName = ACCENT_SWATCHES.find((s) => s.color === settings.accent_color)?.name || 'Custom';
+  const isCustomColor = !ACCENT_SWATCHES.some((s) => s.color.toLowerCase() === settings.accent_color.toLowerCase());
 
   return (
     <div className="settings">
@@ -728,21 +817,6 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
           <div className="set-row">
             <div className="set-label">
-              Paste as plain text
-              <div className="set-hint">Strip formatting by default when pasting (can still override per-paste)</div>
-            </div>
-            <div className="set-control">
-              <button
-                className={`toggle ${settings.paste_plain_text ? 'on' : ''}`}
-                onClick={() => updateSetting('paste_plain_text', !settings.paste_plain_text)}
-              >
-                <span className="knob" />
-              </button>
-            </div>
-          </div>
-
-          <div className="set-row">
-            <div className="set-label">
               Move to top on paste
               <div className="set-hint">Bump the pasted clip to the top of history</div>
             </div>
@@ -766,7 +840,14 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
             <div className="set-control">
               <button
                 className={`toggle ${settings.clip_merge_enabled ? 'on' : ''}`}
-                onClick={() => updateSetting('clip_merge_enabled', !settings.clip_merge_enabled)}
+                onClick={() => {
+                  if (settings.clip_merge_enabled && clipMergeDebounceRef.current) {
+                    window.clearTimeout(clipMergeDebounceRef.current);
+                    clipMergeDebounceRef.current = null;
+                    clipMergePendingRef.current = null;
+                  }
+                  updateSetting('clip_merge_enabled', !settings.clip_merge_enabled);
+                }}
               >
                 <span className="knob" />
               </button>
@@ -791,8 +872,10 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                     const raw = e.target.value;
                     const trimmed = raw.trim();
                     if (trimmed === '') {
-                      setSettings((prev) => ({ ...prev, clip_merge_window_ms: 2500 }));
-                      clipMergePendingRef.current = 2500;
+                      const next = 2500;
+                      setSettings((prev) => ({ ...prev, clip_merge_window_ms: next }));
+                      settingsRef.current = { ...settingsRef.current, clip_merge_window_ms: next };
+                      clipMergePendingRef.current = next;
                       if (clipMergeDebounceRef.current) window.clearTimeout(clipMergeDebounceRef.current);
                       clipMergeDebounceRef.current = window.setTimeout(() => {
                         const pending = clipMergePendingRef.current;
@@ -807,6 +890,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                     // Show raw parsed value immediately for smooth typing;
                     // backend save is clamped via debounce.
                     setSettings((prev) => ({ ...prev, clip_merge_window_ms: parsed }));
+                    settingsRef.current = { ...settingsRef.current, clip_merge_window_ms: parsed };
                     clipMergePendingRef.current = Math.min(10000, Math.max(500, parsed));
                     if (clipMergeDebounceRef.current) window.clearTimeout(clipMergeDebounceRef.current);
                     clipMergeDebounceRef.current = window.setTimeout(() => {
@@ -822,7 +906,29 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                       clipMergeDebounceRef.current = null;
                       const pending = clipMergePendingRef.current;
                       clipMergePendingRef.current = null;
-                      if (pending !== null) updateSetting('clip_merge_window_ms', pending);
+                      if (pending !== null) {
+                        // Clamp visible value immediately on blur so UI never shows out-of-range
+                        setSettings((prev) => ({ ...prev, clip_merge_window_ms: pending }));
+                        settingsRef.current = { ...settingsRef.current, clip_merge_window_ms: pending };
+                        updateSetting('clip_merge_window_ms', pending);
+                      } else {
+                        // No pending debounce — ensure displayed value is clamped if user left it out of range
+                        const cur = settingsRef.current.clip_merge_window_ms;
+                        const clamped = Math.min(10000, Math.max(500, cur));
+                        if (clamped !== cur) {
+                          setSettings((prev) => ({ ...prev, clip_merge_window_ms: clamped }));
+                          settingsRef.current = { ...settingsRef.current, clip_merge_window_ms: clamped };
+                          updateSetting('clip_merge_window_ms', clamped);
+                        }
+                      }
+                    } else {
+                      const cur = settingsRef.current.clip_merge_window_ms;
+                      const clamped = Math.min(10000, Math.max(500, cur));
+                      if (clamped !== cur) {
+                        setSettings((prev) => ({ ...prev, clip_merge_window_ms: clamped }));
+                        settingsRef.current = { ...settingsRef.current, clip_merge_window_ms: clamped };
+                        updateSetting('clip_merge_window_ms', clamped);
+                      }
                     }
                   }}
                 />
@@ -1201,6 +1307,42 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           </div>
         </section>
 
+        {/* Updates — manual check + install, silent banner lives in App.tsx */}
+        {/* Version badge is visually separate from the Updates heading and from the
+            check-status line, so "Current version v0.1.0" never visually merges with
+            the "Updates" title or the "You are on the latest version." hint. */}
+        <section>
+          <div className="sec-title">Updates</div>
+          <div className="set-row">
+            <div className="set-label">
+              <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.2 }}>Current version</div>
+              <div style={{ fontSize: 12.5, color: 'var(--text-2)', marginTop: 2 }}>
+                <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>v{appVersion || '…'}</span>
+              </div>
+              <div className="set-hint" style={{ marginTop: 4 }}>{updateStatus}</div>
+            </div>
+            <div className="set-control">
+              <button
+                className="btn accent"
+                onClick={() => runUpdateCheck(true)}
+                disabled={updateBtnDisabled}
+                style={{ opacity: updateBtnDisabled ? 0.7 : 1 }}
+              >
+                {updateBtnDisabled && updateBtnText === 'Checking…' ? <SpinnerIcon /> : null}
+                <span>{updateBtnText}</span>
+              </button>
+            </div>
+          </div>
+          {updateProgressVisible && (
+            <div className="update-progress-wrap" style={{ marginTop: 8 }}>
+              <div className="update-progress-bar">
+                <div className="update-progress-fill" style={{ width: `${updateProgress}%` }} />
+              </div>
+              <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{Math.round(updateProgress)}%</span>
+            </div>
+          )}
+        </section>
+
         {/* Appearance */}
         <section>
           <div className="sec-title">Appearance</div>
@@ -1209,8 +1351,8 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               Accent theme
               <div className="set-hint">Currently active: {currentSwatchName}</div>
             </div>
-            <div className="set-control" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-              <div className="accents">
+            <div className="set-control">
+              <div className="accents" style={{ alignItems: 'center' }}>
                 {ACCENT_SWATCHES.map((swatch) => (
                   <button
                     key={swatch.color}
@@ -1220,17 +1362,78 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                     onClick={() => updateSetting('accent_color', swatch.color)}
                   />
                 ))}
+                <div
+                  style={{
+                    position: 'relative',
+                    width: 22,
+                    height: 22,
+                    borderRadius: 7,
+                    flexShrink: 0,
+                  }}
+                  title="Custom color"
+                >
+                  {/* Dashed "+" affordance underneath; purely visual. */}
+                  <button
+                    type="button"
+                    aria-hidden="true"
+                    tabIndex={-1}
+                    className="swatch"
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: 7,
+                      border: '1.5px dashed var(--line)',
+                      background: 'transparent',
+                      display: 'grid',
+                      placeItems: 'center',
+                      cursor: 'pointer',
+                      position: 'absolute',
+                      inset: 0,
+                      pointerEvents: 'none',
+                    }}
+                  >
+                    <span aria-hidden style={{ fontSize: 11, lineHeight: 1, color: 'var(--text-3)', userSelect: 'none' }}>
+                      +
+                    </span>
+                  </button>
+                  {/* Real-size invisible input on top: WebView2 only opens the native
+                      color dialog when the click lands on the input itself — hidden
+                      zero-size inputs + showPicker() silently do nothing here. */}
+                  <input
+                    ref={customColorRef}
+                    type="color"
+                    value={settings.accent_color}
+                    onChange={(e) => updateSetting('accent_color', e.target.value)}
+                    aria-label="Pick custom accent color"
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      width: '100%',
+                      height: '100%',
+                      opacity: 0,
+                      cursor: 'pointer',
+                      border: 'none',
+                      padding: 0,
+                    }}
+                  />
+                </div>
+                {isCustomColor && (
+                  <span
+                    title={`Custom ${settings.accent_color}`}
+                    aria-label={`Custom color ${settings.accent_color}`}
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: 7,
+                      background: settings.accent_color,
+                      border: '2px solid var(--line)',
+                      boxShadow: '0 0 0 1px var(--accent-ring)',
+                      flexShrink: 0,
+                      display: 'inline-block',
+                    }}
+                  />
+                )}
               </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--text-2)', cursor: 'pointer' }}>
-                Custom
-                <input
-                  type="color"
-                  value={settings.accent_color}
-                  onChange={(e) => updateSetting('accent_color', e.target.value)}
-                  style={{ width: 28, height: 28, padding: 0, border: '1px solid var(--line)', borderRadius: 6, cursor: 'pointer', background: 'transparent' }}
-                  title="Pick custom accent color"
-                />
-              </label>
             </div>
           </div>
 

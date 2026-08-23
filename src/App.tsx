@@ -9,8 +9,15 @@ import { SunMoonIcon } from './components/Icons';
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { check } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
+import type { Update } from '@tauri-apps/plugin-updater';
+import type { AppSettings } from './types';
 
 export function App() {
+  const [updaterBanner, setUpdaterBanner] = useState<{ version: string; update: Update } | null>(null);
+  const [updaterDownloading, setUpdaterDownloading] = useState(false);
+  const [updaterProgress, setUpdaterProgress] = useState(0);
   const [windowLabel, setWindowLabel] = useState<string>(() => {
     try {
       const internals = (window as unknown as { __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } } })?.__TAURI_INTERNALS__;
@@ -36,6 +43,69 @@ export function App() {
     } else if (settings?.theme === 'dark') {
       setTheme('dark');
       document.documentElement.removeAttribute('data-theme');
+    }
+  };
+
+  useEffect(() => {
+    // Silent update check — mirrors Typr: quietly check latest.json, show banner
+    // only when genuinely newer and not already dismissed. Failures are silent.
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const settings = await invoke<AppSettings>('get_settings');
+        const update = await check();
+        if (cancelled || !update) return;
+        if (update.version === (settings as unknown as { dismissedUpdateVersion?: string }).dismissedUpdateVersion) return;
+        setUpdaterBanner({ version: update.version, update });
+      } catch (e) {
+        console.warn('[Carbon] background update check failed:', e);
+      }
+    }, 2500);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, []);
+
+  const handleBannerLater = async () => {
+    const v = updaterBanner?.version;
+    setUpdaterBanner(null);
+    if (!v) return;
+    try {
+      const s = await invoke<AppSettings>('get_settings');
+      await invoke('save_settings', { newSettings: { ...s, dismissedUpdateVersion: v } });
+    } catch (e) {
+      console.warn('[Carbon] could not persist dismissedUpdateVersion', e);
+    }
+  };
+
+  const handleBannerUpdate = async () => {
+    if (!updaterBanner?.update) return;
+    const upd = updaterBanner.update;
+    setUpdaterDownloading(true);
+    setUpdaterProgress(0);
+    let total = 0;
+    let received = 0;
+    try {
+      await upd.downloadAndInstall((event) => {
+        switch (event.event) {
+          case 'Started':
+            total = event.data.contentLength ?? 0;
+            break;
+          case 'Progress':
+            received += event.data.chunkLength;
+            if (total > 0) setUpdaterProgress(Math.min(100, (received / total) * 100));
+            break;
+          case 'Finished':
+            setUpdaterProgress(100);
+            break;
+        }
+      });
+      await relaunch();
+    } catch (e) {
+      console.error('[Carbon] update install failed', e);
+      setUpdaterDownloading(false);
+      setUpdaterBanner(null);
     }
   };
 
@@ -108,23 +178,52 @@ export function App() {
     return <ArgPromptWindow />;
   }
 
+  const bannerEl = updaterBanner ? (
+    <div className="update-banner" role="status" aria-live="polite">
+      <span className="update-banner-text">
+        {updaterDownloading ? `Downloading Carbon v${updaterBanner.version}… ${Math.round(updaterProgress)}%` : `Update available to v${updaterBanner.version} — click Update.`}
+      </span>
+      {updaterDownloading ? (
+        <div className="update-banner-progress"><div className="update-banner-progress-fill" style={{ width: `${updaterProgress}%` }} /></div>
+      ) : (
+        <>
+          <button className="btn accent" style={{ height: 26, padding: '0 12px', fontSize: 12 }} onClick={handleBannerUpdate}>Update</button>
+          <button className="btn subtle" style={{ height: 26, padding: '0 10px', fontSize: 12 }} onClick={handleBannerLater} title="Hide this until the next release">Later</button>
+        </>
+      )}
+    </div>
+  ) : null;
+
   // 2. Enlarged Main Window View
   if (windowLabel === 'main') {
     if (activeTab === 'settings') {
       return (
-        <Settings
-          onBack={() => setActiveTab('enlarged')}
-          onThemeToggle={toggleTheme}
-          currentTheme={theme}
-        />
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--bg0)' }}>
+          {bannerEl}
+          <div style={{ flex: 1, overflow: 'hidden' }}>
+            <Settings
+              onBack={() => setActiveTab('enlarged')}
+              onThemeToggle={toggleTheme}
+              currentTheme={theme}
+            />
+          </div>
+        </div>
       );
     }
-    return <EnlargedWindow onOpenSettings={() => setActiveTab('settings')} />;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--bg0)' }}>
+        {bannerEl}
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <EnlargedWindow onOpenSettings={() => setActiveTab('settings')} />
+        </div>
+      </div>
+    );
   }
 
   // 3. Dev / Browser Mode (all-in-one interactive test preview)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--bg0)' }}>
+      {bannerEl}
       <div
         className="canvas-head"
         style={{

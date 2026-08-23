@@ -91,6 +91,11 @@ pub struct AppSettings {
     /// stop an already-enabled expansion hook.
     #[serde(default = "default_show_snippets")]
     pub show_snippets: bool,
+    /// The update version the user dismissed via "Later" — banner stays quiet
+    /// for this exact version across restarts. Empty means nothing dismissed.
+    /// Only the banner respects this; manual check in Settings always shows.
+    #[serde(default, rename = "dismissedUpdateVersion")]
+    pub dismissed_update_version: String,
 }
 
 fn default_false() -> bool {
@@ -145,6 +150,7 @@ impl Default for AppSettings {
             capture_rules: Vec::new(),
             snippet_expansion_enabled: false,
             show_snippets: true,
+            dismissed_update_version: String::new(),
         }
     }
 }

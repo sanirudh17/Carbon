@@ -1061,6 +1061,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let app_handle = app.handle().clone();
 
@@ -1106,6 +1108,24 @@ pub fn run() {
             // Tolerant at startup: a genuinely claimed combo is logged and the
             // conflict is surfaced via the hotkey-status event.
             shortcuts::register(&app_handle);
+
+            // Prewarm hidden windows & DB cache so first hotkey is instant, not ~1s.
+            // Without this, the first WebView2 present after a cold start renders
+            // white until the renderer catches up, and the first DB query warms
+            // SQLite's page cache on the hotkey's critical path.
+            // Warm DB immediately; window first-paint needs WebViews to be
+            // created, so delay just enough for the initial navigation.
+            {
+                let handle = app_handle.clone();
+                std::thread::spawn(move || {
+                    hotkey::prewarm_windows(&handle);
+                });
+                let handle2 = app_handle.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    hotkey::prewarm_windows(&handle2);
+                });
+            }
 
             // Build Tray Icon
             let show_i = MenuItem::with_id(app, "show", "Open Carbon", true, None::<&str>)?;
@@ -1169,19 +1189,22 @@ pub fn run() {
                         hotkey::hide_overlay_window(&window.app_handle());
                     }
                 } else if *focused && window.label() == "overlay" {
-                    // Push the current list on focus so popup always displays fresh data
-                    if let Some(state) = window.app_handle().try_state::<AppState>() {
-                        if let Ok(entries) = state.db.get_all_entries(None, None, false, None) {
-                            let _ = window.app_handle().emit("overlay-data", &entries);
+                    // Push fresh data on focus, but off the focus critical path
+                    // (async) so focus handling is instant. The hotkey path already
+                    // emitted overlay-data + overlay-snippets synchronously after
+                    // show(); this is a safety refresh for non-hotkey focus (e.g.
+                    // clicking the overlay or OS refocus).
+                    let app_handle = window.app_handle().clone();
+                    std::thread::spawn(move || {
+                        if let Some(state) = app_handle.try_state::<AppState>() {
+                            if let Ok(entries) = state.db.get_overlay_entries(250) {
+                                let _ = app_handle.emit("overlay-data", &entries);
+                            }
+                            if let Ok(snips) = state.db.list_snippets() {
+                                let _ = app_handle.emit("overlay-snippets", &snips);
+                            }
                         }
-                        // Snippets ride the same fast path: delivered with the
-                        // clip list on the same tick the overlay becomes visible,
-                        // so the snippets tab is instantly populated (no invoke
-                        // round-trip, no loading flash).
-                        if let Ok(snips) = state.db.list_snippets() {
-                            let _ = window.app_handle().emit("overlay-snippets", &snips);
-                        }
-                    }
+                    });
                 }
             }
             _ => {}

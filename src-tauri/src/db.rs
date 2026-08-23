@@ -756,6 +756,53 @@ impl DbState {
         Ok(items)
     }
 
+    /// Fast path for the quick overlay: most recent N entries, no filters.
+    /// Used on the hotkey critical path so the first show is instant even with
+    /// a large history (avoids serializing 5000 rows).
+    pub fn get_overlay_entries(&self, limit: usize) -> Result<Vec<ClipItem>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let lim = (limit as i64).clamp(50, 1000);
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, content_type, title, text_content, rtf_content, html_content,
+                        image_path, image_width, image_height, file_paths, is_video, file_size,
+                        is_pinned, source_app, created_at, updated_at, qr_content, is_sensitive, expires_at, ocr_text
+                 FROM entries ORDER BY created_at DESC LIMIT ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![lim], |row| {
+                Ok(ClipItem {
+                    id: row.get(0)?,
+                    content_type: row.get(1)?,
+                    title: row.get(2)?,
+                    text_content: row.get(3)?,
+                    rtf_content: row.get(4)?,
+                    html_content: row.get(5)?,
+                    image_path: row.get(6)?,
+                    image_width: row.get(7)?,
+                    image_height: row.get(8)?,
+                    file_paths: row.get(9)?,
+                    is_video: row.get::<_, i32>(10)? == 1,
+                    file_size: row.get::<_, i64>(11)? as u64,
+                    is_pinned: row.get::<_, i32>(12)? == 1,
+                    source_app: row.get(13)?,
+                    created_at: row.get(14)?,
+                    updated_at: row.get(15)?,
+                    qr_content: row.get(16)?,
+                    is_sensitive: row.get::<_, i32>(17)? == 1,
+                    expires_at: row.get(18)?,
+                    ocr_text: row.get(19)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        let mut items = Vec::new();
+        for r in rows {
+            items.push(r.map_err(|e| e.to_string())?);
+        }
+        Ok(items)
+    }
+
     // --- Collections Methods ---
 
     pub fn list_collections(&self) -> Result<Vec<Collection>, String> {
@@ -1481,7 +1528,7 @@ impl DbState {
         let new_size = merged_text.len() as u64;
 
         conn.execute(
-            "UPDATE entries SET text_content = ?1, title = ?2, file_size = ?3, updated_at = datetime('now', 'localtime') WHERE id = ?4",
+            "UPDATE entries SET text_content = ?1, title = ?2, file_size = ?3, created_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime') WHERE id = ?4",
             params![merged_text, new_title, new_size as i64, id],
         )
         .map_err(|e| e.to_string())?;

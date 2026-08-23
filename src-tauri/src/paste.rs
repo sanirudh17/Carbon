@@ -90,11 +90,13 @@ pub fn capture_selection_snapshot() {
         return;
     }
 
-    // 2. Fallback: Ctrl+C injection
+    // 2. Fallback: Ctrl+C injection (rare — UIA already handles most apps instantly).
+    // Keep delay short so hotkey show path stays fast; 100ms is enough for the
+    // target to place the selection on the clipboard in practice.
     let before = read_clipboard_text();
     log_diag("[CAPTURE_SELECTION] Injecting Ctrl+C to grab selected text...");
     inject_ctrl_c();
-    thread::sleep(Duration::from_millis(150));
+    thread::sleep(Duration::from_millis(100));
     let after = read_clipboard_text().filter(|s| !s.trim().is_empty());
 
     if let (Some(new_sel), Some(pre)) = (&after, &before) {

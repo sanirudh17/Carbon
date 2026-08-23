@@ -62,6 +62,7 @@ export interface AppSettings {
   capture_rules: CaptureRule[];
   snippet_expansion_enabled: boolean;
   show_snippets: boolean;
+  dismissedUpdateVersion?: string;
 }
 
 export type ExpansionStatus = 'off' | 'not_yet_active' | 'active';
