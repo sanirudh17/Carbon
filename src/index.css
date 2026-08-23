@@ -727,17 +727,19 @@ input, textarea, select, button {
   display: block;
 }
 
-/* Theme-aware badge: both illustrations ship inside the one SVG; exactly one
-   is displayed based on the html[data-theme] attribute App.tsx maintains. */
-.carbon-badge-light {
+/* Theme-aware badge: both PNGs ship (dark+light); exactly one
+   is displayed based on the html[data-theme] attribute App.tsx maintains.
+   Specificity matches .brand .brand-mark.brand-badge .brand-badge-svg so
+   the theme toggle correctly overrides the default block display. */
+.brand .brand-mark.brand-badge .carbon-badge-light {
   display: none;
 }
 
-[data-theme='light'] .carbon-badge-dark {
+[data-theme='light'] .brand .brand-mark.brand-badge .carbon-badge-dark {
   display: none;
 }
 
-[data-theme='light'] .carbon-badge-light {
+[data-theme='light'] .brand .brand-mark.brand-badge .carbon-badge-light {
   display: block;
 }
 

@@ -1,5 +1,7 @@
 import React from 'react';
 import { ContentType } from '../types';
+import carbonBadgeDarkPng from '../assets/carbon-badge-dark.png';
+import carbonBadgeLightPng from '../assets/carbon-badge-light.png';
 
 export const SearchIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
@@ -452,9 +454,6 @@ export const CarbonMarkIcon: React.FC<{ className?: string }> = ({ className = '
 // via html[data-theme], so the icon swaps automatically when the user
 // switches theme — no React state needed. PNGs are the original Glint
 // exports (1.2–1.3 MB) at native resolution for crisp rendering.
-import carbonBadgeDarkPng from '../assets/carbon-badge-dark.png';
-import carbonBadgeLightPng from '../assets/carbon-badge-light.png';
-
 export const BrandBadgeIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
   <>
     <img
