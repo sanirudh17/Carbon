@@ -141,11 +141,19 @@ export const Dropdown: React.FC<{
     }
   };
 
-  // Keep the highlighted option visible while arrowing.
+  // Keep the highlighted option visible while arrowing (scroll ONLY the dropdown list, NEVER window/document).
   useEffect(() => {
     if (!open || !listRef.current) return;
-    const el = listRef.current.children[activeIdx] as HTMLElement | undefined;
-    el?.scrollIntoView({ block: 'nearest' });
+    const list = listRef.current;
+    const el = list.children[activeIdx] as HTMLElement | undefined;
+    if (!el) return;
+    const elTop = el.offsetTop;
+    const elBottom = elTop + el.offsetHeight;
+    if (elTop < list.scrollTop) {
+      list.scrollTop = elTop;
+    } else if (elBottom > list.scrollTop + list.clientHeight) {
+      list.scrollTop = elBottom - list.clientHeight;
+    }
   }, [activeIdx, open]);
 
   return (
@@ -158,6 +166,10 @@ export const Dropdown: React.FC<{
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={ariaLabel ?? title}
+        onMouseDown={(e) => {
+          // Prevent search input blur theft and unwanted focus scrolling
+          e.preventDefault();
+        }}
         onClick={() => (open ? setOpen(false) : openAndFocus())}
         onKeyDown={(e) => {
           if (!open && (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ')) {
@@ -192,6 +204,7 @@ export const Dropdown: React.FC<{
                 role="option"
                 aria-selected={opt.value === value}
                 className={`c-dropdown-item ${i === activeIdx ? 'active' : ''} ${opt.value === value ? 'selected' : ''}`}
+                onMouseDown={(e) => e.preventDefault()}
                 onMouseEnter={() => setActiveIdx(i)}
                 onClick={() => commit(opt.value)}
               >
