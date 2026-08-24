@@ -175,10 +175,15 @@ pub fn prewarm_windows(app: &AppHandle) {
 
     // Off-screen first-paint warm: show hidden windows with SW_SHOWNOACTIVATE
     // so WebView2 composites without stealing focus, then hide again.
+    // Uses Win32 SetWindowPos synchronously for the off-screen move — Tauri's
+    // set_position is async and could still flash at the centered position.
     #[cfg(windows)]
     {
         use windows::Win32::Foundation::HWND as WinHWND;
-        use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOWNOACTIVATE};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, ShowWindow, HWND_TOP, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
+            SWP_NOSIZE, SWP_NOZORDER,
+        };
         for label in ["overlay", "main"] {
             let Some(win) = app.get_webview_window(label) else {
                 continue;
@@ -189,26 +194,42 @@ pub fn prewarm_windows(app: &AppHandle) {
             let Ok(hwnd) = win.hwnd() else {
                 continue;
             };
-            let orig = win.outer_position().ok();
-            // Park off-screen so even SW_SHOWNOACTIVATE is not visible
-            let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                x: -32000,
-                y: -32000,
-            }));
             let h_raw: isize = hwnd.0 as isize;
             let h = WinHWND(h_raw as *mut _);
+            let orig = win.outer_position().ok();
             unsafe {
+                // Synchronously park off-screen so ShowWindow never flashes on-screen
+                let _ = SetWindowPos(
+                    h,
+                    HWND_TOP,
+                    -32000,
+                    -32000,
+                    0,
+                    0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                );
                 let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
             }
-            std::thread::sleep(std::time::Duration::from_millis(120));
+            // Give WebView2 time to composite the first frame (release bundle
+            // parsing is slower than dev server); 300ms per window ensures the
+            // surface is truly warm before hide so the next show is instant.
+            std::thread::sleep(std::time::Duration::from_millis(300));
             unsafe {
                 let _ = ShowWindow(h, SW_HIDE);
             }
             if let Some(p) = orig {
-                let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                    x: p.x,
-                    y: p.y,
-                }));
+                // Restore centered position synchronously as well
+                unsafe {
+                    let _ = SetWindowPos(
+                        h,
+                        HWND_TOP,
+                        p.x,
+                        p.y,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
+                }
             }
             crate::paste::log_diag(&format!("[PREWARM] Warmed '{}' first paint", label));
         }

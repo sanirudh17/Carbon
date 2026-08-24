@@ -2,6 +2,12 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
+## [0.1.3] — 2026-08-24
+
+### Fixed
+- **Release EXE shortcut latency** — first hotkey press after launch no longer takes 500ms: prewarm now waits for WebView2 navigation to finish (400ms delayed start) and gives each window 300ms to composite its first frame before hiding, so `show()` is truly instant.
+- **Translucent flash on launch** — the off-screen first-paint warm previously used Tauri's async `set_position`, which could still flash at the centered position for ~1s; now uses synchronous Win32 `SetWindowPos` to park at -32000,-32000 before `ShowWindow`, so the warm is invisible.
+
 ## [0.1.2] — 2026-08-23
 
 ### Fixed

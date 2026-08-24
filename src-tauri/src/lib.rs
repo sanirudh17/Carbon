@@ -1068,11 +1068,15 @@ pub fn run() {
             shortcuts::register(&app_handle);
 
             // Prewarm hidden windows & DB cache so first hotkey is instant.
-            // Windows stay warm for the whole app lifetime, so this runs once;
-            // every later open is a plain show() of a live webview.
+            // Windows stay warm for the whole app lifetime; every later open
+            // is a plain show() of a live webview. Delay slightly so WebView2
+            // has finished navigating to the built dist (release) before we
+            // force the off-screen first paint — an immediate call can run
+            // before the surface exists and leaves the first show cold (500ms).
             {
                 let handle = app_handle.clone();
                 std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(400));
                     hotkey::prewarm_windows(&handle);
                 });
             }
