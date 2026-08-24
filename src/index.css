@@ -4657,9 +4657,12 @@ section:last-child {
 /* List is portaled to <body> and positioned FIXED next to its trigger
    (inline style) so it can never grow a surrounding container's scroll area. */
 .c-dropdown-list {
-  position: fixed;
+  position: absolute;
+  top: calc(100% + 5px);
   z-index: 1400;
-  min-width: 150px;
+  min-width: 140px;
+  max-width: 280px;
+  max-height: 260px;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 4px;
@@ -4673,16 +4676,20 @@ section:last-child {
   animation: cDropdownIn 120ms var(--ease-out);
 }
 
+.c-dropdown-list.align-start,
+.c-dropdown-list.align-left,
 .c-dropdown-list.origin-left {
+  left: 0;
+  right: auto;
   transform-origin: top left;
 }
 
+.c-dropdown-list.align-end,
+.c-dropdown-list.align-right,
 .c-dropdown-list.origin-right {
+  right: 0;
+  left: auto;
   transform-origin: top right;
-}
-
-.c-dropdown-list.up {
-  transform-origin: center bottom;
 }
 
 @keyframes cDropdownIn {
