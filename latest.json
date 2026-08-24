@@ -1,0 +1,11 @@
+﻿{
+  "version": "0.1.5",
+  "notes": "## [0.1.5] — 2026-08-24\n\n### Fixed\n- **Instant hotkey toggle & zero-lag pop-in / pop-out** — `Ctrl+Shift+Z` and `Ctrl+Alt+X` now toggle (open & close) instantly without lag or typing into the search bar. Global hotkey handler in Rust checks window visibility directly to toggle instead of failing on child-HWND webview focus. Frontend keydown listener intercepts shortcuts on the capture phase with `e.preventDefault()`, preventing Chromium Redo/input events in the search bar.\n- **Removed 100ms synchronous hotkey delay** — `capture_selection_snapshot` uses non-blocking UIA directly, eliminating blocking simulated Ctrl+C / `thread::sleep(100ms)` from the hotkey invocation path.\n- **First-open instant (no 0.5s skeleton or empty-state flash)** — `Quick Overlay` and `Main` now show data instantly on cold launch: `prewarm_windows` snapshots `get_overlay_entries(250)` + `get_all_entries` into `OVERLAY_PREWARM_CACHE`/`MAIN_PREWARM_CACHE` at startup, pushes initial data directly into webviews via prewarm evaluation, and guarantees entries are populated on frame 0.\n- **Zero-flash theme, accent color, and preview layout** — Accent color and dark/light theme are restored synchronously from `localStorage` before DOM paint, eliminating default blue flash. Quick Overlay preview state initializes synchronously matching window dimensions, preventing preview squashing.",
+  "pub_date": "2026-08-24T12:25:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVROE8ycWd2aWV2MzlWOHU4RFNzQkZBcjB0aHZleWxWU2h0dlRVS0R2RHRKMllmRXVnYnZzWTJKeFZScnFOZHlpMzVjc1VxSW5LTlRFM1dUSzFmb1lGQ0tpdFBFb3gxZWdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3NTc0MTYyCWZpbGU6Q2FyYm9uXzAuMS41X3g2NC1zZXR1cC5leGUKNHRFaEFhbHlXL2VJY2cyeVYvcXNhUElWVndoZ29DSnlqQk84YmswaEY4bXNVTG5CbTU5SWhBRTNzUEl0d2xJajJoUWNpckNNL3AwbzVPcmlGaktxQXc9PQo=",
+      "url": "https://github.com/sanirudh17/Carbon/releases/download/v0.1.5/Carbon_0.1.5_x64-setup.exe"
+    }
+  }
+}
