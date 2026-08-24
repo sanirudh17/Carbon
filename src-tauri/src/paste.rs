@@ -71,59 +71,15 @@ pub fn capture_selection_snapshot() {
             log_diag("[CAPTURE_SELECTION] Foreground is Carbon itself — keeping the previous snapshot.");
             return;
         }
-        if is_terminal_window(fg) {
-            log_diag(
-                "[CAPTURE_SELECTION] Foreground is a terminal window — skipping Ctrl+C injection (SIGINT would cancel the user's input).",
-            );
-            *SELECTED_TEXT.lock().unwrap() = None;
-            return;
-        }
     }
 
-    // 1. Try UIA selection first (instant, non-destructive)
+    // Try UIA selection (instant, non-destructive, zero UI-thread latency)
     if let Some(uia_sel) = crate::expansion::try_get_uia_selection() {
         log_diag(&format!(
             "[CAPTURE_SELECTION] Captured {} chars via UIA.",
             uia_sel.chars().count()
         ));
         *SELECTED_TEXT.lock().unwrap() = Some(uia_sel);
-        return;
-    }
-
-    // 2. Fallback: Ctrl+C injection (rare — UIA already handles most apps instantly).
-    // Keep delay short so hotkey show path stays fast; 100ms is enough for the
-    // target to place the selection on the clipboard in practice.
-    let before = read_clipboard_text();
-    log_diag("[CAPTURE_SELECTION] Injecting Ctrl+C to grab selected text...");
-    inject_ctrl_c();
-    thread::sleep(Duration::from_millis(100));
-    let after = read_clipboard_text().filter(|s| !s.trim().is_empty());
-
-    if let (Some(new_sel), Some(pre)) = (&after, &before) {
-        if new_sel != pre {
-            *SELECTED_TEXT.lock().unwrap() = Some(new_sel.clone());
-            log_diag(&format!(
-                "[CAPTURE_SELECTION] Captured {} chars via Ctrl+C.",
-                new_sel.chars().count()
-            ));
-            let restore_item = build_text_clip_item(pre);
-            let _ = write_item_to_clipboard(&restore_item, true);
-            crate::clipboard_watcher::mark_paste(&restore_item);
-            log_diag("[CAPTURE_SELECTION] Restored previous clipboard contents.");
-        } else {
-            log_diag("[CAPTURE_SELECTION] Clipboard unchanged after Ctrl+C — no selection.");
-            *SELECTED_TEXT.lock().unwrap() = None;
-        }
-    } else if let Some(new_sel) = &after {
-        if before.is_none() {
-            *SELECTED_TEXT.lock().unwrap() = Some(new_sel.clone());
-            unsafe {
-                if open_clipboard_with_retry() {
-                    let _ = EmptyClipboard();
-                    let _ = CloseClipboard();
-                }
-            }
-        }
     } else {
         *SELECTED_TEXT.lock().unwrap() = None;
     }
@@ -131,6 +87,7 @@ pub fn capture_selection_snapshot() {
 
 /// True when `hwnd` belongs to a terminal emulator / console, by window
 /// class name or the owning process's executable name.
+#[allow(dead_code)]
 fn is_terminal_window(hwnd: HWND) -> bool {
     let mut class_buf = [0u16; 128];
     let class_len = unsafe { GetClassNameW(hwnd, &mut class_buf) };
@@ -182,6 +139,7 @@ fn is_terminal_window(hwnd: HWND) -> bool {
 }
 
 /// Reads the current CF_UNICODETEXT content of the clipboard, if any.
+#[allow(dead_code)]
 pub fn read_clipboard_text() -> Option<String> {
     unsafe {
         if !open_clipboard_with_retry() {
@@ -1909,6 +1867,7 @@ fn inject_ctrl_v() {
 
 /// Injects Ctrl+C into the currently focused window (releases held modifiers
 /// first, mirroring inject_ctrl_v). Used to snapshot `{selection}`.
+#[allow(dead_code)]
 fn inject_ctrl_c() {
     unsafe {
         let scan_ctrl = MapVirtualKeyW(VK_CONTROL.0 as u32, MAPVK_VK_TO_VSC) as u16;

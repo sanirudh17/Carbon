@@ -1085,7 +1085,7 @@ pub fn run() {
             // Global shortcuts (quick overlay + enlarged window) from settings.
             // Tolerant at startup: a genuinely claimed combo is logged and the
             // conflict is surfaced via the hotkey-status event.
-            shortcuts::register(&app_handle);
+            let _ = shortcuts::register(&app_handle);
 
             // Prewarm DB cache and ensure windows exist so first hotkey is
             // instant. Windows stay warm for the whole lifetime (hidden, never

@@ -6,6 +6,7 @@ import { ClipItem, Collection, DbStats, AppSettings, Snippet } from '../types';
 import { collectionColorFor, normalizeCollectionColor } from '../utils/collections';
 import { ClipPreview, ClipMetaStrip, getQrCopyLabel, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
 import { getActionsForClip, getPasteActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
+import { matchesHotkeyCombo } from '../utils/hotkeys';
 import { SnippetsView } from './SnippetsView';
 import {
   SearchIcon,
@@ -491,23 +492,45 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Show/hide Snippets section independent of expansion hook
+  const [hotkeys, setHotkeys] = useState<{ overlay: string; enlarged: string }>({ overlay: 'Ctrl+Shift+Z', enlarged: 'Ctrl+Alt+X' });
+
+  // Show/hide Snippets section & hotkeys sync
   useEffect(() => {
     const apply = (s: AppSettings) => {
-      if (typeof s.show_snippets === 'boolean') {
-        setShowSnippets(s.show_snippets);
-        if (!s.show_snippets) {
-          setViewMode((prev) => (prev === 'snippets' ? 'clips' : prev));
+      if (s) {
+        if (s.quick_hotkey || s.enlarged_hotkey) {
+          setHotkeys({
+            overlay: s.quick_hotkey || 'Ctrl+Shift+Z',
+            enlarged: s.enlarged_hotkey || 'Ctrl+Alt+X',
+          });
+        }
+        if (typeof s.show_snippets === 'boolean') {
+          setShowSnippets(s.show_snippets);
+          if (!s.show_snippets) {
+            setViewMode((prev) => (prev === 'snippets' ? 'clips' : prev));
+          }
         }
       }
     };
     invoke<AppSettings>('get_settings').then(apply).catch(() => {});
     let unlisten: (() => void) | undefined;
+    let unlistenStatus: (() => void) | undefined;
     listen<AppSettings>('settings-updated', (e) => apply(e.payload)).then((fn) => {
       unlisten = fn;
     });
+    listen<{ overlay?: string; enlarged?: string }>('hotkey-status', (e) => {
+      if (e.payload) {
+        setHotkeys({
+          overlay: e.payload.overlay || 'Ctrl+Shift+Z',
+          enlarged: e.payload.enlarged || 'Ctrl+Alt+X',
+        });
+      }
+    }).then((fn) => {
+      unlistenStatus = fn;
+    });
     return () => {
       unlisten?.();
+      unlistenStatus?.();
     };
   }, []);
 
@@ -1139,6 +1162,20 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent | KeyboardEvent) => {
+    // Global hotkey toggles (Ctrl+Alt+X hides enlarged, Ctrl+Shift+Z switches to overlay)
+    if (matchesHotkeyCombo(e, hotkeys.enlarged || 'Ctrl+Alt+X')) {
+      e.preventDefault();
+      e.stopPropagation();
+      invoke('hide_enlarged').catch(console.error);
+      return;
+    }
+    if (matchesHotkeyCombo(e, hotkeys.overlay || 'Ctrl+Shift+Z')) {
+      e.preventDefault();
+      e.stopPropagation();
+      invoke('toggle_overlay').catch(console.error);
+      return;
+    }
+
     // Snippets view owns its own keyboard handling.
     if (viewMode === 'snippets') return;
 
@@ -1298,9 +1335,9 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     const onGlobalKeyDown = (e: KeyboardEvent) => {
       handleKeyDownRef.current(e);
     };
-    window.addEventListener('keydown', onGlobalKeyDown);
+    window.addEventListener('keydown', onGlobalKeyDown, true);
     return () => {
-      window.removeEventListener('keydown', onGlobalKeyDown);
+      window.removeEventListener('keydown', onGlobalKeyDown, true);
     };
   }, []);
 

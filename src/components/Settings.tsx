@@ -8,21 +8,13 @@ import type { Update } from '@tauri-apps/plugin-updater';
 import { AppSettings, DbStats } from '../types';
 import { ChevronLeftIcon, SpinnerIcon, CheckIcon, AlertTriangleIcon, DeleteIcon } from './Icons';
 
+import { keyEventToCombo, normalizeCombo } from '../utils/hotkeys';
+
 interface SettingsProps {
   onBack: () => void;
   onThemeToggle: () => void;
   currentTheme: string;
 }
-
-// Canonical form for comparing hotkey combos regardless of modifier order or
-// casing: "shift+ctrl+x" and "Ctrl+Shift+X" compare equal.
-const normalizeCombo = (combo: string): string => {
-  const parts = combo.split('+').map((p) => p.trim()).filter(Boolean);
-  if (parts.length <= 1) return parts.join('').toLowerCase();
-  const key = parts[parts.length - 1].toLowerCase();
-  const mods = parts.slice(0, -1).map((m) => m.toLowerCase()).sort();
-  return [...mods, key].join('+');
-};
 
 const DEFAULT_HOTKEYS = {
   quick_hotkey: 'Ctrl+Shift+Z',
@@ -43,43 +35,6 @@ interface HotkeyStatusInfo {
   overlay_conflict: boolean;
   enlarged_conflict: boolean;
 }
-
-// Physical-key (e.code) → display token for non-alphanumeric keys.
-const CODE_KEY: Record<string, string> = {
-  Minus: '-', Equal: '=', Comma: ',', Period: '.', Slash: '/', Backslash: '\\',
-  Semicolon: ';', Quote: "'", BracketLeft: '[', BracketRight: ']', Backquote: '`',
-  Space: 'Space', Tab: 'Tab', Enter: 'Enter',
-  ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
-};
-
-// Convert a KeyboardEvent into a Carbon combo string using e.code — the
-// PHYSICAL key — rather than e.key. With Ctrl+Alt held (AltGr on many
-// layouts) e.key can turn into a different character or symbol, which is why
-// Ctrl+Alt combos previously failed to record; e.code is layout-independent
-// and always identifies the key that was pressed. On Windows, Ctrl+Alt is
-// delivered as AltGr for keys that have an AltGr character on the active
-// layout (e.g. M→µ, N→ñ, I→í): the event reports ctrlKey=false/altKey=false
-// but AltGraph=true. We mirror Typr's proven fix and treat AltGraph as its
-// physical components — Ctrl+Alt — so every Ctrl+Alt+letter captures.
-const keyEventToCombo = (e: KeyboardEvent): string | null => {
-  const altGraph = (e as KeyboardEvent).getModifierState?.('AltGraph') ?? false;
-  const mods: string[] = [];
-  if (e.ctrlKey || altGraph) mods.push('Ctrl');
-  if (e.altKey || altGraph) mods.push('Alt');
-  if (e.shiftKey) mods.push('Shift');
-  if (e.metaKey) mods.push('Win');
-
-  const code = e.code;
-  let key: string | null = null;
-  if (/^Key[A-Z]$/.test(code)) key = code.slice(3);
-  else if (/^Digit[0-9]$/.test(code)) key = code.slice(5);
-  else if (/^Numpad[0-9]$/.test(code)) key = code.slice(6);
-  else if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) key = code;
-  else if (code in CODE_KEY) key = CODE_KEY[code];
-  if (!key || mods.length === 0) return null;
-
-  return [...mods, key].join('+');
-};
 
 
 const ACCENT_SWATCHES = [

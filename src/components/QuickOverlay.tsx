@@ -5,6 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ClipItem, HotkeyStatus, AppSettings, Collection, Snippet } from '../types';
 import { ClipPreview, ClipMetaStrip, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
 import { getActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
+import { matchesHotkeyCombo } from '../utils/hotkeys';
 import { collectionColorFor, normalizeCollectionColor } from '../utils/collections';
 import {
   filterSnippets,
@@ -983,6 +984,18 @@ export const QuickOverlay: React.FC = () => {
       }
     }
 
+    // Global hotkey toggles (Ctrl+Shift+Z hides overlay, Ctrl+Alt+X toggles enlarged)
+    if (matchesHotkeyCombo(e, hotkeyStatus?.overlay || 'Ctrl+Shift+Z')) {
+      e.preventDefault();
+      invoke('hide_overlay').catch(console.error);
+      return;
+    }
+    if (matchesHotkeyCombo(e, hotkeyStatus?.enlarged || 'Ctrl+Alt+X')) {
+      e.preventDefault();
+      invoke('toggle_enlarged').catch(console.error);
+      return;
+    }
+
     // Escape always hides overlay
     if (e.key === 'Escape') {
       e.preventDefault();
@@ -1084,6 +1097,24 @@ export const QuickOverlay: React.FC = () => {
     // list navigation, paste/copy) — clips shortcuts never apply there.
     if (tabRef.current === 'snippets') {
       handleSnippetKeyDown(e);
+      return;
+    }
+
+    // Global hotkey toggles (Ctrl+Shift+Z hides overlay, Ctrl+Alt+X toggles enlarged)
+    // Checked before search/input handling so pressing hotkeys inside the search input
+    // instantly toggles/hides without triggering browser Redo or typing!
+    if (matchesHotkeyCombo(e, hotkeyStatus?.overlay || 'Ctrl+Shift+Z')) {
+      e.preventDefault();
+      e.stopPropagation();
+      logClient('Overlay toggle hotkey pressed inside overlay webview, invoking hide_overlay');
+      invoke('hide_overlay').catch(console.error);
+      return;
+    }
+    if (matchesHotkeyCombo(e, hotkeyStatus?.enlarged || 'Ctrl+Alt+X')) {
+      e.preventDefault();
+      e.stopPropagation();
+      logClient('Enlarged toggle hotkey pressed inside overlay webview, invoking toggle_enlarged');
+      invoke('toggle_enlarged').catch(console.error);
       return;
     }
 
@@ -1284,9 +1315,9 @@ export const QuickOverlay: React.FC = () => {
     const onGlobalKeyDown = (e: KeyboardEvent) => {
       handleKeyDownRef.current(e);
     };
-    window.addEventListener('keydown', onGlobalKeyDown);
+    window.addEventListener('keydown', onGlobalKeyDown, true);
     return () => {
-      window.removeEventListener('keydown', onGlobalKeyDown);
+      window.removeEventListener('keydown', onGlobalKeyDown, true);
     };
   }, []);
 

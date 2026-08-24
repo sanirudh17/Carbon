@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
@@ -221,14 +221,13 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
         }
     };
     let is_visible = overlay_win.is_visible().unwrap_or(false);
-    let is_focused = overlay_win.is_focused().unwrap_or(false);
     crate::paste::log_diag(&format!(
-        "[HOTKEY] Overlay state: is_visible={}, is_focused={}",
-        is_visible, is_focused
+        "[HOTKEY] Overlay state: is_visible={}",
+        is_visible
     ));
 
-    if is_visible && is_focused {
-        crate::paste::log_diag("[HOTKEY] Overlay is visible+focused. Calling hide_overlay_window...");
+    if is_visible {
+        crate::paste::log_diag("[HOTKEY] Overlay is visible. Calling hide_overlay_window (toggle)...");
         hide_overlay_window(app_handle);
         return;
     }
@@ -316,8 +315,7 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
         }
     };
     let is_visible = main_win.is_visible().unwrap_or(false);
-    let is_focused = main_win.is_focused().unwrap_or(false);
-    if is_visible && is_focused {
+    if is_visible {
         restore_target_window();
         // Always hide, never close (windows stay warm for instant reopen).
         let _ = main_win.hide();
