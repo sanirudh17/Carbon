@@ -2,6 +2,13 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
+## [0.1.4] — 2026-08-24
+
+### Fixed
+- **Updater banner UX** — banner is now **auto-check only** (hidden in Settings where manual “Check for latest updates” owns the UI), so manual check never shows the popup; Later dismissal persists via `dismissedUpdateVersion` until the next version.
+- **Updater banner design** — redesigned to minimal surface aesthetic: hairline `var(--line-soft)` border, `var(--surface)` bg, 7px accent dot with soft ring, pill buttons, 2px bottom progress, `180ms var(--ease-out)` — matches app dark/light tokens.
+- **Manual update check is instant** — lightweight `fetch(latest.json)` + semver compare returns “You are on the latest version.” immediately when no newer version, only calling full `check()` when an update is hinted (mirrors Typr/Glint perceived speed).
+
 ## [0.1.3] — 2026-08-24
 
 ### Fixed
