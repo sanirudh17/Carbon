@@ -646,9 +646,7 @@ export const QuickOverlay: React.FC = () => {
       setSnActionOpen(false);
       setSnActionIndex(0);
       loadTargetApp();
-      // Data arrives via Rust's `overlay-data` push (prewarm cache, instant)
-      // — no invoke here, so the first frame never shows a 500ms skeleton.
-      // Snippets still refresh in background for the snippets tab.
+      fetchItems();
       fetchSnippets();
       // Always open on the user's chosen default tab (Behavior -> "Overlay opens on")
       // so the overlay reliably shows the expected first tab on every summon.
@@ -696,10 +694,7 @@ export const QuickOverlay: React.FC = () => {
     const onWindowFocus = () => {
       logClient('Webview onWindowFocus event.');
       loadTargetApp();
-      // No fetchLatest here — the overlay's list is kept live via
-      // `clipboard-updated` + `overlay-data` pushes from Rust (instant
-      // prewarm cache). A fetch on every focus caused the 500ms skeleton
-      // you saw in the downloaded build.
+      fetchItems();
       focusSearchInput();
     };
 

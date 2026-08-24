@@ -71,12 +71,16 @@ async fn get_all_clips(
             return Ok(cached);
         }
     }
-    state.db.get_all_entries(
+    let res = state.db.get_all_entries(
         search.as_deref(),
         category.as_deref(),
         pinned_only.unwrap_or(false),
         collection_id.as_deref(),
-    )
+    )?;
+    if is_unfiltered {
+        *crate::hotkey::MAIN_PREWARM_CACHE.lock().unwrap() = Some(res.clone());
+    }
+    Ok(res)
 }
 
 #[tauri::command]

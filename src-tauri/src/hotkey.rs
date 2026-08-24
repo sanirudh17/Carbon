@@ -153,35 +153,16 @@ pub(crate) static MAIN_PREWARM_CACHE: std::sync::Mutex<Option<Vec<crate::db::Cli
 
 pub fn prewarm_windows(app: &AppHandle) {
     crate::paste::log_diag("[PREWARM] Starting window & DB prewarm");
-    // Warm DB cache and snapshot the first 250 overlay rows so the very
-    // first hotkey can show data with zero DB wait (no 500ms skeleton).
+    // Warm DB cache and snapshot immediately so first hotkey has instant data
     if let Some(state) = app.try_state::<crate::AppState>() {
-        let db_clone = state.db.clone();
-        let db_for_cache = state.db.clone();
-        std::thread::spawn(move || {
-            // Snapshot for instant first show — stored for handle_overlay_hotkey
-            if let Ok(entries) = db_for_cache.get_overlay_entries(250) {
-                *OVERLAY_PREWARM_CACHE.lock().unwrap() = Some(entries.clone());
-                // Also warm snippets for the snippets tab
-                let _ = db_for_cache.list_snippets();
-                crate::paste::log_diag("[PREWARM] Overlay DB cache + snapshot warmed");
-            } else {
-                let _ = db_clone.get_overlay_entries(250);
-                let _ = db_clone.list_snippets();
-                crate::paste::log_diag("[PREWARM] Overlay DB cache warmed");
-            }
-        });
-        let db_clone2 = state.db.clone();
-        std::thread::spawn(move || {
-            // Warm full history immediately (no 800ms delay) so the first
-            // main-window open (get_all_clips unfiltered) is instant like
-            // the overlay — previously the 800ms sleep meant the first
-            // `Enlarged` open within 800ms of launch hit a cold DB (500ms).
-            if let Ok(all) = db_clone2.get_all_entries(None, None, false, None) {
-                *MAIN_PREWARM_CACHE.lock().unwrap() = Some(all);
-            }
-            crate::paste::log_diag("[PREWARM] Full DB cache warmed");
-        });
+        if let Ok(entries) = state.db.get_overlay_entries(250) {
+            *OVERLAY_PREWARM_CACHE.lock().unwrap() = Some(entries);
+        }
+        if let Ok(all) = state.db.get_all_entries(None, None, false, None) {
+            *MAIN_PREWARM_CACHE.lock().unwrap() = Some(all);
+        }
+        let _ = state.db.list_snippets();
+        crate::paste::log_diag("[PREWARM] DB cache warmed synchronously");
     }
     // Ensure windows exist so the first hotkey's WebView is already created.
     let _ = ensure_overlay_window(app);
@@ -283,9 +264,20 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     // If a prewarm snapshot exists, push it *with* the open so the first
     // frame already has data — zero skeleton time like Pico's instant open.
     let _ = app_handle.emit("overlay-opened", ());
-    if let Some(cached) = OVERLAY_PREWARM_CACHE.lock().unwrap().clone() {
+    let cached_opt = {
+        let mut cache = OVERLAY_PREWARM_CACHE.lock().unwrap();
+        if cache.is_none() {
+            if let Some(state) = app_handle.try_state::<crate::AppState>() {
+                if let Ok(entries) = state.db.get_overlay_entries(250) {
+                    *cache = Some(entries);
+                }
+            }
+        }
+        cache.clone()
+    };
+    if let Some(cached) = cached_opt {
         let _ = app_handle.emit("overlay-data", &cached);
-        crate::paste::log_diag("[HOTKEY] overlay-data served from prewarm cache (instant)");
+        crate::paste::log_diag("[HOTKEY] overlay-data served (instant)");
     }
 
     let app_clone = app_handle.clone();
