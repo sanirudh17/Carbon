@@ -4653,6 +4653,7 @@ section:last-child {
 /* List is portaled to <body> and positioned FIXED next to its trigger
    (inline style) so it can never grow a surrounding container's scroll area. */
 .c-dropdown-list {
+  position: fixed;
   z-index: 1400;
   min-width: 150px;
   overflow-y: auto;
@@ -4788,6 +4789,7 @@ section:last-child {
 /* Reference panel — portaled to <body>, FIXED-anchored to the help button.
    Only this panel scrolls; it can never grow the modal's scroll area. */
 .sn-help-pop {
+  position: fixed;
   z-index: 1450;
   padding: 12px 14px;
   border-radius: var(--r-panel);

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { Snippet } from '../types';
@@ -161,7 +161,7 @@ export const SnippetEditorModal: React.FC<{
   const highlighted = useMemo(() => highlightSnippetTokens(draftContent), [draftContent]);
 
   /** Anchor the reference panel to the help button; only the panel scrolls. */
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!helpOpen) return;
     const place = () => {
       const el = helpBtnRef.current;

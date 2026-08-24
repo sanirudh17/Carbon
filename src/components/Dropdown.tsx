@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { CheckIcon, ChevronDownIcon } from './Icons';
 
@@ -26,7 +26,7 @@ export const Dropdown: React.FC<{
 }> = ({ value, onChange, options, className = '', title, align = 'start', ariaLabel }) => {
   const [open, setOpen] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
-  const [pos, setPos] = useState<React.CSSProperties>({});
+  const [pos, setPos] = useState<React.CSSProperties>({ position: 'fixed' });
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -65,7 +65,7 @@ export const Dropdown: React.FC<{
     setPos(style);
   }, [align, options.length]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
     place();
     // Any ancestor scroll would detach the anchor → close instead of chasing.
@@ -84,7 +84,7 @@ export const Dropdown: React.FC<{
   }, [open, place]);
 
   // Outside click closes; must account for the portaled list node.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
     const onDocDown = (e: MouseEvent) => {
       const t = e.target as Node;
@@ -95,6 +95,7 @@ export const Dropdown: React.FC<{
   }, [open]);
 
   const openAndFocus = () => {
+    place();
     setActiveIdx(Math.max(0, options.findIndex((o) => o.value === value)));
     setOpen(true);
   };
