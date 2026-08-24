@@ -45,7 +45,6 @@ export interface AppSettings {
   enlarged_hotkey: string;
   paste_plain_text: boolean;
   move_to_top_on_paste: boolean;
-  keep_window_warm: boolean;
   start_with_windows: boolean;
   retention_days: number;
   max_entries: number;

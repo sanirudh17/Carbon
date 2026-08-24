@@ -6,7 +6,7 @@ import { relaunch } from '@tauri-apps/plugin-process';
 import { getVersion } from '@tauri-apps/api/app';
 import type { Update } from '@tauri-apps/plugin-updater';
 import { AppSettings, DbStats } from '../types';
-import { ChevronLeftIcon, SpinnerIcon, CheckIcon, AlertTriangleIcon } from './Icons';
+import { ChevronLeftIcon, SpinnerIcon, CheckIcon, AlertTriangleIcon, DeleteIcon } from './Icons';
 
 interface SettingsProps {
   onBack: () => void;
@@ -97,7 +97,6 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     enlarged_hotkey: 'Ctrl+Alt+X',
     paste_plain_text: false,
     move_to_top_on_paste: true,
-    keep_window_warm: true,
     start_with_windows: true,
     retention_days: 30,
     max_entries: 5000,
@@ -156,6 +155,9 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   const committedRef = useRef(false);
   const clipMergeDebounceRef = useRef<number | null>(null);
   const clipMergePendingRef = useRef<number | null>(null);
+  // Serializes fire-and-forget settings saves so rapid toggle clicks persist
+  // in order (see updateSetting).
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   // Ref mirror of settings so Tauri event listeners (registered once) always
   // see the latest hotkey values without re-subscribing on every keystroke,
   // which would otherwise drop events mid-flight and lose conflict banners.
@@ -168,6 +170,8 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   }, []);
 
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  // Destructive-action confirmation (Clear history) — replaces window.confirm.
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   const showToast = (type: 'success' | 'error' | 'info', message: string, duration = 4000) => {
     setToast({ type, message });
     setTimeout(() => {
@@ -438,23 +442,35 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       applyAccentColor(value as string);
     }
 
+    // Hotkeys must await the save: the backend atomically swaps both global
+    // shortcuts and reports conflicts that we surface inline. Everything else
+    // persists in the background so toggles flip instantly no matter how much
+    // work save_settings does (trim, window close/recreate, autostart…).
+    // Background saves are serialized through a promise chain so rapid
+    // consecutive toggles persist in call order (last toggle always wins).
+    const isHotkey = key === 'quick_hotkey' || key === 'enlarged_hotkey';
+    if (!isHotkey) {
+      saveQueueRef.current = saveQueueRef.current
+        .then(() => invoke('save_settings', { newSettings: updated }))
+        .then(() => undefined)
+        .catch((err) => {
+          console.error('Failed to auto-save setting:', err);
+          showToast('error', `Could not save: ${String(err)}`, 6000);
+        });
+      return;
+    }
+
     try {
       await invoke('save_settings', { newSettings: updated });
-      if (key === 'quick_hotkey' || key === 'enlarged_hotkey') {
-        setHotkeyError(null);
-      }
+      setHotkeyError(null);
     } catch (err) {
       console.error('Failed to auto-save setting:', err);
       const msg = String(err);
-      if (key === 'quick_hotkey' || key === 'enlarged_hotkey') {
-        setHotkeyError({
-          field: key === 'quick_hotkey' ? 'quick' : 'enlarged',
-          message: msg,
-        });
-        showToast('error', msg, 8000);
-      } else {
-        showToast('error', msg, 6000);
-      }
+      setHotkeyError({
+        field: key === 'quick_hotkey' ? 'quick' : 'enlarged',
+        message: msg,
+      });
+      showToast('error', msg, 8000);
       fetchSettings();
     }
   };
@@ -467,13 +483,14 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   };
 
   const handleClearHistory = async () => {
-    if (window.confirm('Are you sure you want to clear all unpinned clipboard items?')) {
-      try {
-        await invoke('clear_history');
-        fetchStats();
-      } catch (err) {
-        console.error('Failed to clear history:', err);
-      }
+    setShowClearConfirm(false);
+    try {
+      await invoke('clear_history');
+      fetchStats();
+      showToast('success', 'Cleared all unpinned clipboard items.');
+    } catch (err) {
+      console.error('Failed to clear history:', err);
+      showToast('error', 'Failed to clear history.', 6000);
     }
   };
 
@@ -782,21 +799,6 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                   Snippets
                 </button>
               </div>
-            </div>
-          </div>
-
-          <div className="set-row">
-            <div className="set-label">
-              Keep window warm
-              <div className="set-hint">Overlay stays in memory for instant summon.</div>
-            </div>
-            <div className="set-control">
-              <button
-                className={`toggle ${settings.keep_window_warm ? 'on' : ''}`}
-                onClick={() => updateSetting('keep_window_warm', !settings.keep_window_warm)}
-              >
-                <span className="knob" />
-              </button>
             </div>
           </div>
 
@@ -1245,7 +1247,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               <div className="set-hint">Deletes all non-pinned entries</div>
             </div>
             <div className="set-control">
-              <button className="btn danger" onClick={handleClearHistory}>
+              <button className="btn danger" onClick={() => setShowClearConfirm(true)}>
                 Clear
               </button>
             </div>
@@ -1501,6 +1503,39 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
             <div className="modal-footer" style={{ padding: '12px 18px' }}>
               <button className="btn subtle" onClick={() => setShowExpansionConsent(false)}>Cancel</button>
               <button className="btn primary" onClick={confirmEnableExpansion}>Enable Expansion</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showClearConfirm && (
+        <div className="modal-backdrop" onClick={() => setShowClearConfirm(false)}>
+          <div
+            className="modal-card delete-col-modal"
+            onClick={(e) => e.stopPropagation()}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="clear-history-title"
+          >
+            <div className="modal-header">
+              <span className="modal-head-icon modal-head-danger"><DeleteIcon /></span>
+              <span className="modal-title" id="clear-history-title">Clear history?</span>
+              <button className="modal-close-btn" onClick={() => setShowClearConfirm(false)} aria-label="Cancel">✕</button>
+            </div>
+            <div className="modal-body">
+              <p className="modal-desc">
+                This permanently deletes <b>all unpinned clipboard items</b> from this machine. Pinned items and snippets are kept.
+              </p>
+              <p className="modal-desc" style={{ color: 'var(--danger)', fontWeight: 500 }}>
+                This action cannot be undone.
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn subtle" onClick={() => setShowClearConfirm(false)} autoFocus>
+                Cancel
+              </button>
+              <button type="button" className="btn danger-solid" onClick={handleClearHistory}>
+                Delete history
+              </button>
             </div>
           </div>
         </div>

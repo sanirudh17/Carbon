@@ -37,9 +37,27 @@ pub struct ClipboardWatcher {
     pub paused: Arc<AtomicBool>,
 }
 
-static LAST_CONTENT_HASH: Mutex<Option<u64>> = Mutex::new(None);
 static LAST_CAPTURED_CLIP: Mutex<Option<(String, u64, String)>> = Mutex::new(None);
 static RETRY_STATE: Mutex<(u64, u32)> = Mutex::new((0, 0));
+/// (content hash, last-processed timestamp) of the most recent capture. Used to
+/// collapse the burst of identical WM_CLIPBOARDUPDATE notifications that a single
+/// clipboard write generates (each SetClipboardData can bump the sequence number),
+/// so one external copy is captured exactly once. A genuinely later re-copy of the
+/// same text falls outside the burst window and is processed normally.
+static LAST_PROCESSED_HASH: Mutex<Option<(u64, u64)>> = Mutex::new(None);
+
+/// Identical clipboard notifications closer together than this are treated as one
+/// logical copy (the burst from a single clipboard write can span a second when a
+/// lazy clipboard owner supplies formats over time). A genuine human re-copy of the
+/// same text is always far slower, so it still reaches ClipMerge / fresh-copy.
+const CLIP_BURST_MS: u64 = 1000;
+
+/// Pure predicate: should an identical-content notification arriving at `now`
+/// (last identical one handled at `last_ts`) be suppressed as the same logical
+/// clipboard write? True when it falls within `window_ms`.
+fn should_suppress_burst(now: u64, last_ts: u64, window_ms: u64) -> bool {
+    now.saturating_sub(last_ts) <= window_ms
+}
 
 pub fn strip_url_tracking_parameters(input: &str) -> String {
     let trimmed = input.trim();
@@ -584,40 +602,45 @@ fn process_clipboard_change(
         // D. Insert into DB if new & not a duplicate (or our own paste)
         if let Some(mut new_item) = item {
             let own_paste = is_own_paste(&new_item);
-            let hash = compute_item_hash(&new_item);
-            let mut last_hash = LAST_CONTENT_HASH.lock().unwrap();
             if own_paste {
-                // Carbon's own clipboard write: acknowledge it so the next
-                // identical external copy is deduped, but don't insert.
-                *last_hash = Some(hash);
-            } else if *last_hash != Some(hash) {
-                *last_hash = Some(hash);
+                // Carbon's own clipboard write: acknowledge it, don't re-capture.
+            } else {
+                // An external copy is ALWAYS considered, even an identical repeat:
+                // a repeat is precisely the trigger for ClipMerge (append) and, with
+                // ClipMerge off, for a fresh copy at the top. The old hash gate skipped
+                // identical content entirely, which is why re-copying "just moved" the
+                // existing clip (or did nothing) instead of appending.
 
+                // A single clipboard write can fire a BURST of identical
+                // WM_CLIPBOARDUPDATE notifications (each SetClipboardData can bump
+                // the sequence number). Deduplicate by content, sliding the window
+                // on each suppressed event so slowly-dripping identical notifications
+                // still collapse into exactly one capture.
                 let now = now_ms();
-                let mut handled = false;
-
-                // 1. Exact duplicate -> bump and never merge (prevents duplicate tail).
-                //    Must run before ClipMerge so copying the same text twice doesn't create "A\nA".
-                if let Ok(Some(existing_bumped)) = db_state.find_and_bump_duplicate(&new_item) {
-                    if let (Some(ref new_p), Some(ref exist_p)) = (&new_item.image_path, &existing_bumped.image_path) {
-                        if new_p != exist_p {
-                            let _ = fs::remove_file(new_p);
+                let new_hash = compute_item_hash(&new_item);
+                {
+                    let mut last_proc = LAST_PROCESSED_HASH.lock().unwrap();
+                    if let Some((last_hash, last_ts)) = *last_proc {
+                        if last_hash == new_hash && should_suppress_burst(now, last_ts, CLIP_BURST_MS) {
+                            *last_proc = Some((new_hash, now)); // slide the burst window
+                            return true;
                         }
                     }
-                    let _ = db_state.trim_history(settings.retention_days, settings.max_entries);
-                    *LAST_CAPTURED_CLIP.lock().unwrap() =
-                        Some((existing_bumped.id.clone(), now, existing_bumped.content_type.clone()));
-                    let _ = app_handle.emit("clipboard-updated", &existing_bumped);
-                    handled = true;
+                    *last_proc = Some((new_hash, now));
                 }
 
-                // 2. ClipMerge: rapid successive text copies within window append to top clip.
-                if !handled
-                    && settings.clip_merge_enabled
+                let mut handled = false;
+
+                // 1. ClipMerge first: rapid successive text/code/link copies within the
+                //    window append to the last-captured clip. Identical repeats therefore
+                //    concatenate (A + A -> "A\nA"); different repeats build up one clip.
+                //    Runs before any duplicate handling so a repeat can never be mistaken
+                //    for a mere move.
+                let mergeable = settings.clip_merge_enabled
                     && (new_item.content_type == "text"
                         || new_item.content_type == "code"
-                        || new_item.content_type == "link")
-                {
+                        || new_item.content_type == "link");
+                if mergeable {
                     let last_cap = LAST_CAPTURED_CLIP.lock().unwrap().clone();
                     if let Some((ref last_id, last_ts, ref last_type)) = last_cap {
                         if now.saturating_sub(last_ts) <= settings.clip_merge_window_ms
@@ -637,6 +660,26 @@ fn process_clipboard_change(
                     }
                 }
 
+                // 2. Dedup only while ClipMerge is enabled (i.e. the same content repeated
+                //    OUTSIDE the merge window) -> move the existing entry to the top so we
+                //    never spawn a duplicate tail. With ClipMerge OFF a re-copy means the
+                //    user wants a fresh entry, so we must NOT move - we fall through to insert.
+                if settings.clip_merge_enabled && !handled {
+                    if let Ok(Some(existing_bumped)) = db_state.find_and_bump_duplicate(&new_item) {
+                        if let (Some(ref new_p), Some(ref exist_p)) = (&new_item.image_path, &existing_bumped.image_path) {
+                            if new_p != exist_p {
+                                let _ = fs::remove_file(new_p);
+                            }
+                        }
+                        let _ = db_state.trim_history(settings.retention_days, settings.max_entries);
+                        *LAST_CAPTURED_CLIP.lock().unwrap() =
+                            Some((existing_bumped.id.clone(), now, existing_bumped.content_type.clone()));
+                        let _ = app_handle.emit("clipboard-updated", &existing_bumped);
+                        handled = true;
+                    }
+                }
+
+                // 3. Otherwise insert a new clip at the top (fresh copy).
                 if !handled {
                     if db_state.insert_entry(&mut new_item).is_ok() {
                         let _ = db_state.trim_history(settings.retention_days, settings.max_entries);
@@ -1165,6 +1208,17 @@ mod tests {
 
         let non_url = "Just some random text with utm_source=123";
         assert_eq!(strip_url_tracking_parameters(non_url), non_url);
+    }
+
+    #[test]
+    fn test_burst_dedup_collapses_identical_repeat_within_window() {
+        // A single clipboard write can fire several identical WM_CLIPBOARDUPDATE
+        // notifications. The gate must suppress an identical repeat arriving within
+        // CLIP_BURST_MS while allowing a genuinely later re-copy.
+        assert!(should_suppress_burst(100, 50, CLIP_BURST_MS));      // 50ms later: suppress
+        assert!(should_suppress_burst(50, 50, CLIP_BURST_MS));       // same ms: suppress
+        assert!(!should_suppress_burst(2000, 50, CLIP_BURST_MS));    // 1950ms later: allow
+        assert!(should_suppress_burst(100, 50, 1000));               // generic large window
     }
 }
 

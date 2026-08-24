@@ -49,9 +49,17 @@ pub struct AppSettings {
     pub quick_hotkey: String,
     pub enlarged_hotkey: String,
     pub paste_plain_text: bool,
+    /// Move-to-top for Carbon-initiated actions only: when the user pastes or
+    /// copies a clip from Carbon (paste button, paste queue, right-click copy),
+    /// move that entry to the top of history. It does NOT affect external
+    /// Ctrl+C captures — those are governed by `clip_merge_enabled`. The two
+    /// settings are complementary: this one decides whether a Carbon action
+    /// relocates the existing entry; ClipMerge decides what an external repeat
+    /// copy does (append within the window, fresh copy otherwise).
     pub move_to_top_on_paste: bool,
-    #[serde(default = "default_true")]
-    pub keep_window_warm: bool,
+    // `keep_window_warm` was removed: windows are always kept warm (hidden,
+    // never destroyed) for instant open/close. Older settings.json files may
+    // still carry the key — serde ignores unknown fields.
     #[serde(default = "default_true")]
     pub start_with_windows: bool,
     pub retention_days: u32,
@@ -69,7 +77,12 @@ pub struct AppSettings {
     /// Whether sensitive data detection and auto-expiry is enabled.
     #[serde(default = "default_false")]
     pub detect_sensitive_data: bool,
-    /// Whether ClipMerge (append-on-repeat-copy within a time window) is enabled.
+    /// ClipMerge: when enabled, external Ctrl+C repeats of text/code/link within
+    /// the time window are APPENDED to the last-captured clip (A+A -> "A\nA")
+    /// instead of creating a new entry or moving the old one. When disabled,
+    /// every external copy inserts a fresh clip (identical re-copies create a
+    /// new entry rather than relocating the previous one). This governs external
+    /// captures only; `move_to_top_on_paste` governs Carbon's own paste/copy.
     #[serde(default = "default_false")]
     pub clip_merge_enabled: bool,
     /// Time window in milliseconds to trigger ClipMerge (e.g. 2500ms).
@@ -125,7 +138,6 @@ impl Default for AppSettings {
             enlarged_hotkey: "Ctrl+Alt+X".to_string(),
             paste_plain_text: false,
             move_to_top_on_paste: true,
-            keep_window_warm: true,
             start_with_windows: true,
             retention_days: 30,
             max_entries: 5000,

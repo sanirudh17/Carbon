@@ -212,7 +212,7 @@ Settings, history, and snippets are stored as JSON/SQLite in your user config di
 └── media/             # image files for image clips
 ```
 
-Clipboard watcher and `HistoryManager` trim history hourly and on save according to `retention_days` (0 = keep forever) and `max_entries` (oldest unpinned first). `keep_window_warm` controls whether overlay/library `hide()` vs `close()` (free memory).
+Clipboard watcher and `HistoryManager` trim history hourly and on save according to `retention_days` (0 = keep forever) and `max_entries` (oldest unpinned first). App windows stay warm in memory (hidden, never destroyed) so hotkey open/close is instant.
 
 ## Privacy
 

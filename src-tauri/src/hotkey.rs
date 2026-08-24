@@ -26,19 +26,14 @@ pub fn set_recording_target(target: Option<String>) {
     *RECORDING_TARGET.lock().unwrap() = target;
 }
 
-fn should_keep_warm(app: &AppHandle) -> bool {
-    app.try_state::<crate::AppState>()
-        .map(|s| s.settings.get().keep_window_warm)
-        .unwrap_or(true)
-}
-
 fn ensure_overlay_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     if let Some(win) = app.get_webview_window("overlay") {
         return Some(win);
     }
-    crate::paste::log_diag(
-        "[HOTKEY] Overlay window not found — recreating (keep_window_warm=false).",
-    );
+    // Windows stay warm for the whole app lifetime, so hitting this means
+    // something destroyed the window unexpectedly (e.g. first launch before
+    // prewarm). Recreate from config as a safety net.
+    crate::paste::log_diag("[HOTKEY] Overlay window not found — recreating (safety net).");
     if let Some(cfg) = app
         .config()
         .app
@@ -97,9 +92,7 @@ fn ensure_main_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     if let Some(win) = app.get_webview_window("main") {
         return Some(win);
     }
-    crate::paste::log_diag(
-        "[HOTKEY] Main window not found — recreating (keep_window_warm=false).",
-    );
+    crate::paste::log_diag("[HOTKEY] Main window not found — recreating (safety net).");
     if let Some(cfg) = app
         .config()
         .app
@@ -174,7 +167,9 @@ pub fn prewarm_windows(app: &AppHandle) {
             crate::paste::log_diag("[PREWARM] Full DB cache warmed");
         });
     }
-    // Ensure windows exist (creates them if keep_window_warm=false destroyed them)
+    // Ensure windows exist and have presented one frame off-screen so the
+    // first hotkey press is instant (no white/translucent flash). Windows stay
+    // warm for the whole app lifetime; this runs once at startup.
     let _ = ensure_overlay_window(app);
     let _ = ensure_main_window(app);
 
@@ -334,11 +329,8 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
     let is_focused = main_win.is_focused().unwrap_or(false);
     if is_visible && is_focused {
         restore_target_window();
-        if should_keep_warm(app_handle) {
-            let _ = main_win.hide();
-        } else {
-            let _ = main_win.close();
-        }
+        // Always hide, never close (windows stay warm for instant reopen).
+        let _ = main_win.hide();
     } else {
         save_target_window(app_handle);
         crate::paste::capture_selection_snapshot();
@@ -377,16 +369,10 @@ pub fn hide_overlay_window(app: &AppHandle) {
     crate::paste::log_diag("[HIDE_OVERLAY] hide_overlay_window entered. Hiding window...");
 
     if let Some(win) = app.get_webview_window("overlay") {
-        if should_keep_warm(app) {
-            let hide_res = win.hide();
-            crate::paste::log_diag(&format!("[HIDE_OVERLAY] win.hide() returned {:?}", hide_res));
-        } else {
-            let close_res = win.close();
-            crate::paste::log_diag(&format!(
-                "[HIDE_OVERLAY] keep_window_warm=false, win.close() -> {:?}",
-                close_res
-            ));
-        }
+        // Always hide, never close: a live webview makes the next open instant
+        // and avoids the recreate race that showed an unrendered window.
+        let hide_res = win.hide();
+        crate::paste::log_diag(&format!("[HIDE_OVERLAY] win.hide() returned {:?}", hide_res));
     } else {
         crate::paste::log_diag("[HIDE_OVERLAY] overlay window not found!");
     }
@@ -408,11 +394,8 @@ pub fn is_overlay_hiding() -> bool {
 fn dismiss_overlay(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("overlay") {
         if win.is_visible().unwrap_or(false) {
-            if should_keep_warm(app) {
-                let _ = win.hide();
-            } else {
-                let _ = win.close();
-            }
+            // Always hide, never close (windows stay warm for instant reopen).
+            let _ = win.hide();
         }
     }
 }

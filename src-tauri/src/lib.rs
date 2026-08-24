@@ -189,19 +189,13 @@ fn queue_paste_next(
             state.db.bump_entry(&target_id).ok();
         }
 
-        let keep_warm = settings.keep_window_warm;
+        // Windows stay warm: always hide, never close, so the next open is instant.
         if window.label() == "overlay" {
             if let Some(win) = app_handle.get_webview_window("overlay") {
-                if keep_warm {
-                    win.hide().ok();
-                } else {
-                    win.close().ok();
-                }
+                win.hide().ok();
             }
-        } else if keep_warm {
-            window.hide().ok();
         } else {
-            window.close().ok();
+            window.hide().ok();
         }
 
         paste::paste_item(&item, transform)?;
@@ -279,23 +273,15 @@ fn paste_clip(
 
         // Dismiss whichever surface initiated the paste BEFORE triggering paste_item,
         // so the OS can smoothly transition foreground focus to the target window.
-        let keep_warm = settings.keep_window_warm;
+        // Windows stay warm: always hide, never close (instant next open).
         if window.label() == "overlay" {
             if let Some(win) = app_handle.get_webview_window("overlay") {
-                if keep_warm {
-                    let hide_res = win.hide();
-                    paste::log_diag(&format!("[PASTE_CLIP] overlay win.hide() returned {:?}", hide_res));
-                } else {
-                    let close_res = win.close();
-                    paste::log_diag(&format!("[PASTE_CLIP] overlay win.close() (cold) -> {:?}", close_res));
-                }
+                let hide_res = win.hide();
+                paste::log_diag(&format!("[PASTE_CLIP] overlay win.hide() returned {:?}", hide_res));
             }
-        } else if keep_warm {
+        } else {
             let hide_res = window.hide();
             paste::log_diag(&format!("[PASTE_CLIP] main win.hide() returned {:?}", hide_res));
-        } else {
-            let close_res = window.close();
-            paste::log_diag(&format!("[PASTE_CLIP] main win.close() (cold) -> {:?}", close_res));
         }
 
         paste::log_diag("[PASTE_CLIP] Calling paste_item...");
@@ -318,7 +304,11 @@ fn copy_clip(
     paste::log_diag(&format!("[COPY_CLIP] Called for clip '{}'", id));
     let clips = state.db.get_all_entries(None, None, false, None)?;
     if let Some(item) = clips.into_iter().find(|c| c.id == id) {
-        state.db.bump_entry(&id).ok();
+        // Respect the "move to top on copy" setting — previously this bumped
+        // unconditionally, so disabling the option had no effect here.
+        if state.settings.get().move_to_top_on_paste {
+            state.db.bump_entry(&id).ok();
+        }
         paste::write_item_to_clipboard(&item, false)?;
         crate::clipboard_watcher::mark_paste(&item);
         let _ = app_handle.emit("clipboard-updated", ());
@@ -411,7 +401,6 @@ fn save_settings(
         }
     }
     let old_expansion = state.settings.get().snippet_expansion_enabled;
-    let old_keep_warm = state.settings.get().keep_window_warm;
     let old_hotkeys = {
         let s = state.settings.get();
         (s.quick_hotkey, s.enlarged_hotkey)
@@ -421,18 +410,6 @@ fn save_settings(
 
     let mut current = state.settings.get();
     state.db.trim_history(current.retention_days, current.max_entries).ok();
-
-    // keep_window_warm transition: warm -> cold frees hidden windows immediately.
-    if old_keep_warm != current.keep_window_warm && !current.keep_window_warm {
-        if let Some(win) = app.get_webview_window("overlay") {
-            if !win.is_visible().unwrap_or(true) {
-                let _ = win.close();
-                crate::paste::log_diag(
-                    "[SAVE_SETTINGS] keep_window_warm=false, closed hidden overlay to free memory",
-                );
-            }
-        }
-    }
 
     // Swappable hotkeys (Glint-style): on save, clear everything and
     // re-apply strictly. If Windows rejects a combo, roll back to the
@@ -697,16 +674,8 @@ fn hide_overlay(app_handle: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn hide_enlarged(window: WebviewWindow) -> Result<(), String> {
     paste::restore_target_window();
-    let keep_warm = window
-        .app_handle()
-        .try_state::<AppState>()
-        .map(|s| s.settings.get().keep_window_warm)
-        .unwrap_or(true);
-    if keep_warm {
-        window.hide().map_err(|e| e.to_string())?;
-    } else {
-        window.close().map_err(|e| e.to_string())?;
-    }
+    // Windows stay warm: always hide, never close (instant next open).
+    window.hide().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1034,23 +1003,12 @@ fn paste_snippet_text(
         "[PASTE_SNIPPET] Hiding window '{}' before snippet paste...",
         window.label()
     ));
-    let keep_warm = app_handle
-        .try_state::<AppState>()
-        .map(|s| s.settings.get().keep_window_warm)
-        .unwrap_or(true);
-    if keep_warm {
-        let hide_res = window.hide();
-        paste::log_diag(&format!(
-            "[PASTE_SNIPPET] window.hide() returned {:?}",
-            hide_res
-        ));
-    } else {
-        let close_res = window.close();
-        paste::log_diag(&format!(
-            "[PASTE_SNIPPET] window.close() (cold) -> {:?}",
-            close_res
-        ));
-    }
+    // Windows stay warm: always hide, never close (instant next open).
+    let hide_res = window.hide();
+    paste::log_diag(&format!(
+        "[PASTE_SNIPPET] window.hide() returned {:?}",
+        hide_res
+    ));
     let res = paste::paste_text_into_target(&pre, post.as_deref())?;
     expansion::show_placement_pill(&app_handle, Some("text has been placed successfully"));
     Ok(res)
@@ -1109,21 +1067,13 @@ pub fn run() {
             // conflict is surfaced via the hotkey-status event.
             shortcuts::register(&app_handle);
 
-            // Prewarm hidden windows & DB cache so first hotkey is instant, not ~1s.
-            // Without this, the first WebView2 present after a cold start renders
-            // white until the renderer catches up, and the first DB query warms
-            // SQLite's page cache on the hotkey's critical path.
-            // Warm DB immediately; window first-paint needs WebViews to be
-            // created, so delay just enough for the initial navigation.
+            // Prewarm hidden windows & DB cache so first hotkey is instant.
+            // Windows stay warm for the whole app lifetime, so this runs once;
+            // every later open is a plain show() of a live webview.
             {
                 let handle = app_handle.clone();
                 std::thread::spawn(move || {
                     hotkey::prewarm_windows(&handle);
-                });
-                let handle2 = app_handle.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(200));
-                    hotkey::prewarm_windows(&handle2);
                 });
             }
 
@@ -1160,20 +1110,15 @@ pub fn run() {
         })
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
-                let keep_warm = window
-                    .app_handle()
-                    .try_state::<AppState>()
-                    .map(|s| s.settings.get().keep_window_warm)
-                    .unwrap_or(true);
-                if keep_warm {
-                    api.prevent_close();
-                    window.hide().ok();
-                } else {
-                    crate::paste::log_diag(&format!(
-                        "[WINDOW_EVENT] CloseRequested for '{}' keep_window_warm=false -> allowing close (cold destroy)",
-                        window.label()
-                    ));
-                }
+                // Windows stay warm for instant reopen: intercept close and
+                // hide instead. Quitting happens explicitly via the tray
+                // ("quit" -> process exit), so this never blocks shutdown.
+                crate::paste::log_diag(&format!(
+                    "[WINDOW_EVENT] CloseRequested for '{}' -> prevent_close + hide (warm)",
+                    window.label()
+                ));
+                api.prevent_close();
+                window.hide().ok();
             }
             WindowEvent::Focused(focused) => {
                 paste::log_diag(&format!(
