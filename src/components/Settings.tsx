@@ -184,6 +184,19 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     getVersion().then((v) => setAppVersion(v)).catch(() => {});
   }, []);
 
+  const compareVersions = (a: string, b: string): number => {
+    const pa = a.split('.').map((x) => parseInt(x, 10) || 0);
+    const pb = b.split('.').map((x) => parseInt(x, 10) || 0);
+    const len = Math.max(pa.length, pb.length);
+    for (let i = 0; i < len; i++) {
+      const av = pa[i] ?? 0;
+      const bv = pb[i] ?? 0;
+      if (av > bv) return 1;
+      if (av < bv) return -1;
+    }
+    return 0;
+  };
+
   const installUpdate = async (update: Update) => {
     setUpdateBtnDisabled(true);
     setUpdateBtnText('Downloading…');
@@ -225,6 +238,34 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       setUpdateBtnDisabled(true);
       setUpdateStatus('Checking…');
       setUpdateBtnText('Checking…');
+      // Fast path — mirrors Typr/Glint perceived instantness: a lightweight
+      // fetch + semver compare can confirm "latest" without waiting for the
+      // full updater plugin (which also verifies signatures and prepares the
+      // download). If no newer version, return immediately.
+      if (appVersion) {
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 1200);
+          const res = await fetch('https://github.com/sanirudh17/Carbon/releases/latest/download/latest.json', {
+            cache: 'no-store',
+            signal: ctrl.signal,
+          });
+          clearTimeout(t);
+          if (res.ok) {
+            const data = (await res.json()) as { version?: string };
+            const latest = (data.version || '').replace(/^v/, '').trim();
+            const current = appVersion.replace(/^v/, '').trim();
+            if (latest && current && compareVersions(latest, current) <= 0) {
+              setUpdateStatus('You are on the latest version.');
+              setUpdateBtnText('Check for latest updates');
+              setUpdateBtnDisabled(false);
+              return;
+            }
+          }
+        } catch {
+          // Fall through to full check() — network hiccup, not a "latest" proof
+        }
+      }
     }
     try {
       const update = await check();

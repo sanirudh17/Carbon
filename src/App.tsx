@@ -180,16 +180,21 @@ export function App() {
 
   const bannerEl = updaterBanner ? (
     <div className="update-banner" role="status" aria-live="polite">
+      <span className="update-banner-dot" aria-hidden="true" />
       <span className="update-banner-text">
-        {updaterDownloading ? `Downloading Carbon v${updaterBanner.version}… ${Math.round(updaterProgress)}%` : `Update available to v${updaterBanner.version} — click Update.`}
+        {updaterDownloading
+          ? `Updating to v${updaterBanner.version}… ${Math.round(updaterProgress)}%`
+          : `Update available — v${updaterBanner.version}`}
       </span>
       {updaterDownloading ? (
-        <div className="update-banner-progress"><div className="update-banner-progress-fill" style={{ width: `${updaterProgress}%` }} /></div>
+        <div className="update-banner-progress" aria-hidden="true">
+          <div className="update-banner-progress-fill" style={{ width: `${updaterProgress}%` }} />
+        </div>
       ) : (
-        <>
-          <button className="btn accent" style={{ height: 26, padding: '0 12px', fontSize: 12 }} onClick={handleBannerUpdate}>Update</button>
-          <button className="btn subtle" style={{ height: 26, padding: '0 10px', fontSize: 12 }} onClick={handleBannerLater} title="Hide this until the next release">Later</button>
-        </>
+        <div className="update-banner-actions">
+          <button className="update-banner-btn primary" onClick={handleBannerUpdate}>Update</button>
+          <button className="update-banner-btn ghost" onClick={handleBannerLater} title="Hide until next release">Later</button>
+        </div>
       )}
     </div>
   ) : null;
@@ -197,9 +202,11 @@ export function App() {
   // 2. Enlarged Main Window View
   if (windowLabel === 'main') {
     if (activeTab === 'settings') {
+      // Manual update check lives in Settings — banner (auto-check popup)
+      // is intentionally hidden here so "Check for latest updates" only
+      // updates the Settings row, never the top popup.
       return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--bg0)' }}>
-          {bannerEl}
           <div style={{ flex: 1, overflow: 'hidden' }}>
             <Settings
               onBack={() => setActiveTab('enlarged')}
@@ -221,9 +228,10 @@ export function App() {
   }
 
   // 3. Dev / Browser Mode (all-in-one interactive test preview)
+  // Banner is auto-check only — hidden in Settings where manual check owns the UI
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--bg0)' }}>
-      {bannerEl}
+      {activeTab !== 'settings' && bannerEl}
       <div
         className="canvas-head"
         style={{
