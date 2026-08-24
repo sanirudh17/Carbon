@@ -152,26 +152,49 @@ pub(crate) static OVERLAY_PREWARM_CACHE: std::sync::Mutex<Option<Vec<crate::db::
 pub(crate) static MAIN_PREWARM_CACHE: std::sync::Mutex<Option<Vec<crate::db::ClipItem>>> = std::sync::Mutex::new(None);
 
 pub fn prewarm_windows(app: &AppHandle) {
-    crate::paste::log_diag("[PREWARM] Starting window & DB prewarm");
-    // Warm DB cache and snapshot immediately so first hotkey has instant data
-    if let Some(state) = app.try_state::<crate::AppState>() {
-        if let Ok(entries) = state.db.get_overlay_entries(250) {
-            *OVERLAY_PREWARM_CACHE.lock().unwrap() = Some(entries);
-        }
-        if let Ok(all) = state.db.get_all_entries(None, None, false, None) {
-            *MAIN_PREWARM_CACHE.lock().unwrap() = Some(all);
-        }
-        let _ = state.db.list_snippets();
-        crate::paste::log_diag("[PREWARM] DB cache warmed synchronously");
-    }
     // Ensure windows exist so the first hotkey's WebView is already created.
     let _ = ensure_overlay_window(app);
     let _ = ensure_main_window(app);
-    // Warm the WebView JS context without ever showing the window — the
-    // previous off-screen ShowWindow caused a 0.5s visible flash (overlay
-    // then main) after a fresh install. An eval forces V8 to parse the
-    // bundle while hidden, so the first real show() is instant like the
-    // preview (dev) build which is already hot via HMR.
+
+    // Warm DB cache and push snapshot directly into WebViews while hidden
+    if let Some(state) = app.try_state::<crate::AppState>() {
+        if let Ok(entries) = state.db.get_overlay_entries(250) {
+            *OVERLAY_PREWARM_CACHE.lock().unwrap() = Some(entries.clone());
+            if let Ok(json) = serde_json::to_string(&entries) {
+                if let Some(win) = app.get_webview_window("overlay") {
+                    let _ = win.eval(&format!(
+                        "window.__carbonInitialData = {0}; if (window.__carbonSetData) window.__carbonSetData({0});",
+                        json
+                    ));
+                }
+            }
+        }
+        if let Ok(all) = state.db.get_all_entries(None, None, false, None) {
+            *MAIN_PREWARM_CACHE.lock().unwrap() = Some(all.clone());
+            if let Ok(json) = serde_json::to_string(&all) {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.eval(&format!(
+                        "window.__carbonInitialData = {0}; if (window.__carbonSetData) window.__carbonSetData({0});",
+                        json
+                    ));
+                }
+            }
+        }
+        if let Ok(snips) = state.db.list_snippets() {
+            if let Ok(json) = serde_json::to_string(&snips) {
+                for label in ["overlay", "main"] {
+                    if let Some(win) = app.get_webview_window(label) {
+                        let _ = win.eval(&format!(
+                            "window.__carbonInitialSnippets = {0}; if (window.__carbonSetSnippets) window.__carbonSetSnippets({0});",
+                            json
+                        ));
+                    }
+                }
+            }
+        }
+        crate::paste::log_diag("[PREWARM] DB cache warmed and pushed to WebViews");
+    }
+
     for label in ["overlay", "main"] {
         if let Some(win) = app.get_webview_window(label) {
             let _ = win.eval("window.__carbon_prewarm = 1");

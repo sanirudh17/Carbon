@@ -38,6 +38,9 @@ import { Dropdown } from './Dropdown';
 declare global {
   interface Window {
     __carbonSetData?: (data: ClipItem[]) => void;
+    __carbonInitialData?: ClipItem[];
+    __carbonSetSnippets?: (data: Snippet[]) => void;
+    __carbonInitialSnippets?: Snippet[];
   }
 }
 
@@ -150,7 +153,8 @@ export const QuickOverlay: React.FC = () => {
   const tabRef = useRef(tab);
   tabRef.current = tab;
 
-  const [items, setItems] = useState<ClipItem[]>([]);
+  const [items, setItems] = useState<ClipItem[]>(() => (typeof window !== 'undefined' && window.__carbonInitialData) || []);
+  const [initialLoaded, setInitialLoaded] = useState(() => Boolean(typeof window !== 'undefined' && window.__carbonInitialData && window.__carbonInitialData.length > 0));
   const [pasteQueue, setPasteQueue] = useState<ClipItem[]>([]);
   // Pending native-window resize for the preview toggle (see togglePreview)
   const previewResizeTimer = useRef<number | null>(null);
@@ -175,7 +179,7 @@ export const QuickOverlay: React.FC = () => {
   const [targetApp, setTargetApp] = useState<string | null>(null);
 
   // ── Snippets tab state ────────────────────────────────────────────
-  const [snSnippets, setSnSnippets] = useState<Snippet[]>([]);
+  const [snSnippets, setSnSnippets] = useState<Snippet[]>(() => (typeof window !== 'undefined' && window.__carbonInitialSnippets) || []);
   const [snSearch, setSnSearch] = useState('');
   const [snTagFilter, setSnTagFilter] = useState('__all__');
   const [snSelectedId, setSnSelectedId] = useState<string | null>(null);
@@ -228,9 +232,11 @@ export const QuickOverlay: React.FC = () => {
         collectionId: null,
       });
       setItems(res || []);
+      setInitialLoaded(true);
       setSelectedIndex(0);
     } catch (err) {
       console.error('Failed to fetch clips:', err);
+      setInitialLoaded(true);
     }
   };
 
@@ -576,6 +582,7 @@ export const QuickOverlay: React.FC = () => {
     window.__carbonSetData = (data: ClipItem[]) => {
       if (Array.isArray(data)) {
         setItems(data);
+        setInitialLoaded(true);
         setSelectedIndex(0);
       }
     };
@@ -619,6 +626,7 @@ export const QuickOverlay: React.FC = () => {
     const unlistenData = safeListen<ClipItem[]>('overlay-data', (e) => {
       if (Array.isArray(e.payload)) {
         setItems(e.payload);
+        setInitialLoaded(true);
         setSelectedIndex(0);
       }
     });
@@ -1469,17 +1477,19 @@ export const QuickOverlay: React.FC = () => {
         <div className="overlay-body">
           <div className={`overlay-list ${tab === 'snippets' ? 'inactive-tab' : ''}`}>
             {displayItems.length === 0 ? (
-              <div className="empty">
-                <div className="big">No entries found</div>
-                <div className="sub">Nothing matched your current filter and search query</div>
-                {hotkeyStatus?.enlarged && (
-                  <div className="sugg" style={{ marginTop: 8 }}>
-                    <span onClick={() => invoke('toggle_enlarged')} style={{ cursor: 'pointer', textDecoration: 'underline' }}>
-                      Open full history ({hotkeyStatus.enlarged})
-                    </span>
-                  </div>
-                )}
-              </div>
+              initialLoaded ? (
+                <div className="empty">
+                  <div className="big">No entries found</div>
+                  <div className="sub">Nothing matched your current filter and search query</div>
+                  {hotkeyStatus?.enlarged && (
+                    <div className="sugg" style={{ marginTop: 8 }}>
+                      <span onClick={() => invoke('toggle_enlarged')} style={{ cursor: 'pointer', textDecoration: 'underline' }}>
+                        Open full history ({hotkeyStatus.enlarged})
+                      </span>
+                    </div>
+                  )}
+                </div>
+              ) : null
             ) : (
               (() => {
                 const groups = groupItemsByDate(displayItems);

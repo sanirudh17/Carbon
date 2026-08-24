@@ -40,6 +40,15 @@ import {
   getTypeColor,
 } from './Icons';
 
+declare global {
+  interface Window {
+    __carbonSetData?: (data: ClipItem[]) => void;
+    __carbonInitialData?: ClipItem[];
+    __carbonSetSnippets?: (data: Snippet[]) => void;
+    __carbonInitialSnippets?: Snippet[];
+  }
+}
+
 const emptyDragImg = typeof Image !== 'undefined' ? new Image() : null;
 if (emptyDragImg) {
   emptyDragImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
@@ -169,7 +178,8 @@ interface EnlargedWindowProps {
 }
 
 export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }) => {
-  const [items, setItems] = useState<ClipItem[]>([]);
+  const [items, setItems] = useState<ClipItem[]>(() => (typeof window !== 'undefined' && window.__carbonInitialData) || []);
+  const [initialLoaded, setInitialLoaded] = useState(() => Boolean(typeof window !== 'undefined' && window.__carbonInitialData && window.__carbonInitialData.length > 0));
   const [search, setSearch] = useState('');
   const [imageDataUrl, setImageDataUrl] = useState<string>('');
   const [selectedFilter, setSelectedFilter] = useState<string>('all');
@@ -394,6 +404,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
         );
       }
       setItems(list);
+      setInitialLoaded(true);
 
       if (list.length > 0) {
         setSelectedIndex((prev) => {
@@ -408,6 +419,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       }
     } catch (err) {
       console.error('Failed to fetch enlarged clips:', err);
+      setInitialLoaded(true);
     }
   };
 
@@ -489,6 +501,26 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     fetchCollections();
     fetchQueue();
     loadSnippetCache();
+
+    window.__carbonSetData = (data: ClipItem[]) => {
+      if (Array.isArray(data)) {
+        setItems(data);
+        setInitialLoaded(true);
+        allCachedItemsRef.current = data;
+        if (data.length > 0) {
+          setSelectedIndex(0);
+          setSelectedItem(data[0]);
+          setEditingContent(data[0].text_content || '');
+        }
+      }
+    };
+
+    window.__carbonSetSnippets = (data: Snippet[]) => {
+      if (Array.isArray(data)) {
+        setSnippetsCache(data);
+        setSnippetsCount(data.length);
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1836,10 +1868,12 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
             {/* Items List */}
             <div className="main-list">
               {items.length === 0 ? (
-                <div className="empty">
-                  <div className="big">No entries found</div>
-                  <div className="sub">Nothing matched your current filter and search query</div>
-                </div>
+                initialLoaded ? (
+                  <div className="empty">
+                    <div className="big">No entries found</div>
+                    <div className="sub">Nothing matched your current filter and search query</div>
+                  </div>
+                ) : null
               ) : (
                 (() => {
                   const groups = dateGroups;
