@@ -148,90 +148,52 @@ fn ensure_main_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
 /// Forces each hidden window's WebView2 to present its first frame while
 /// off-screen: an un-presented surface renders as a white rectangle on first
 /// show. Also warms the DB cache so the first overlay-data emit is instant.
+pub(crate) static OVERLAY_PREWARM_CACHE: std::sync::Mutex<Option<Vec<crate::db::ClipItem>>> = std::sync::Mutex::new(None);
+pub(crate) static MAIN_PREWARM_CACHE: std::sync::Mutex<Option<Vec<crate::db::ClipItem>>> = std::sync::Mutex::new(None);
+
 pub fn prewarm_windows(app: &AppHandle) {
     crate::paste::log_diag("[PREWARM] Starting window & DB prewarm");
-    // Warm DB cache in parallel so first queries are instant.
-    // Overlay uses fast limited path (250); main window may load full history.
+    // Warm DB cache and snapshot the first 250 overlay rows so the very
+    // first hotkey can show data with zero DB wait (no 500ms skeleton).
     if let Some(state) = app.try_state::<crate::AppState>() {
         let db_clone = state.db.clone();
+        let db_for_cache = state.db.clone();
         std::thread::spawn(move || {
-            let _ = db_clone.get_overlay_entries(250);
-            let _ = db_clone.list_snippets();
-            crate::paste::log_diag("[PREWARM] Overlay DB cache warmed");
+            // Snapshot for instant first show — stored for handle_overlay_hotkey
+            if let Ok(entries) = db_for_cache.get_overlay_entries(250) {
+                *OVERLAY_PREWARM_CACHE.lock().unwrap() = Some(entries.clone());
+                // Also warm snippets for the snippets tab
+                let _ = db_for_cache.list_snippets();
+                crate::paste::log_diag("[PREWARM] Overlay DB cache + snapshot warmed");
+            } else {
+                let _ = db_clone.get_overlay_entries(250);
+                let _ = db_clone.list_snippets();
+                crate::paste::log_diag("[PREWARM] Overlay DB cache warmed");
+            }
         });
         let db_clone2 = state.db.clone();
         std::thread::spawn(move || {
-            // Warm full history in background without blocking overlay
-            std::thread::sleep(std::time::Duration::from_millis(800));
-            let _ = db_clone2.get_all_entries(None, None, false, None);
+            // Warm full history immediately (no 800ms delay) so the first
+            // main-window open (get_all_clips unfiltered) is instant like
+            // the overlay — previously the 800ms sleep meant the first
+            // `Enlarged` open within 800ms of launch hit a cold DB (500ms).
+            if let Ok(all) = db_clone2.get_all_entries(None, None, false, None) {
+                *MAIN_PREWARM_CACHE.lock().unwrap() = Some(all);
+            }
             crate::paste::log_diag("[PREWARM] Full DB cache warmed");
         });
     }
-    // Ensure windows exist and have presented one frame off-screen so the
-    // first hotkey press is instant (no white/translucent flash). Windows stay
-    // warm for the whole app lifetime; this runs once at startup.
+    // Ensure windows exist so the first hotkey's WebView is already created.
     let _ = ensure_overlay_window(app);
     let _ = ensure_main_window(app);
-
-    // Off-screen first-paint warm: show hidden windows with SW_SHOWNOACTIVATE
-    // so WebView2 composites without stealing focus, then hide again.
-    // Uses Win32 SetWindowPos synchronously for the off-screen move — Tauri's
-    // set_position is async and could still flash at the centered position.
-    #[cfg(windows)]
-    {
-        use windows::Win32::Foundation::HWND as WinHWND;
-        use windows::Win32::UI::WindowsAndMessaging::{
-            SetWindowPos, ShowWindow, HWND_TOP, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
-            SWP_NOSIZE, SWP_NOZORDER,
-        };
-        for label in ["overlay", "main"] {
-            let Some(win) = app.get_webview_window(label) else {
-                continue;
-            };
-            if win.is_visible().unwrap_or(false) {
-                continue;
-            }
-            let Ok(hwnd) = win.hwnd() else {
-                continue;
-            };
-            let h_raw: isize = hwnd.0 as isize;
-            let h = WinHWND(h_raw as *mut _);
-            let orig = win.outer_position().ok();
-            unsafe {
-                // Synchronously park off-screen so ShowWindow never flashes on-screen
-                let _ = SetWindowPos(
-                    h,
-                    HWND_TOP,
-                    -32000,
-                    -32000,
-                    0,
-                    0,
-                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-                let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
-            }
-            // Give WebView2 time to composite the first frame (release bundle
-            // parsing is slower than dev server); 300ms per window ensures the
-            // surface is truly warm before hide so the next show is instant.
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            unsafe {
-                let _ = ShowWindow(h, SW_HIDE);
-            }
-            if let Some(p) = orig {
-                // Restore centered position synchronously as well
-                unsafe {
-                    let _ = SetWindowPos(
-                        h,
-                        HWND_TOP,
-                        p.x,
-                        p.y,
-                        0,
-                        0,
-                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                    );
-                }
-            }
-            crate::paste::log_diag(&format!("[PREWARM] Warmed '{}' first paint", label));
+    // Warm the WebView JS context without ever showing the window — the
+    // previous off-screen ShowWindow caused a 0.5s visible flash (overlay
+    // then main) after a fresh install. An eval forces V8 to parse the
+    // bundle while hidden, so the first real show() is instant like the
+    // preview (dev) build which is already hot via HMR.
+    for label in ["overlay", "main"] {
+        if let Some(win) = app.get_webview_window(label) {
+            let _ = win.eval("window.__carbon_prewarm = 1");
         }
     }
     crate::paste::log_diag("[PREWARM] Complete");
@@ -318,15 +280,22 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
         "[HOTKEY] overlay_win.show() -> {:?}, set_focus() -> {:?}",
         show_res, focus_res
     ));
-    // Emit opened immediately so frontend can render skeleton instantly;
-    // data follows in background without blocking the show path.
+    // Emit opened immediately so frontend can render skeleton instantly.
+    // If a prewarm snapshot exists, push it *with* the open so the first
+    // frame already has data — zero skeleton time like Pico's instant open.
     let _ = app_handle.emit("overlay-opened", ());
+    if let Some(cached) = OVERLAY_PREWARM_CACHE.lock().unwrap().clone() {
+        let _ = app_handle.emit("overlay-data", &cached);
+        crate::paste::log_diag("[HOTKEY] overlay-data served from prewarm cache (instant)");
+    }
 
     let app_clone = app_handle.clone();
     std::thread::spawn(move || {
         if let Some(state) = app_clone.try_state::<crate::AppState>() {
-            // Fast limited query (250) — instant even with 5000+ history rows.
+            // Fresh query — updates cache and pushes latest data (covers
+            // cold-start where cache was still None and post-open updates).
             if let Ok(entries) = state.db.get_overlay_entries(250) {
+                *OVERLAY_PREWARM_CACHE.lock().unwrap() = Some(entries.clone());
                 let _ = app_clone.emit("overlay-data", &entries);
             }
             if let Ok(snips) = state.db.list_snippets() {

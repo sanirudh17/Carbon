@@ -2,6 +2,11 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
+## [0.1.5] — 2026-08-24
+
+### Fixed
+- **First-open instant (no 0.5s skeleton)** — `Quick Overlay` and `Main` now show data instantly on cold launch: `prewarm_windows` snapshots `get_overlay_entries(250)` + `get_all_entries` into `OVERLAY_PREWARM_CACHE`/`MAIN_PREWARM_CACHE` at startup (immediate, no 800ms delay), `handle_overlay_hotkey` emits cached `overlay-data` with `overlay-opened`, `get_all_clips` fast path returns `MAIN` cache for unfiltered first open, and `QuickOverlay` no longer `fetchLatest()` on every `overlay-opened`/`focus` (relies on Rust pushes). Cold `Ctrl+Shift+Z` / `Ctrl+Alt+X` now matches preview speed.
+
 ## [0.1.4] — 2026-08-24
 
 ### Fixed

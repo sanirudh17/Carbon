@@ -51,6 +51,26 @@ async fn get_all_clips(
     pinned_only: Option<bool>,
     collection_id: Option<String>,
 ) -> Result<Vec<ClipItem>, String> {
+    // Fast path: the unfiltered full-history fetch (main window first open)
+    // is served from the prewarm snapshot so the first click shows instantly
+    // with zero skeleton time — like Pico's "loading then shows up" but
+    // without the 500ms white. Filtered searches still hit the DB.
+    let is_unfiltered = search.is_none()
+        && category.is_none()
+        && !pinned_only.unwrap_or(false)
+        && collection_id.is_none();
+    if is_unfiltered {
+        if let Some(cached) = crate::hotkey::MAIN_PREWARM_CACHE.lock().unwrap().clone() {
+            // Refresh cache in background for next open
+            let db = state.db.clone();
+            std::thread::spawn(move || {
+                if let Ok(fresh) = db.get_all_entries(None, None, false, None) {
+                    *crate::hotkey::MAIN_PREWARM_CACHE.lock().unwrap() = Some(fresh);
+                }
+            });
+            return Ok(cached);
+        }
+    }
     state.db.get_all_entries(
         search.as_deref(),
         category.as_deref(),
@@ -1067,16 +1087,14 @@ pub fn run() {
             // conflict is surfaced via the hotkey-status event.
             shortcuts::register(&app_handle);
 
-            // Prewarm hidden windows & DB cache so first hotkey is instant.
-            // Windows stay warm for the whole app lifetime; every later open
-            // is a plain show() of a live webview. Delay slightly so WebView2
-            // has finished navigating to the built dist (release) before we
-            // force the off-screen first paint — an immediate call can run
-            // before the surface exists and leaves the first show cold (500ms).
+            // Prewarm DB cache and ensure windows exist so first hotkey is
+            // instant. Windows stay warm for the whole lifetime (hidden, never
+            // destroyed) — no ShowWindow at startup, so no 0.5s flash. DB
+            // warming is the critical path; it starts immediately like the
+            // preview (dev) build.
             {
                 let handle = app_handle.clone();
                 std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(400));
                     hotkey::prewarm_windows(&handle);
                 });
             }

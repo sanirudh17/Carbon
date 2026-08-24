@@ -24,7 +24,7 @@ Carbon is a local-first clipboard manager for Windows. Press a hotkey to summon 
 
 Everything lives in a local SQLite database (`carbon_history.db`) with image files on disk in `%APPDATA%\com.carbon.clipboard\`. History, snippets, and settings never leave your computer.
 
-> **New here?** Install the single `Carbon_0.1.4_x64-setup.exe` from [Releases](https://github.com/sanirudh17/Carbon/releases/latest) — no extra dependencies, Tesseract is already bundled.
+> **New here?** Install the single `Carbon_0.1.5_x64-setup.exe` from [Releases](https://github.com/sanirudh17/Carbon/releases/latest) — no extra dependencies, Tesseract is already bundled.
 
 ## Contents
 
@@ -124,7 +124,7 @@ Download the latest installer from the [**Releases**](https://github.com/sanirud
 
 | Installer | Notes |
 |---|---|
-| **`Carbon_0.1.4_x64-setup.exe`** | NSIS installer — single executable, bundles Tesseract OCR. Recommended. |
+| **`Carbon_0.1.5_x64-setup.exe`** | NSIS installer — single executable, bundles Tesseract OCR. Recommended. |
 
 Everything Carbon needs is bundled — no extra dependencies. The installer is currently unsigned, so Windows SmartScreen may show *“Windows protected your PC”* → **More info → Run anyway**.
 
@@ -168,7 +168,7 @@ npm run tauri dev
 
 ```bash
 npm run tauri build
-# → src-tauri/target/release/bundle/nsis/Carbon_0.1.4_x64-setup.exe
+# → src-tauri/target/release/bundle/nsis/Carbon_0.1.5_x64-setup.exe
 ```
 
 ### 5. Run the test suite
