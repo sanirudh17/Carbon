@@ -158,6 +158,18 @@ pub fn prewarm_windows(app: &AppHandle) {
 
     // Warm DB cache and push snapshot directly into WebViews while hidden
     if let Some(state) = app.try_state::<crate::AppState>() {
+        let settings = state.settings.get();
+        if let Ok(json) = serde_json::to_string(&settings) {
+            for label in ["overlay", "main", "pill", "argprompt"] {
+                if let Some(win) = app.get_webview_window(label) {
+                    let _ = win.eval(&format!(
+                        "window.__carbonSettings = {0}; if (window.__carbonApplySettings) window.__carbonApplySettings({0});",
+                        json
+                    ));
+                }
+            }
+        }
+
         if let Ok(entries) = state.db.get_overlay_entries(250) {
             *OVERLAY_PREWARM_CACHE.lock().unwrap() = Some(entries.clone());
             if let Ok(json) = serde_json::to_string(&entries) {

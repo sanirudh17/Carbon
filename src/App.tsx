@@ -14,6 +14,13 @@ import { relaunch } from '@tauri-apps/plugin-process';
 import type { Update } from '@tauri-apps/plugin-updater';
 import type { AppSettings } from './types';
 
+declare global {
+  interface Window {
+    __carbonSettings?: AppSettings;
+    __carbonApplySettings?: (settings: Partial<AppSettings>) => void;
+  }
+}
+
 export function App() {
   const [updaterBanner, setUpdaterBanner] = useState<{ version: string; update: Update } | null>(null);
   const [updaterDownloading, setUpdaterDownloading] = useState(false);
@@ -31,18 +38,31 @@ export function App() {
     }
   });
   const [activeTab, setActiveTab] = useState<'overlay' | 'enlarged' | 'settings'>('enlarged');
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-
-  const applySettingsData = (settings: { accent_color?: string; theme?: string }) => {
-    if (settings?.accent_color) {
-      document.documentElement.style.setProperty('--accent-base', settings.accent_color);
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    try {
+      return localStorage.getItem('carbon_theme') === 'light' ? 'light' : 'dark';
+    } catch {
+      return 'dark';
     }
-    if (settings?.theme === 'light') {
+  });
+
+  const applySettingsData = (settings: Partial<AppSettings>) => {
+    if (!settings) return;
+    if (settings.accent_color) {
+      document.documentElement.style.setProperty('--accent-base', settings.accent_color);
+      try { localStorage.setItem('carbon_accent_color', settings.accent_color); } catch {}
+    }
+    if (settings.theme === 'light') {
       setTheme('light');
       document.documentElement.setAttribute('data-theme', 'light');
-    } else if (settings?.theme === 'dark') {
+      try { localStorage.setItem('carbon_theme', 'light'); } catch {}
+    } else if (settings.theme === 'dark') {
       setTheme('dark');
       document.documentElement.removeAttribute('data-theme');
+      try { localStorage.setItem('carbon_theme', 'dark'); } catch {}
+    }
+    if (typeof settings.preview_enabled === 'boolean') {
+      try { localStorage.setItem('carbon_preview_enabled', String(settings.preview_enabled)); } catch {}
     }
   };
 
@@ -110,6 +130,11 @@ export function App() {
   };
 
   useEffect(() => {
+    window.__carbonApplySettings = applySettingsData;
+    if (window.__carbonSettings) {
+      applySettingsData(window.__carbonSettings);
+    }
+
     try {
       const win = getCurrentWindow();
       if (win && win.label) {
@@ -117,16 +142,16 @@ export function App() {
       }
     } catch {}
 
-    invoke<{ accent_color?: string; theme?: string }>('get_settings')
+    invoke<AppSettings>('get_settings')
       .then(applySettingsData)
       .catch(console.error);
 
-    const unlistenPromise = listen<{ accent_color?: string; theme?: string }>('settings-updated', (event) => {
+    const unlistenPromise = listen<AppSettings>('settings-updated', (event) => {
       applySettingsData(event.payload);
     });
 
     const onFocus = () => {
-      invoke<{ accent_color?: string; theme?: string }>('get_settings')
+      invoke<AppSettings>('get_settings')
         .then(applySettingsData)
         .catch(console.error);
     };

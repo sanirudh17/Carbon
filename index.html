@@ -5,6 +5,16 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Carbon</title>
+    <script>
+      (function() {
+        try {
+          var accent = localStorage.getItem('carbon_accent_color');
+          if (accent) document.documentElement.style.setProperty('--accent-base', accent);
+          var theme = localStorage.getItem('carbon_theme');
+          if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+        } catch(e) {}
+      })();
+    </script>
   </head>
 
   <body>

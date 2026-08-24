@@ -174,8 +174,30 @@ export const QuickOverlay: React.FC = () => {
   const [actionPanelOpen, setActionPanelOpen] = useState(false);
   const [actionIndex, setActionIndex] = useState(0);
   const [hotkeyStatus, setHotkeyStatus] = useState<HotkeyStatus | null>(null);
-  const [previewOpen, setPreviewOpen] = useState(true);
-  const [showSnippets, setShowSnippets] = useState(true);
+  const [previewOpen, setPreviewOpen] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      if (window.__carbonSettings && typeof window.__carbonSettings.preview_enabled === 'boolean') {
+        return window.__carbonSettings.preview_enabled;
+      }
+      try {
+        const cached = localStorage.getItem('carbon_preview_enabled');
+        if (cached !== null) return cached === 'true';
+      } catch {}
+    }
+    return false;
+  });
+  const [showSnippets, setShowSnippets] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      if (window.__carbonSettings && typeof window.__carbonSettings.show_snippets === 'boolean') {
+        return window.__carbonSettings.show_snippets;
+      }
+      try {
+        const cached = localStorage.getItem('carbon_show_snippets');
+        if (cached !== null) return cached === 'true';
+      } catch {}
+    }
+    return true;
+  });
   const [targetApp, setTargetApp] = useState<string | null>(null);
 
   // ── Snippets tab state ────────────────────────────────────────────
@@ -556,9 +578,14 @@ export const QuickOverlay: React.FC = () => {
   // The overlay opens with the user's chosen tab and preview state, and
   // stays in sync live (settings-updated fires in every window).
   const applyOverlaySettings = useCallback((s: AppSettings) => {
-    if (typeof s.preview_enabled === 'boolean') setPreviewOpen(s.preview_enabled);
+    if (!s) return;
+    if (typeof s.preview_enabled === 'boolean') {
+      setPreviewOpen(s.preview_enabled);
+      try { localStorage.setItem('carbon_preview_enabled', String(s.preview_enabled)); } catch {}
+    }
     if (typeof s.show_snippets === 'boolean') {
       setShowSnippets(s.show_snippets);
+      try { localStorage.setItem('carbon_show_snippets', String(s.show_snippets)); } catch {}
       if (!s.show_snippets) {
         tabRef.current = 'clips';
         setTab('clips');
