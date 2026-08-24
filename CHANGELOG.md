@@ -2,7 +2,7 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
-## [Unreleased]
+## [0.1.6] — 2026-08-24
 
 ### Fixed
 - **Quick Overlay filter dropdown no longer glitches on first use** — the filter menus (Clipboard › Filter by type, Snippets › Filter by tag) previously rendered through a portal to `<body>` with runtime `getBoundingClientRect()` positioning and a one-frame unpositioned state on first open, which caused the whole overlay to jump upward on the first click after a fresh launch (later clicks were fine). The dropdown list now renders in-tree with absolute positioning anchored to its trigger, never steals focus from the search bar, and never touches the document layout or scroll position.
