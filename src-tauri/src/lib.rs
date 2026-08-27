@@ -841,6 +841,7 @@ fn set_collection_pin(
 ) -> Result<String, String> {
     let recovery_code = state.db.set_collection_pin(&id, &pin)?;
     let _ = app_handle.emit("collections-updated", ());
+    let _ = app_handle.emit("clipboard-updated", ());
     Ok(recovery_code)
 }
 
@@ -853,6 +854,7 @@ fn change_collection_pin(
 ) -> Result<(), String> {
     state.db.change_collection_pin(&id, &pin)?;
     let _ = app_handle.emit("collections-updated", ());
+    let _ = app_handle.emit("clipboard-updated", ());
     Ok(())
 }
 
@@ -884,6 +886,7 @@ fn reset_collection_passcode(
 ) -> Result<String, String> {
     let new_recovery_code = state.db.reset_collection_passcode(&id, &recovery_code, &new_pin)?;
     let _ = app_handle.emit("collections-updated", ());
+    let _ = app_handle.emit("clipboard-updated", ());
     Ok(new_recovery_code)
 }
 
@@ -895,6 +898,7 @@ fn remove_collection_pin(
 ) -> Result<(), String> {
     state.db.remove_collection_pin(&id)?;
     let _ = app_handle.emit("collections-updated", ());
+    let _ = app_handle.emit("clipboard-updated", ());
     Ok(())
 }
 

@@ -609,6 +609,11 @@ impl DbState {
                 query.push_str(" AND id IN (SELECT clip_id FROM clip_collections WHERE collection_id = ?)");
                 params_vec.push(Box::new(col_id.to_string()));
             }
+        } else {
+            // Main screen (no collection filter) — hide items that are in any locked collection
+            query.push_str(
+                " AND id NOT IN (SELECT clip_id FROM clip_collections JOIN collections ON collections.id = clip_collections.collection_id WHERE collections.pin_hash IS NOT NULL)"
+            );
         }
 
         if let Some(cat) = category {
@@ -692,6 +697,11 @@ impl DbState {
                 query.push_str(" AND id IN (SELECT clip_id FROM clip_collections WHERE collection_id = ?)");
                 params_vec.push(Box::new(col_id.to_string()));
             }
+        } else {
+            // Main screen (no collection filter) — hide items that are in any locked collection
+            query.push_str(
+                " AND id NOT IN (SELECT clip_id FROM clip_collections JOIN collections ON collections.id = clip_collections.collection_id WHERE collections.pin_hash IS NOT NULL)"
+            );
         }
 
         if pinned_only {
@@ -767,7 +777,7 @@ impl DbState {
                 "SELECT id, content_type, title, text_content, rtf_content, html_content,
                         image_path, image_width, image_height, file_paths, is_video, file_size,
                         is_pinned, source_app, created_at, updated_at, qr_content, is_sensitive, expires_at, ocr_text
-                 FROM entries ORDER BY created_at DESC LIMIT ?1",
+                 FROM entries WHERE id NOT IN (SELECT clip_id FROM clip_collections JOIN collections ON collections.id = clip_collections.collection_id WHERE collections.pin_hash IS NOT NULL) ORDER BY created_at DESC LIMIT ?1",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
@@ -2272,6 +2282,12 @@ mod tests {
         assert_eq!(db.verify_collection_pin(&col.id, "1234").unwrap(), false);
         assert_eq!(db.verify_collection_recovery_code(&col.id, &new_recovery_code).unwrap(), true);
 
+        // Locked items are hidden from main and overlay
+        let main_locked = db.get_all_entries(None, None, false, None).unwrap();
+        assert_eq!(main_locked.len(), 0);
+        let overlay_locked = db.get_overlay_entries(10).unwrap();
+        assert_eq!(overlay_locked.len(), 0);
+
         // Test Update Collection Color
         db.update_collection_color(&col.id, Some("#3B82F6".to_string())).unwrap();
         let list_after_color = db.list_collections().unwrap();
@@ -2282,9 +2298,10 @@ mod tests {
         let after_removal = db.get_all_entries(None, None, false, Some(&col.id)).unwrap();
         assert_eq!(after_removal.len(), 1);
         assert_eq!(after_removal[0].id, "clip-2");
-        // Clip-1 still exists in main history!
+        // Clip-1 is now visible on main (not in locked collection); clip-2 is still in locked collection and hidden
         let all = db.get_all_entries(None, None, false, None).unwrap();
-        assert_eq!(all.len(), 2);
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].id, "clip-1");
 
         // 5. Delete collection (without deleting clips)
         db.delete_collection(&col.id, false).unwrap();
