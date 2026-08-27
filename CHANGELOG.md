@@ -2,6 +2,12 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
+## [0.1.7] — 2026-08-28
+
+### Fixed
+- **Locked collections are private** — items in a locked collection no longer appear on the main screen (or overlay); only items not in any locked collection are shown. Locking a collection hides its items **instantly** (no tab re-click).
+- **Main screen no longer deletes locked collections** — deleting an entry from the main screen only deletes that entry; locked collections stay intact (they were hidden, not deletable via main).
+
 ## [0.1.6] — 2026-08-27
 
 ### Fixed
