@@ -1041,6 +1041,20 @@ fn paste_snippet_text(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // Second launch (e.g., via Start menu search) should focus the
+            // existing instance instead of spawning a duplicate background
+            // process and tray icon. Handle both hidden (warm) and visible
+            // states.
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.unminimize();
+                let _ = win.show();
+                let _ = win.set_focus();
+            } else if let Some(win) = app.get_webview_window("overlay") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
