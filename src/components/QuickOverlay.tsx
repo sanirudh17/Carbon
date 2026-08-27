@@ -27,6 +27,7 @@ import {
   EditIcon,
   DeleteIcon,
   FilterIcon,
+  StarIcon,
   snippetIconFor,
   getTypeIcon,
   getTypeColor,
@@ -362,7 +363,9 @@ export const QuickOverlay: React.FC = () => {
         (i) => i.source_app && i.source_app.toLowerCase() === sourceAppFilter.toLowerCase()
       );
     }
-    if (typeFilter !== '__all__') {
+    if (typeFilter === 'pinned') {
+      out = out.filter((i) => i.is_pinned);
+    } else if (typeFilter !== '__all__') {
       out = out.filter((i) => String(i.content_type) === typeFilter);
     }
     return out;
@@ -810,8 +813,15 @@ export const QuickOverlay: React.FC = () => {
 
   const handleTogglePin = async (item: ClipItem) => {
     try {
-      await invoke('toggle_pin_clip', { id: item.id });
-      fetchItems();
+      const newPin = await invoke<boolean>('toggle_pin_clip', { id: item.id });
+      if (typeFilter === 'pinned' && !newPin) {
+        setItems((prev) => prev.filter((i) => i.id !== item.id));
+        if (selectedIndex >= 0 && displayItems[selectedIndex]?.id === item.id) {
+          setSelectedIndex((prev) => Math.max(0, prev - 1));
+        }
+      } else {
+        setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, is_pinned: newPin } : i)));
+      }
     } catch (err) {
       console.error('Failed to toggle pin:', err);
     }
@@ -1433,7 +1443,19 @@ export const QuickOverlay: React.FC = () => {
               align="end"
               ariaLabel="Filter by type"
               title="Filter by type"
-              options={[{ value: '__all__', label: 'All Types' }, ...typeFilterOptions]}
+              options={[
+                { value: '__all__', label: 'All Types' },
+                {
+                  value: 'pinned',
+                  label: 'Favorites',
+                  icon: (
+                    <span style={{ color: '#F59E0B', display: 'inline-flex' }}>
+                      <StarIcon />
+                    </span>
+                  ),
+                },
+                ...typeFilterOptions,
+              ]}
             />
           </div>
           <div className={`searchbar sn-searchbar ${tab === 'clips' ? 'inactive-tab' : ''}`}>

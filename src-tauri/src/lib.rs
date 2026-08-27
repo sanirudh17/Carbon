@@ -351,22 +351,38 @@ fn update_clip_text(
 
 #[tauri::command]
 fn toggle_pin_clip(state: State<'_, AppState>, id: String) -> Result<bool, String> {
-    state.db.toggle_pin(&id)
+    let res = state.db.toggle_pin(&id);
+    if res.is_ok() {
+        crate::hotkey::invalidate_prewarm_cache();
+    }
+    res
 }
 
 #[tauri::command]
 fn delete_clip(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.db.delete_entry(&id)
+    let res = state.db.delete_entry(&id);
+    if res.is_ok() {
+        crate::hotkey::invalidate_prewarm_cache();
+    }
+    res
 }
 
 #[tauri::command]
 fn bulk_delete_clips(state: State<'_, AppState>, ids: Vec<String>) -> Result<(), String> {
-    state.db.bulk_delete_entries(&ids)
+    let res = state.db.bulk_delete_entries(&ids);
+    if res.is_ok() {
+        crate::hotkey::invalidate_prewarm_cache();
+    }
+    res
 }
 
 #[tauri::command]
 fn bulk_pin_clips(state: State<'_, AppState>, ids: Vec<String>, pin: bool) -> Result<(), String> {
-    state.db.bulk_pin_entries(&ids, pin)
+    let res = state.db.bulk_pin_entries(&ids, pin);
+    if res.is_ok() {
+        crate::hotkey::invalidate_prewarm_cache();
+    }
+    res
 }
 
 #[tauri::command]

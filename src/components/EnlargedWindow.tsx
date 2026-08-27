@@ -805,13 +805,39 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   const handleTogglePin = async (item: ClipItem) => {
     try {
       const newPin = await invoke<boolean>('toggle_pin_clip', { id: item.id });
-      setItems((prev) =>
-        prev.map((i) => (i.id === item.id ? { ...i, is_pinned: newPin } : i))
+      // Keep the global cache in sync so the Favorites filter (which does
+      // an optimistic in-memory filter from allCachedItemsRef) shows the
+      // item instantly without waiting for a refetch or restart.
+      allCachedItemsRef.current = allCachedItemsRef.current.map((i) =>
+        i.id === item.id ? { ...i, is_pinned: newPin } : i
       );
-      if (selectedItem?.id === item.id) {
-        setSelectedItem((prev) => (prev ? { ...prev, is_pinned: newPin } : null));
+      // In the Favorites tab, unfavoriting should remove the row instantly
+      // instead of leaving it until the next tab switch.
+      if (selectedFilter === 'pinned' && !newPin) {
+        setItems((prev) => prev.filter((i) => i.id !== item.id));
+        if (selectedItem?.id === item.id) {
+          setSelectedItem(null);
+          setEditingContent('');
+        }
+        // Keep selection valid after removal
+        setSelectedIndex((prev) => {
+          const len = items.length;
+          if (len <= 1) return 0;
+          return prev >= len - 1 ? Math.max(0, len - 2) : prev;
+        });
+      } else {
+        setItems((prev) =>
+          prev.map((i) => (i.id === item.id ? { ...i, is_pinned: newPin } : i))
+        );
+        if (selectedItem?.id === item.id) {
+          setSelectedItem((prev) => (prev ? { ...prev, is_pinned: newPin } : null));
+        }
       }
-      fetchItems();
+      fetchCounts();
+      // No fetchItems() — the optimistic cache update is enough for instant
+      // feedback; the next filter switch or clipboard-updated event will
+      // refetch fresh data. Avoiding an extra get_all_clips prevents the
+      // 500ms skeleton you saw on first favorite.
     } catch (err) {
       console.error('Failed to toggle pin:', err);
     }

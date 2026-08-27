@@ -2,6 +2,12 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
+## [0.1.8] — 2026-08-28
+
+### Fixed
+- **Favorites are instant** — `Ctrl+D` (and bulk pin) now updates the Favorites filter and count **immediately** without restart or tab switch; unfavoriting in the Favorites tab removes the row instantly.
+- **Quick Overlay has a Favorites filter** — the `All Types` dropdown now includes a `Favorites` option (gold star) that shows only `is_pinned` items, matching the main app.
+
 ## [0.1.7] — 2026-08-28
 
 ### Fixed
