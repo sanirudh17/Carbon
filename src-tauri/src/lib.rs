@@ -840,6 +840,7 @@ fn set_collection_pin(
     app_handle: AppHandle,
 ) -> Result<String, String> {
     let recovery_code = state.db.set_collection_pin(&id, &pin)?;
+    crate::hotkey::invalidate_prewarm_cache();
     let _ = app_handle.emit("collections-updated", ());
     let _ = app_handle.emit("clipboard-updated", ());
     Ok(recovery_code)
@@ -853,6 +854,7 @@ fn change_collection_pin(
     app_handle: AppHandle,
 ) -> Result<(), String> {
     state.db.change_collection_pin(&id, &pin)?;
+    crate::hotkey::invalidate_prewarm_cache();
     let _ = app_handle.emit("collections-updated", ());
     let _ = app_handle.emit("clipboard-updated", ());
     Ok(())
@@ -885,6 +887,7 @@ fn reset_collection_passcode(
     app_handle: AppHandle,
 ) -> Result<String, String> {
     let new_recovery_code = state.db.reset_collection_passcode(&id, &recovery_code, &new_pin)?;
+    crate::hotkey::invalidate_prewarm_cache();
     let _ = app_handle.emit("collections-updated", ());
     let _ = app_handle.emit("clipboard-updated", ());
     Ok(new_recovery_code)
@@ -897,6 +900,7 @@ fn remove_collection_pin(
     app_handle: AppHandle,
 ) -> Result<(), String> {
     state.db.remove_collection_pin(&id)?;
+    crate::hotkey::invalidate_prewarm_cache();
     let _ = app_handle.emit("collections-updated", ());
     let _ = app_handle.emit("clipboard-updated", ());
     Ok(())
@@ -910,6 +914,7 @@ fn add_clip_to_collection(
     app_handle: AppHandle,
 ) -> Result<(), String> {
     state.db.add_clip_to_collection(&clip_id, &collection_id)?;
+    crate::hotkey::invalidate_prewarm_cache();
     let _ = app_handle.emit("collections-updated", ());
     let _ = app_handle.emit("clipboard-updated", ());
     Ok(())
@@ -923,6 +928,7 @@ fn add_clips_to_collection(
     app_handle: AppHandle,
 ) -> Result<(), String> {
     state.db.add_clips_to_collection(&clip_ids, &collection_id)?;
+    crate::hotkey::invalidate_prewarm_cache();
     let _ = app_handle.emit("collections-updated", ());
     let _ = app_handle.emit("clipboard-updated", ());
     Ok(())
@@ -936,6 +942,7 @@ fn remove_clip_from_collection(
     app_handle: AppHandle,
 ) -> Result<(), String> {
     state.db.remove_clip_from_collection(&clip_id, &collection_id)?;
+    crate::hotkey::invalidate_prewarm_cache();
     let _ = app_handle.emit("collections-updated", ());
     let _ = app_handle.emit("clipboard-updated", ());
     Ok(())

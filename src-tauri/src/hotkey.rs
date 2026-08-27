@@ -151,6 +151,11 @@ fn ensure_main_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
 pub(crate) static OVERLAY_PREWARM_CACHE: std::sync::Mutex<Option<Vec<crate::db::ClipItem>>> = std::sync::Mutex::new(None);
 pub(crate) static MAIN_PREWARM_CACHE: std::sync::Mutex<Option<Vec<crate::db::ClipItem>>> = std::sync::Mutex::new(None);
 
+pub(crate) fn invalidate_prewarm_cache() {
+    *OVERLAY_PREWARM_CACHE.lock().unwrap() = None;
+    *MAIN_PREWARM_CACHE.lock().unwrap() = None;
+}
+
 pub fn prewarm_windows(app: &AppHandle) {
     // Ensure windows exist so the first hotkey's WebView is already created.
     let _ = ensure_overlay_window(app);
