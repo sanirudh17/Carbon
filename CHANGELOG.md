@@ -2,10 +2,12 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
-## [0.1.6] — 2026-08-24
+## [0.1.6] — 2026-08-27
 
 ### Fixed
+- **Single instance on Windows** — launching Carbon while it is already running (e.g., via Start search) now focuses the existing window instead of spawning a duplicate background process and extra tray icon. Uses `tauri-plugin-single-instance`.
 - **Quick Overlay filter dropdown no longer glitches on first use** — the filter menus (Clipboard › Filter by type, Snippets › Filter by tag) previously rendered through a portal to `<body>` with runtime `getBoundingClientRect()` positioning and a one-frame unpositioned state on first open, which caused the whole overlay to jump upward on the first click after a fresh launch (later clicks were fine). The dropdown list now renders in-tree with absolute positioning anchored to its trigger, never steals focus from the search bar, and never touches the document layout or scroll position.
+- **No flash on cold launch & instant first open** — `prewarm_windows` no longer `ShowWindow` off-screen (which flashed overlay then main for 0.5s); it now only ensures windows exist and `eval`s the bundle while hidden, plus immediate `OVERLAY`/`MAIN` prewarm snapshots so `Ctrl+Shift+Z` / `Ctrl+Alt+X` show data with zero skeleton — matching the preview (dev) speed.
 
 ## [0.1.5] — 2026-08-24
 
