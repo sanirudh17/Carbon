@@ -2,6 +2,12 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
+## [0.1.9] — 2026-08-28
+
+### Fixed
+- **Preview keeps website white card and renders images** — `Notepad` plain text stays `Text (Plain)` via `html_contains_formatting` guard; `Chrome` rich captures (e.g., `rec215.examly.io`) preserve the site’s white question card and absolutize relative `<img>` via `SourceURL`, with `blob:` fallback to the `CF_DIB` screenshot and subtle inline `[Image]` placeholder instead of a black box. Header no longer cut off.
+- **Updater banner no longer clips text while downloading** — `is-downloading` banner uses `line-height:1.4` + `padding:1px 0 3px` and a relative `3px` progress bar below the text instead of absolute `2px` over the border.
+
 ## [0.1.8] — 2026-08-28
 
 ### Fixed
