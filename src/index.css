@@ -2050,6 +2050,26 @@ section:last-child {
 }
 .rich-doc hr { border: none; border-top: 1px solid var(--line); margin: 0.8em 0; }
 .rich-doc img { max-width: 100%; border-radius: 6px; }
+.rich-doc > *:first-child { margin-top: 0; }
+.rich-img-placeholder {
+  padding: 14px 16px;
+  background: var(--elev);
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  text-align: center;
+  margin: 10px 0;
+  line-height: 1.5;
+}
+.rich-img-fallback {
+  color: var(--text-3);
+  font-size: 11px;
+  font-style: italic;
+  background: transparent;
+  border: none;
+  padding: 0 4px;
+}
 .rich-doc table {
   width: 100%;
   border-collapse: collapse;
@@ -5350,9 +5370,14 @@ section:last-child {
   background: var(--surface);
   border-bottom: 1px solid var(--line-soft);
   font-size: 12.5px;
-  line-height: 1;
+  line-height: 1.4;
   flex-shrink: 0;
   animation: upd-slide 180ms var(--ease-out);
+}
+.update-banner.is-downloading {
+  flex-wrap: wrap;
+  padding-bottom: 0;
+  gap: 10px 10px;
 }
 .update-banner-dot {
   width: 7px;
@@ -5370,6 +5395,8 @@ section:last-child {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.4;
+  padding: 1px 0 3px;
 }
 .update-banner-actions {
   display: flex;
@@ -5415,6 +5442,18 @@ section:last-child {
   height: 2px;
   background: transparent;
   overflow: hidden;
+}
+.update-banner.is-downloading .update-banner-progress {
+  position: relative;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  flex-basis: 100%;
+  width: 100%;
+  height: 3px;
+  margin-top: 2px;
+  background: color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 999px;
 }
 .update-banner-progress-fill {
   height: 100%;

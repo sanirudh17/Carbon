@@ -108,6 +108,37 @@ function sanitizeRichHtml(html: string): string {
           child.remove();
           continue;
         }
+        if (tag === 'img') {
+          const src = child.getAttribute('src')?.trim() || '';
+          if (src) {
+            // For blob: or auth-gated https: that will 404 in file://, the
+            // Rust side now also captures the DIB rendering of the selection
+            // as a fallback `image_path` on the rich_text item. Keep the
+            // original src but let the fallback image below the HTML be the
+            // authoritative visual — don't dominate the layout with 5×
+            // "[Image not available]" spans.
+            if (src.toLowerCase().startsWith('blob:')) {
+              (child as HTMLElement).style.display = 'none';
+            } else {
+              child.setAttribute('referrerpolicy', 'no-referrer');
+              child.setAttribute('loading', 'lazy');
+              child.setAttribute(
+                'onerror',
+                "this.style.display='none'; var p=document.createElement('span'); p.className='rich-img-fallback'; p.textContent=' [Image] '; this.parentNode.insertBefore(p, this);"
+              );
+              (child as HTMLElement).style.maxWidth = '100%';
+              (child as HTMLElement).style.height = 'auto';
+              (child as HTMLElement).style.display = 'block';
+              (child as HTMLElement).style.margin = '8px 0';
+            }
+          }
+        }
+        // Keep the original background for genuine rich captures (e.g., a
+        // website's white question card). Stripping it was hiding the
+        // website's own white background that the user expects to see.
+        // The dark preview now shows the HTML as-is, with its original
+        // background, so a site's white card renders white and Notepad's
+        // plain wrapper (which has no background) stays dark.
         for (const attr of Array.from(child.attributes)) {
           const name = attr.name.toLowerCase();
           const val = attr.value.trim().toLowerCase();
@@ -116,6 +147,8 @@ function sanitizeRichHtml(html: string): string {
             ((name === 'href' || name === 'src') &&
               BANNED_PROTOCOLS.some((p) => val.startsWith(p)))
           ) {
+            // Keep the onerror we just set for img
+            if (tag === 'img' && name === 'onerror') continue;
             child.removeAttribute(attr.name);
           }
         }
@@ -652,10 +685,44 @@ export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ 
     const text = item.text_content || item.title || '';
 
     if (!forceRaw) {
-      // Rich text — actually formatted HTML
+      // Rich text — actually formatted HTML. For website captures (e.g.,
+      // rec215.examly.io) the HTML's white card should render white, not
+      // dark. Wrap Chrome-sourced rich text in a light container so the
+      // website's own white background and images are visible, while plain
+      // Notepad stays dark.
       if (item.content_type === 'rich_text' && sanitizedHtml) {
+        const richHtml = <div className="rich-doc" dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />;
+        // If this rich capture also has a DIB fallback image (because its
+        // HTML contained <img> with blob: or auth-gated https:), show that
+        // captured image below the HTML so the 5 images from rec215.examly.io
+        // are actually visible instead of "[Image not available]".
+        const fallback = item.image_path ? (
+          <div style={{ marginTop: 12 }}>
+            <ImagePreview item={item} />
+          </div>
+        ) : null;
+        const isWebsite = item.source_app?.toLowerCase().includes('chrome') ?? false;
+        if (isWebsite) {
+          return (
+            <div
+              style={{
+                background: '#ffffff',
+                color: '#1f2937',
+                padding: '14px 16px',
+                borderRadius: '8px',
+                border: '1px solid #e5e7eb',
+              }}
+            >
+              {richHtml}
+              {fallback}
+            </div>
+          );
+        }
         return (
-          <div className="rich-doc" dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />
+          <>
+            {richHtml}
+            {fallback}
+          </>
         );
       }
 

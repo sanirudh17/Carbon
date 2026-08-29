@@ -508,8 +508,9 @@ fn process_clipboard_change(
                             }
                         }
 
-                        let mut html_content = None;
-                        let mut rtf_content = None;
+                        let mut html_content: Option<String> = None;
+                        let mut rtf_content: Option<String> = None;
+                        let mut html_fallback_image: Option<(String, u32, u32)> = None;
 
                         if html_format != 0 && IsClipboardFormatAvailable(html_format).is_ok() {
                             if let Ok(h_handle) = GetClipboardData(html_format) {
@@ -522,9 +523,58 @@ fn process_clipboard_change(
                                     let real_len = h_slice.iter().position(|&b| b == 0).unwrap_or(h_size);
                                     let raw_html = String::from_utf8_lossy(&h_slice[..real_len]).to_string();
                                     if !raw_html.trim().is_empty() {
-                                        html_content = Some(raw_html);
+                                        // Make relative image URLs absolute using SourceURL from the CF_HTML header
+                                        // so they render correctly in the preview (file:// context). Blob: URLs are left as-is
+                                        // but will be handled gracefully in the frontend sanitizer.
+                                        let fixed_html = absolutize_html_image_urls(&raw_html);
+                                        html_content = Some(fixed_html);
                                     }
                                     GlobalUnlock(h_hglobal).ok();
+                                }
+                            }
+                        }
+
+                        // If the HTML contains an <img> (often blob: or auth-gated https:),
+                        // try to capture the DIB rendering of the selection as a
+                        // fallback so the preview can show pixels even when the
+                        // original src is not resolvable in file://. This is why
+                        // rec215.examly.io's 5 images were "not available" while
+                        // Edge/Bing News (public https:) rendered.
+                        if let Some(ref html) = html_content {
+                            if html.to_lowercase().contains("<img") {
+                                if IsClipboardFormatAvailable(CF_DIB).is_ok() || IsClipboardFormatAvailable(CF_DIBV5).is_ok() {
+                                    let dib_format = if IsClipboardFormatAvailable(CF_DIBV5).is_ok() { CF_DIBV5 } else { CF_DIB };
+                                    if let Ok(handle) = GetClipboardData(dib_format) {
+                                        let hglobal = HGLOBAL(handle.0 as *mut _);
+                                        let ptr = GlobalLock(hglobal);
+                                        if !ptr.is_null() {
+                                            let size = GlobalSize(hglobal);
+                                            if size > std::mem::size_of::<BITMAPINFOHEADER>() {
+                                                let header_ptr = ptr as *const BITMAPINFOHEADER;
+                                                let header = unsafe { *header_ptr };
+                                                let width = header.biWidth.abs() as u32;
+                                                let height = header.biHeight.abs() as u32;
+                                                if width > 0 && height > 0 {
+                                                    let data_slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, size as usize) };
+                                                    if let Some(img_buf) = parse_dib_to_image(data_slice, width, height) {
+                                                        let _ = std::fs::create_dir_all(media_dir);
+                                                        let img_id = uuid_v4();
+                                                        let img_filename = format!("html_img_{}.png", img_id);
+                                                        let img_full_path = media_dir.join(&img_filename);
+                                                        if img_buf.save(&img_full_path).is_ok() {
+                                                            html_fallback_image = Some((
+                                                                img_full_path.to_string_lossy().to_string(),
+                                                                width,
+                                                                height,
+                                                            ));
+                                                            crate::paste::log_diag(&format!("[HTML_IMG_FALLBACK] Captured DIB for HTML <img>, saved to {:?} ({}x{})", img_full_path, width, height));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            GlobalUnlock(hglobal).ok();
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -569,6 +619,10 @@ fn process_clipboard_change(
 
                         let file_size = text.len() as u64;
                         let id = uuid_v4();
+                        let (fallback_path, fallback_w, fallback_h) = match &html_fallback_image {
+                            Some((p, w, h)) => (Some(p.clone()), Some(*w), Some(*h)),
+                            None => (None, None, None),
+                        };
 
                         item = Some(ClipItem {
                             id,
@@ -577,9 +631,9 @@ fn process_clipboard_change(
                             text_content: Some(text),
                             rtf_content,
                             html_content,
-                            image_path: None,
-                            image_width: None,
-                            image_height: None,
+                            image_path: fallback_path,
+                            image_width: fallback_w,
+                            image_height: fallback_h,
                             file_paths: None,
                             is_video: false,
                             file_size,
@@ -802,6 +856,83 @@ pub fn is_rich_rtf(rtf: &str) -> bool {
         || rtf.contains("\\bullet") || rtf.contains("\\trowd") || rtf.contains("\\cell")
 }
 
+fn strip_html_to_text(html: &str) -> String {
+    // Very small tag stripper for the plain-wrapper check — not a full parser,
+    // just enough to compare HTML textContent with plain text.
+    let re = Regex::new(r"<[^>]*>").unwrap();
+    let stripped = re.replace_all(html, "");
+    // Decode a few common entities that Notepad/Chromium emit
+    stripped
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .trim()
+        .to_string()
+}
+
+fn html_contains_formatting(html: &str) -> bool {
+    let lower = html.to_lowercase();
+    // True formatting tags — <div>/<p>/<span> alone are not formatting.
+    let formatting_tags = [
+        "<b", "<strong", "<i", "<em", "<u", "<s", "<strike", "<del", "<ins", "<mark",
+        "<sub", "<sup", "<small", "<big", "<h1", "<h2", "<h3", "<h4", "<h5", "<h6",
+        "<ul", "<ol", "<li", "<table", "<tr", "<td", "<th", "<blockquote", "<pre", "<code",
+        "<a ", "<img", "<font",
+    ];
+    for tag in formatting_tags {
+        if lower.contains(tag) {
+            return true;
+        }
+    }
+    // Style-based formatting
+    lower.contains("font-weight") || lower.contains("font-style") || lower.contains("text-decoration") || lower.contains("background-color")
+}
+
+fn absolutize_html_image_urls(html: &str) -> String {
+    // Extract SourceURL from CF_HTML header (e.g., "SourceURL:https://example.com/page")
+    let source_url = html
+        .lines()
+        .find_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.to_lowercase().starts_with("sourceurl:") {
+                Some(trimmed["SourceURL:".len()..].trim().to_string())
+            } else {
+                None
+            }
+        })
+        .and_then(|u| url::Url::parse(&u).ok());
+
+    let Some(base) = source_url else {
+        return html.to_string();
+    };
+
+    // Rewrite relative <img src="..."> to absolute using the base URL.
+    // Leave absolute (http, https, data:, blob:, file:) as-is.
+    let re = Regex::new(r#"<img([^>]*?)src\s*=\s*["']([^"']+)["']"#).unwrap();
+    re.replace_all(html, |caps: &regex::Captures| {
+        let pre = &caps[1];
+        let src = &caps[2];
+        let lower_src = src.to_lowercase();
+        if lower_src.starts_with("http://")
+            || lower_src.starts_with("https://")
+            || lower_src.starts_with("data:")
+            || lower_src.starts_with("blob:")
+            || lower_src.starts_with("file:")
+            || lower_src.starts_with("cid:")
+        {
+            caps[0].to_string()
+        } else if let Ok(joined) = base.join(src) {
+            format!("<img{}src=\"{}\"", pre, joined.as_str())
+        } else {
+            caps[0].to_string()
+        }
+    })
+    .to_string()
+}
+
 pub fn classify_text_content(
     text: &str,
     html: Option<&str>,
@@ -869,8 +1000,25 @@ pub fn classify_text_content(
         }
     }
 
-    // 4. Rich text: If genuine HTML or RTF was captured
-    let has_rich_html = html.map_or(false, is_rich_html);
+    // 4. Rich text: If genuine HTML or RTF was captured — with a pure-text
+    // safeguard. Notepad and other plain-text sources can still provide a
+    // CF_HTML wrapper like <div>plain</div> that contains no formatting; in
+    // that case the HTML's textContent equals the plain text and we must not
+    // promote it to rich_text. This prevents the "Notepad formats as rich"
+    // bug where plain sentences were shown as Text (Formatted) with bold.
+    let has_rich_html = html.map_or(false, |h| {
+        if !is_rich_html(h) {
+            return false;
+        }
+        // Plain wrappers like <div>plain</div> or <p>plain</p> without any
+        // formatting tags/styles should stay as plain text — this is the
+        // Notepad fix. Genuine formatting (e.g., <b>Important:</b>) is kept
+        // as rich_text because html_contains_formatting will be true.
+        if !html_contains_formatting(h) {
+            return false;
+        }
+        true
+    });
     let has_rich_rtf = rtf.map_or(false, is_rich_rtf);
 
     if has_rich_html || has_rich_rtf {

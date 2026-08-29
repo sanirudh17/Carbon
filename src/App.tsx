@@ -204,7 +204,7 @@ export function App() {
   }
 
   const bannerEl = updaterBanner ? (
-    <div className="update-banner" role="status" aria-live="polite">
+    <div className={`update-banner ${updaterDownloading ? 'is-downloading' : ''}`} role="status" aria-live="polite">
       <span className="update-banner-dot" aria-hidden="true" />
       <span className="update-banner-text">
         {updaterDownloading
