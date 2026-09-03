@@ -201,7 +201,21 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   useEffect(() => {
     setEditingContent(selectedItem?.text_content || '');
   }, [selectedItem?.id, selectedItem?.text_content]);
+  // A newly selected clip gets fresh (unfocused) scroll state
+  useEffect(() => {
+    setImgFocused(false);
+    setPreviewFocused(false);
+  }, [selectedItem?.id]);
   const [zoom100, setZoom100] = useState(false);
+  // True after clicking the preview image: Up/Down scroll inside long
+  // captures instead of jumping clips. Cleared on selection change,
+  // Left/Right navigation, or Escape.
+  const [imgFocused, setImgFocused] = useState(false);
+  // Same rule for the rendered rich/markdown preview: clicking inside it
+  // focuses the pane so Up/Down scroll long documents instead of moving
+  // the list selection.
+  const [previewFocused, setPreviewFocused] = useState(false);
+  const previewRenderRef = useRef<HTMLDivElement>(null);
   const [counts, setCounts] = useState<{ [key: string]: number }>({});
   const [snippetsCount, setSnippetsCount] = useState(0);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -1340,10 +1354,48 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       }
     }
 
+    // Focused long-image scroll: after clicking the preview image, Up/Down
+    // scroll inside it instead of jumping clips. At the scroll edge it falls
+    // through to normal list navigation below.
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && imgFocused && imgWrapperRef.current && selectedItem?.content_type === 'image') {
+      const el = imgWrapperRef.current;
+      const step = Math.max(120, Math.round(el.clientHeight * 0.6)) * (e.key === 'ArrowDown' ? 1 : -1);
+      const canScroll =
+        e.key === 'ArrowDown'
+          ? el.scrollTop + el.clientHeight < el.scrollHeight - 2
+          : el.scrollTop > 2;
+      if (canScroll) {
+        e.preventDefault();
+        el.scrollBy({ top: step });
+        return;
+      }
+      setImgFocused(false);
+    }
+
+    // Focused rich/markdown preview scroll: after clicking inside the
+    // rendered document, Up/Down scroll it instead of jumping clips. At the
+    // scroll edge it falls through to normal list navigation below.
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && previewFocused && previewRenderRef.current) {
+      const el = previewRenderRef.current;
+      const step = Math.max(120, Math.round(el.clientHeight * 0.6)) * (e.key === 'ArrowDown' ? 1 : -1);
+      const canScroll =
+        e.key === 'ArrowDown'
+          ? el.scrollTop + el.clientHeight < el.scrollHeight - 2
+          : el.scrollTop > 2;
+      if (canScroll) {
+        e.preventDefault();
+        el.scrollBy({ top: step });
+        return;
+      }
+      setPreviewFocused(false);
+    }
+
     // Arrow navigation works anywhere (frame-locked for smooth holds).
     // Left/Right swap the selected clip too (wrapping) — same "slider"
     // interaction as the Quick Overlay previews and the snippets view.
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      setImgFocused(false);
+      setPreviewFocused(false);
       e.preventDefault();
       if (items.length > 0) {
         navAccumRef.current += e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : -1;
@@ -1361,6 +1413,8 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       return;
     } else if (e.key === 'Escape') {
       e.preventDefault();
+      setImgFocused(false);
+      setPreviewFocused(false);
       if (isInput) {
         target.blur();
         return;
@@ -2153,7 +2207,10 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                 <div className="preview-media">
                   <div
                     ref={imgWrapperRef}
-                    className={`preview-image-wrapper ${zoom100 ? 'zoomed' : ''}`}
+                    className={`preview-image-wrapper ${zoom100 ? 'zoomed' : ''} ${imgFocused ? 'img-focused' : ''}`}
+                    tabIndex={0}
+                    title={imgFocused ? 'Focused — Up/Down scrolls the image' : 'Click to focus, then Up/Down scrolls'}
+                    onClick={() => setImgFocused(true)}
                     onPointerDown={handlePointerDown}
                     onPointerMove={handlePointerMove}
                     onPointerUp={handlePointerUp}
@@ -2228,7 +2285,13 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   (Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!))) &&
                 renderMode ? (
                 /* Read-only RENDERED preview (Rich text & Markdown). Toggle to Raw to edit the source. */
-                <div className="preview-render">
+                <div
+                  className={`preview-render ${previewFocused ? 'preview-focused' : ''}`}
+                  ref={previewRenderRef}
+                  tabIndex={0}
+                  title={previewFocused ? 'Focused — Up/Down scrolls the document' : 'Click to focus, then Up/Down scrolls'}
+                  onClick={() => setPreviewFocused(true)}
+                >
                   <ClipPreview item={selectedItem} forceRaw={false} />
                 </div>
               ) : (

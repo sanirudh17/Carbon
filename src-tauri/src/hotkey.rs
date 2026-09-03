@@ -253,6 +253,19 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
         return;
     }
 
+    // Normalized behavior: the overlay never opens on top of an already-open
+    // main window (that "overlay pops inside the main app" confusion). If the
+    // library is visible, just bring it to front instead.
+    if let Some(main_win) = app_handle.get_webview_window("main") {
+        if main_win.is_visible().unwrap_or(false) {
+            crate::paste::log_diag("[HOTKEY] Main is open — focusing it instead of opening overlay.");
+            let _ = main_win.unminimize();
+            let _ = main_win.show();
+            let _ = main_win.set_focus();
+            return;
+        }
+    }
+
     // Fast path: save target HWND while it is still foreground (must be before show)
     crate::paste::log_diag("[HOTKEY] Overlay opening. Calling save_target_window...");
     save_target_window(app_handle);
@@ -337,6 +350,14 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
 }
 
 pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
+    // Normalized behavior: if the overlay is open, this press only swaps to
+    // the library — it never toggles the library closed in the same press
+    // (that "both collapse" confusion). Capture overlay state BEFORE
+    // dismissing so the decision is race-free.
+    let overlay_was_visible = app_handle
+        .get_webview_window("overlay")
+        .map(|w| w.is_visible().unwrap_or(false))
+        .unwrap_or(false);
     dismiss_overlay(app_handle);
 
     let main_win = match ensure_main_window(app_handle) {
@@ -346,6 +367,15 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
             return;
         }
     };
+    if overlay_was_visible {
+        crate::paste::log_diag("[HOTKEY] Overlay was open — showing main instead of toggling.");
+        save_target_window(app_handle);
+        let _ = main_win.unminimize();
+        let _ = main_win.show();
+        let _ = main_win.set_focus();
+        let _ = app_handle.emit("enlarged-opened", ());
+        return;
+    }
     let is_visible = main_win.is_visible().unwrap_or(false);
     if is_visible {
         restore_target_window();

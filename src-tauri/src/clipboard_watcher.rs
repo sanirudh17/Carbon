@@ -1000,6 +1000,23 @@ pub fn classify_text_content(
         }
     }
 
+    // 3.6 Short verification codes (e.g. Gmail "451973") must stay plain
+    // text even when the mail client wraps them in formatted HTML. A code
+    // needs no formatting; promoting it to rich_text is what produced the
+    // partial white-highlight rendering in the preview.
+    {
+        let is_code_like = !trimmed.contains('\n')
+            && trimmed.len() >= 4
+            && trimmed.len() <= 16
+            && trimmed.chars().any(|c| c.is_ascii_digit())
+            && trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ' ');
+        if is_code_like {
+            return "text".to_string();
+        }
+    }
+
     // 4. Rich text: If genuine HTML or RTF was captured — with a pure-text
     // safeguard. Notepad and other plain-text sources can still provide a
     // CF_HTML wrapper like <div>plain</div> that contains no formatting; in

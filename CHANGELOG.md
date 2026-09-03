@@ -2,6 +2,15 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
+## [0.1.10] — 2026-08-30
+
+### Fixed
+- **Verification codes stay plain text** — short digit-bearing codes (e.g., Gmail `451973`) no longer promote to `Text (Formatted)` with partial white highlights; they capture as `Text (Plain)`.
+- **LaTeX math renders as notation** — lightweight prettifier (no KaTeX dependency) converts `$...$`, `$$...$$`, `\(...\)`, `\[...\]` to serif-italic math with glyphs (`\longrightarrow`→⟶, `\epsilon`→ε, `\cap`→∩, `\lfloor`→⌊, `\frac`, `\sqrt`, `^`/`_` super/subscripts like `P*` and `18°C`). Opening `$` glued to word chars and pure numbers (`$10$`, `$5-$10`) are never touched.
+- **ASCII diagrams align** — `.rich-doc pre` now forces monospace with `white-space: pre`, `line-height: 1.55`, and ligatures off, so agent schematics and box art no longer render ragged.
+- **Arrow-scroll for long previews** — clicking the preview image or inside the rendered rich/markdown document focuses it (accent outline); Up/Down then scroll within instead of jumping clips, falling through to list navigation at the scroll edge. Left/Right, Escape, or selecting another clip unfocuses.
+- **One window at a time** — normalized shortcut toggles: overlay hotkey focuses the open library instead of popping the overlay inside it; main hotkey with the overlay open swaps to the library without collapsing both.
+
 ## [0.1.9] — 2026-08-28
 
 ### Fixed

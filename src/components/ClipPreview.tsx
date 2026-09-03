@@ -156,9 +156,107 @@ function sanitizeRichHtml(html: string): string {
       }
     };
     clean(doc.body);
+    renderMathInElement(doc.body);
     return doc.body.innerHTML.replace(/<!--[\s\S]*?-->/g, '');
   } catch {
     return '';
+  }
+}
+
+// ── Lightweight LaTeX math prettifier ────────────────────────────────────
+// Clipboard HTML from study-note pages (e.g. Comet) carries raw `$...$`
+// delimiters. A full KaTeX dependency is overkill for a clipboard preview,
+// so we do a tiny conservative pass: `$...$`, `$$...$$`, `\(...\)` and
+// `\[...\]` become serif-italic math spans with common commands
+// (`\longrightarrow`, `\times`, `\circ`, `\epsilon`, set operators,
+// `\frac{a}{b}`, `^`/`_` super/subscripts, `\text{..}`, `\#`, Greek, …)
+// replaced by their glyphs. The opening `$` must not be glued to a word
+// char (so "$5-$10" never matches) and pure numbers ($10$) stay literal —
+// everything else with valid delimiters converts.
+const MATH_GLYPHS: Record<string, string> = {
+  to: '→', rightarrow: '→', longrightarrow: '⟶', leftarrow: '←', longleftarrow: '⟵',
+  Rightarrow: '⇒', Leftarrow: '⇐', leftrightarrow: '↔', times: '×', cdot: '·',
+  circ: '°', leq: '≤', geq: '≥', neq: '≠', ne: '≠', infty: '∞', pm: '±',
+  alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', zeta: 'ζ',
+  eta: 'η', theta: 'θ', iota: 'ι', kappa: 'κ', lambda: 'λ', mu: 'μ', nu: 'ν',
+  xi: 'ξ', pi: 'π', rho: 'ρ', sigma: 'σ', tau: 'τ', upsilon: 'υ', phi: 'φ',
+  chi: 'χ', psi: 'ψ', omega: 'ω', cap: '∩', cup: '∪', in: '∈', notin: '∉',
+  subset: '⊂', forall: '∀', exists: '∃', approx: '≈', equiv: '≡', propto: '∝',
+  partial: '∂', nabla: '∇', ldots: '…', dots: '…', cdots: '⋯', vdots: '⋮',
+  ddots: '⋱', lfloor: '⌊', rfloor: '⌋', floor: '⌊', lceil: '⌈', rceil: '⌉',
+  langle: '⟨', rangle: '⟩', emptyset: '∅',
+};
+
+function prettifyMathContent(s: string): string {
+  // Escape first so the <sup>/<sub> inserted below survive as markup.
+  let out = escapeHtml(s);
+  out = out.replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, '($1)/($2)');
+  out = out.replace(/\\sqrt\{([^}]*)\}/g, '√$1');
+  out = out.replace(/\\(text|mathrm|textbf|textit)\{([^}]*)\}/g, '$2');
+  // \left( \right) \left[ … are just delimiters — drop the command.
+  out = out.replace(/\\(left|right)(?=[({\[])/g, '');
+  out = out.replace(/\\(quad|qquad)\b/g, ' ');
+  out = out.replace(
+    /\\(to|rightarrow|longrightarrow|leftarrow|longleftarrow|Rightarrow|Leftarrow|leftrightarrow|times|cdot|circ|leq|geq|neq|ne|infty|pm|alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega|cap|cup|in|notin|subset|forall|exists|approx|equiv|propto|partial|nabla|ldots|dots|cdots|vdots|ddots|lfloor|rfloor|floor|lceil|rceil|langle|rangle|emptyset)\b/g,
+    (_m, cmd: string) => MATH_GLYPHS[cmd] ?? _m
+  );
+  // Superscripts / subscripts: $P^*$ → P*, $S_O$ → S with O subscript,
+  // $18^\circ C$ → 18°C, $O(b^{d/2})$ keeps its exponent.
+  out = out.replace(/\^\{([^}]*)\}|\^(\S)/g, '<sup>$1$2</sup>');
+  out = out.replace(/_\{([^}]*)\}|_([A-Za-z0-9])/g, '<sub>$1$2</sub>');
+  out = out.replace(/\\[ ,;:]/g, ' ').replace(/\\#/g, '#');
+  return out.trim();
+}
+
+// Single-$ pairs need a guarded opening `$` (not glued to a word char, `-`
+// or another `$`) so price ranges like "$5-$10" are never treated as math.
+// Everything else with valid delimiters converts — EXCEPT pure numbers
+// ($10$ stays literal), which is the only remaining price-like shape.
+const MATH_RE = /\\\[([\s\S]+?)\\\]|\\\((.+?)\\\)|\$\$([\s\S]+?)\$\$|(?<![\w$\-–—])\$([^\s$](?:[^$]*?[^\s$])?)\$/g;
+
+function mathifyTextContent(text: string): string {
+  let result = '';
+  let last = 0;
+  MATH_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = MATH_RE.exec(text)) !== null) {
+    result += escapeHtml(text.slice(last, m.index));
+    const content = m[1] ?? m[2] ?? m[3] ?? m[4] ?? '';
+    const display = m[1] !== undefined || m[3] !== undefined;
+    if (/^[\d\s.,$–—-]+$/.test(content)) {
+      result += escapeHtml(m[0]);
+    } else {
+      result += `<span class="${display ? 'math-display' : 'math-inline'}">${prettifyMathContent(
+        content
+      )}</span>`;
+    }
+    last = m.index + m[0].length;
+  }
+  result += escapeHtml(text.slice(last));
+  return result;
+}
+
+function renderMathInElement(root: Element) {
+  const doc = root.ownerDocument;
+  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes: Text[] = [];
+  let node: Node | null = walker.nextNode();
+  while (node) {
+    const text = node.nodeValue || '';
+    if (text.includes('$') || text.includes('\\(') || text.includes('\\[')) {
+      const parent = (node as Text).parentElement;
+      const tag = parent?.tagName.toLowerCase() || '';
+      if (tag !== 'code' && tag !== 'pre' && tag !== 'script' && tag !== 'style' && tag !== 'textarea') {
+        nodes.push(node as Text);
+      }
+    }
+    node = walker.nextNode();
+  }
+  for (const textNode of nodes) {
+    const html = mathifyTextContent(textNode.nodeValue || '');
+    const tmp = doc.createElement('span');
+    tmp.innerHTML = html;
+    textNode.replaceWith(...Array.from(tmp.childNodes));
   }
 }
 
@@ -685,44 +783,38 @@ export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ 
     const text = item.text_content || item.title || '';
 
     if (!forceRaw) {
-      // Rich text — actually formatted HTML. For website captures (e.g.,
-      // rec215.examly.io) the HTML's white card should render white, not
-      // dark. Wrap Chrome-sourced rich text in a light container so the
-      // website's own white background and images are visible, while plain
-      // Notepad stays dark.
+      // Rich text — actually formatted HTML. Document-like captures (Gmail,
+      // Comet, Chrome, localhost docs) carry dark-on-light styling from the
+      // source page; rendering them on the app's dark surface makes black
+      // text invisible except where the page set its own white background
+      // (the "only diagrams highlighted" bug). So ALL rich_text renders
+      // inside a light document card with forced dark ink, regardless of
+      // source app. Plain Notepad stays dark because it is `text`, not
+      // `rich_text`.
       if (item.content_type === 'rich_text' && sanitizedHtml) {
-        const richHtml = <div className="rich-doc" dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />;
+        const richHtml = <div className="rich-doc rich-doc-light" dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />;
         // If this rich capture also has a DIB fallback image (because its
         // HTML contained <img> with blob: or auth-gated https:), show that
-        // captured image below the HTML so the 5 images from rec215.examly.io
-        // are actually visible instead of "[Image not available]".
+        // captured image below the HTML so the images from sites like
+        // rec215.examly.io are actually visible instead of "[Image not available]".
         const fallback = item.image_path ? (
           <div style={{ marginTop: 12 }}>
             <ImagePreview item={item} />
           </div>
         ) : null;
-        const isWebsite = item.source_app?.toLowerCase().includes('chrome') ?? false;
-        if (isWebsite) {
-          return (
-            <div
-              style={{
-                background: '#ffffff',
-                color: '#1f2937',
-                padding: '14px 16px',
-                borderRadius: '8px',
-                border: '1px solid #e5e7eb',
-              }}
-            >
-              {richHtml}
-              {fallback}
-            </div>
-          );
-        }
         return (
-          <>
+          <div
+            style={{
+              background: '#ffffff',
+              color: '#1f2937',
+              padding: '14px 16px',
+              borderRadius: '8px',
+              border: '1px solid #e5e7eb',
+            }}
+          >
             {richHtml}
             {fallback}
-          </>
+          </div>
         );
       }
 
