@@ -72,7 +72,6 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   });
 
   const [stats, setStats] = useState<DbStats | null>(null);
-  const [savedMessage, setSavedMessage] = useState(false);
   const [recording, setRecording] = useState<'quick' | 'enlarged' | null>(null);
   const [draftCombo, setDraftCombo] = useState('');
   const [hotkeyError, setHotkeyError] = useState<{ field: 'quick' | 'enlarged'; message: string } | null>(null);
@@ -418,18 +417,6 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     document.documentElement.style.setProperty('--accent-base', color);
   };
 
-  const handleSave = async () => {
-    try {
-      const current = settingsRef.current;
-      await invoke('save_settings', { newSettings: current });
-      applyAccentColor(current.accent_color);
-      setSavedMessage(true);
-      setTimeout(() => setSavedMessage(false), 2000);
-    } catch (err) {
-      console.error('Failed to save settings:', err);
-    }
-  };
-
   const updateSetting = async <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     const updated = { ...settingsRef.current, [key]: value };
     setSettings(updated);
@@ -622,10 +609,6 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <ChevronLeftIcon />
         </button>
         <h2>Settings</h2>
-        {savedMessage && <span style={{ fontSize: 11.5, color: 'var(--accent-text)' }}>Saved!</span>}
-        <button className="btn accent" onClick={handleSave}>
-          Save
-        </button>
       </div>
 
       <div className="settings-body">

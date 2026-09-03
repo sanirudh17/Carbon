@@ -1119,7 +1119,7 @@ input, textarea, select, button {
 }
 
 /* Focused long-capture state: clicking the preview image focuses it so
-   Up/Down scroll inside instead of jumping clips. */
+   arrow keys scroll inside instead of jumping clips. */
 .preview-image-wrapper.img-focused {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -2229,10 +2229,11 @@ section:last-child {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: auto;
   padding: 14px 16px;
 }
 /* Focused document state: clicking the rendered preview focuses it so
-   Up/Down scroll long documents instead of jumping clips. */
+   arrow keys scroll long documents instead of jumping clips. */
 .preview-render.preview-focused {
   outline: 2px solid var(--accent);
   outline-offset: -2px;

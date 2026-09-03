@@ -207,12 +207,12 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     setPreviewFocused(false);
   }, [selectedItem?.id]);
   const [zoom100, setZoom100] = useState(false);
-  // True after clicking the preview image: Up/Down scroll inside long
-  // captures instead of jumping clips. Cleared on selection change,
-  // Left/Right navigation, or Escape.
+  // True after clicking the preview image: arrow keys scroll inside long
+  // captures instead of jumping clips (hard stop at the scroll edge).
+  // Cleared on selection change or Escape.
   const [imgFocused, setImgFocused] = useState(false);
   // Same rule for the rendered rich/markdown preview: clicking inside it
-  // focuses the pane so Up/Down scroll long documents instead of moving
+  // focuses the pane so arrows scroll long documents instead of moving
   // the list selection.
   const [previewFocused, setPreviewFocused] = useState(false);
   const previewRenderRef = useRef<HTMLDivElement>(null);
@@ -1355,8 +1355,9 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     }
 
     // Focused long-image scroll: after clicking the preview image, Up/Down
-    // scroll inside it instead of jumping clips. At the scroll edge it falls
-    // through to normal list navigation below.
+    // scroll inside it instead of jumping clips. At the scroll edge the key
+    // is consumed (hard stop) — the preview stays put so an overshoot never
+    // swaps the whole capture. Esc (or picking another clip) releases focus.
     if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && imgFocused && imgWrapperRef.current && selectedItem?.content_type === 'image') {
       const el = imgWrapperRef.current;
       const step = Math.max(120, Math.round(el.clientHeight * 0.6)) * (e.key === 'ArrowDown' ? 1 : -1);
@@ -1364,17 +1365,16 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
         e.key === 'ArrowDown'
           ? el.scrollTop + el.clientHeight < el.scrollHeight - 2
           : el.scrollTop > 2;
+      e.preventDefault();
       if (canScroll) {
-        e.preventDefault();
         el.scrollBy({ top: step });
-        return;
       }
-      setImgFocused(false);
+      return;
     }
 
     // Focused rich/markdown preview scroll: after clicking inside the
-    // rendered document, Up/Down scroll it instead of jumping clips. At the
-    // scroll edge it falls through to normal list navigation below.
+    // rendered document, Up/Down scroll it instead of jumping clips. Same
+    // hard stop at the edge — focus stays until Esc or another selection.
     if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && previewFocused && previewRenderRef.current) {
       const el = previewRenderRef.current;
       const step = Math.max(120, Math.round(el.clientHeight * 0.6)) * (e.key === 'ArrowDown' ? 1 : -1);
@@ -1382,12 +1382,46 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
         e.key === 'ArrowDown'
           ? el.scrollTop + el.clientHeight < el.scrollHeight - 2
           : el.scrollTop > 2;
+      e.preventDefault();
       if (canScroll) {
-        e.preventDefault();
         el.scrollBy({ top: step });
-        return;
       }
-      setPreviewFocused(false);
+      return;
+    }
+
+    // Focused long-image scroll (horizontal): after clicking the preview
+    // image, Left/Right pan inside it instead of jumping clips. Hard stop
+    // at the edge, same as vertical. Only applies while focused — unfocused
+    // Left/Right keeps the "slider" list navigation in the block below.
+    if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && imgFocused && imgWrapperRef.current && selectedItem?.content_type === 'image') {
+      const el = imgWrapperRef.current;
+      const step = Math.max(120, Math.round(el.clientWidth * 0.6)) * (e.key === 'ArrowRight' ? 1 : -1);
+      const canScroll =
+        e.key === 'ArrowRight'
+          ? el.scrollLeft + el.clientWidth < el.scrollWidth - 2
+          : el.scrollLeft > 2;
+      e.preventDefault();
+      if (canScroll) {
+        el.scrollBy({ left: step });
+      }
+      return;
+    }
+
+    // Focused rich/markdown preview scroll (horizontal): after clicking
+    // inside the rendered document, Left/Right pan wide tables and diagrams
+    // instead of jumping clips. Hard stop at the edge, same as vertical.
+    if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && previewFocused && previewRenderRef.current) {
+      const el = previewRenderRef.current;
+      const step = Math.max(120, Math.round(el.clientWidth * 0.6)) * (e.key === 'ArrowRight' ? 1 : -1);
+      const canScroll =
+        e.key === 'ArrowRight'
+          ? el.scrollLeft + el.clientWidth < el.scrollWidth - 2
+          : el.scrollLeft > 2;
+      e.preventDefault();
+      if (canScroll) {
+        el.scrollBy({ left: step });
+      }
+      return;
     }
 
     // Arrow navigation works anywhere (frame-locked for smooth holds).
@@ -1413,8 +1447,14 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       return;
     } else if (e.key === 'Escape') {
       e.preventDefault();
-      setImgFocused(false);
-      setPreviewFocused(false);
+      // Hierarchical Esc: a focused preview is an inner mode, so the first
+      // Esc only releases focus (arrows navigate again) instead of hiding
+      // the window — same as exiting zoom before exiting a viewer.
+      if (imgFocused || previewFocused) {
+        setImgFocused(false);
+        setPreviewFocused(false);
+        return;
+      }
       if (isInput) {
         target.blur();
         return;
@@ -2209,7 +2249,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                     ref={imgWrapperRef}
                     className={`preview-image-wrapper ${zoom100 ? 'zoomed' : ''} ${imgFocused ? 'img-focused' : ''}`}
                     tabIndex={0}
-                    title={imgFocused ? 'Focused — Up/Down scrolls the image' : 'Click to focus, then Up/Down scrolls'}
+                    title={imgFocused ? 'Focused — arrow keys scroll the image (Esc to release)' : 'Click to focus, then arrow keys scroll'}
                     onClick={() => setImgFocused(true)}
                     onPointerDown={handlePointerDown}
                     onPointerMove={handlePointerMove}
@@ -2289,7 +2329,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   className={`preview-render ${previewFocused ? 'preview-focused' : ''}`}
                   ref={previewRenderRef}
                   tabIndex={0}
-                  title={previewFocused ? 'Focused — Up/Down scrolls the document' : 'Click to focus, then Up/Down scrolls'}
+                  title={previewFocused ? 'Focused — arrow keys scroll the document (Esc to release)' : 'Click to focus, then arrow keys scroll'}
                   onClick={() => setPreviewFocused(true)}
                 >
                   <ClipPreview item={selectedItem} forceRaw={false} />

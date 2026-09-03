@@ -168,43 +168,84 @@ function sanitizeRichHtml(html: string): string {
 // delimiters. A full KaTeX dependency is overkill for a clipboard preview,
 // so we do a tiny conservative pass: `$...$`, `$$...$$`, `\(...\)` and
 // `\[...\]` become serif-italic math spans with common commands
-// (`\longrightarrow`, `\times`, `\circ`, `\epsilon`, set operators,
-// `\frac{a}{b}`, `^`/`_` super/subscripts, `\text{..}`, `\#`, Greek, …)
+// (`\longrightarrow`/`\Longrightarrow`, `\sum`, `\wedge`, `\times`,
+// `\circ`, `\epsilon`/`\varepsilon`, set operators, `\frac{a}{b}`,
+// `^`/`_` super/subscripts, `\text{..}`, `\#`, Greek (incl. capitals), …)
 // replaced by their glyphs. The opening `$` must not be glued to a word
 // char (so "$5-$10" never matches) and pure numbers ($10$) stay literal —
 // everything else with valid delimiters converts.
 const MATH_GLYPHS: Record<string, string> = {
+  Longrightarrow: '⟹', Longleftarrow: '⟸', implies: '⟹', iff: '⟺', Leftrightarrow: '⇔',
   to: '→', rightarrow: '→', longrightarrow: '⟶', leftarrow: '←', longleftarrow: '⟵',
-  Rightarrow: '⇒', Leftarrow: '⇐', leftrightarrow: '↔', times: '×', cdot: '·',
-  circ: '°', leq: '≤', geq: '≥', neq: '≠', ne: '≠', infty: '∞', pm: '±',
-  alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', zeta: 'ζ',
-  eta: 'η', theta: 'θ', iota: 'ι', kappa: 'κ', lambda: 'λ', mu: 'μ', nu: 'ν',
-  xi: 'ξ', pi: 'π', rho: 'ρ', sigma: 'σ', tau: 'τ', upsilon: 'υ', phi: 'φ',
-  chi: 'χ', psi: 'ψ', omega: 'ω', cap: '∩', cup: '∪', in: '∈', notin: '∉',
-  subset: '⊂', forall: '∀', exists: '∃', approx: '≈', equiv: '≡', propto: '∝',
-  partial: '∂', nabla: '∇', ldots: '…', dots: '…', cdots: '⋯', vdots: '⋮',
-  ddots: '⋱', lfloor: '⌊', rfloor: '⌋', floor: '⌊', lceil: '⌈', rceil: '⌉',
-  langle: '⟨', rangle: '⟩', emptyset: '∅',
+  Rightarrow: '⇒', Leftarrow: '⇐', leftrightarrow: '↔', mapsto: '↦',
+  times: '×', div: '÷', cdot: '·', circ: '∘', bullet: '•', ast: '∗', star: '★',
+  pm: '±', sim: '∼', simeq: '≃', cong: '≅', approx: '≈', equiv: '≡', propto: '∝',
+  leq: '≤', geq: '≥', le: '≤', ge: '≥', ll: '≪', gg: '≫',
+  neq: '≠', ne: '≠', infty: '∞',
+  sum: '∑', prod: '∏', int: '∫',
+  wedge: '∧', vee: '∨', land: '∧', lor: '∨', neg: '¬', lnot: '¬',
+  models: '⊨', vdash: '⊢', mid: '∣',
+  alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', varepsilon: 'ϵ',
+  zeta: 'ζ', eta: 'η', theta: 'θ', iota: 'ι', kappa: 'κ', lambda: 'λ', mu: 'μ',
+  nu: 'ν', xi: 'ξ', pi: 'π', rho: 'ρ', sigma: 'σ', tau: 'τ', upsilon: 'υ',
+  phi: 'φ', varphi: 'φ', chi: 'χ', psi: 'ψ', omega: 'ω',
+  Alpha: 'Α', Beta: 'Β', Gamma: 'Γ', Delta: 'Δ', Epsilon: 'Ε', Zeta: 'Ζ',
+  Eta: 'Η', Theta: 'Θ', Iota: 'Ι', Kappa: 'Κ', Lambda: 'Λ', Mu: 'Μ',
+  Nu: 'Ν', Xi: 'Ξ', Omicron: 'Ο', Pi: 'Π', Rho: 'Ρ', Sigma: 'Σ', Tau: 'Τ',
+  Upsilon: 'Υ', Phi: 'Φ', Chi: 'Χ', Psi: 'Ψ', Omega: 'Ω',
+  cap: '∩', cup: '∪', bigcap: '⋂', bigcup: '⋃', in: '∈', notin: '∉',
+  subset: '⊂', supset: '⊃', subseteq: '⊆', supseteq: '⊇',
+  forall: '∀', exists: '∃', nexists: '∄',
+  oplus: '⊕', ominus: '⊖', otimes: '⊗',
+  partial: '∂', nabla: '∇', prime: '′',
+  ldots: '…', dots: '…', cdots: '⋯', vdots: '⋮', ddots: '⋱',
+  lfloor: '⌊', rfloor: '⌋', floor: '⌊', lceil: '⌈', rceil: '⌉',
+  langle: '⟨', rangle: '⟩', emptyset: '∅', varnothing: '∅',
+  // Upright operators render as plain text (backslash dropped).
+  lim: 'lim', log: 'log', exp: 'exp', sin: 'sin', cos: 'cos', tan: 'tan',
+  max: 'max', min: 'min', argmax: 'argmax', argmin: 'argmin',
+  sup: 'sup', inf: 'inf', det: 'det', dim: 'dim',
 };
 
 function prettifyMathContent(s: string): string {
   // Escape first so the <sup>/<sub> inserted below survive as markup.
   let out = escapeHtml(s);
+  // LaTeX `\\` line break → space (must run before single-backslash rules).
+  out = out.replace(/\\\\/g, ' ');
+  // `^\circ` is the degree idiom (`18^\circ C` → 18°C); a bare `\circ`
+  // (function composition, `f \circ g`) renders as ∘.
+  out = out.replace(/\^\\circ/g, '°');
   out = out.replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, '($1)/($2)');
+  out = out.replace(/\\sqrt\[[^\]]*\]\{([^}]*)\}/g, '√$1');
   out = out.replace(/\\sqrt\{([^}]*)\}/g, '√$1');
-  out = out.replace(/\\(text|mathrm|textbf|textit)\{([^}]*)\}/g, '$2');
-  // \left( \right) \left[ … are just delimiters — drop the command.
-  out = out.replace(/\\(left|right)(?=[({\[])/g, '');
-  out = out.replace(/\\(quad|qquad)\b/g, ' ');
-  out = out.replace(
-    /\\(to|rightarrow|longrightarrow|leftarrow|longleftarrow|Rightarrow|Leftarrow|leftrightarrow|times|cdot|circ|leq|geq|neq|ne|infty|pm|alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega|cap|cup|in|notin|subset|forall|exists|approx|equiv|propto|partial|nabla|ldots|dots|cdots|vdots|ddots|lfloor|rfloor|floor|lceil|rceil|langle|rangle|emptyset)\b/g,
-    (_m, cmd: string) => MATH_GLYPHS[cmd] ?? _m
+  out = out.replace(/\\(text|mathrm|mathbf|mathit|textbf|textit|mathcal|mathsf|boldsymbol|operatorname)\{([^}]*)\}/g, '$2');
+  // Accent/styling wrappers keep their argument: `\hat{x}` → x, `\bar{x}` → x.
+  out = out.replace(/\\(hat|bar|tilde|vec|dot|ddot|overline|underline)\{([^}]*)\}/g, '$2');
+  out = out.replace(/\\(hat|bar|tilde|vec)\s*([A-Za-z])/g, '$2');
+  // `\left(`/`\right)`, `\left|`/`\right.`, … are just delimiters.
+  // The lookahead keeps longer commands (`\rightarrow`, `\leftarrow`,
+  // `\leftrightarrow`) intact for the glyph lookup below.
+  out = out.replace(/\\(left|right)(?![A-Za-z])\s*([({\[|.)\]])?/g, (_m, _cmd: string, delim?: string) =>
+    !delim || delim === '.' ? '' : delim
   );
+  // Sizing prefixes carry no meaning for a text preview — drop them, but
+  // not inside `\bigcap` / `\bigcup` (lookahead, same reason as above).
+  out = out.replace(/\\(bigg?|Bigg?)(?![A-Za-z])\s*/g, '');
+  out = out.replace(/\\(hspace|vspace)(\{[^}]*\}|\*?\s*\S+)?/g, ' ');
+  out = out.replace(/\\(quad|qquad)\b/g, ' ');
+  // Blackboard-bold sets common in AI notes: `\mathbb{N}` → ℕ (others unwrap).
+  out = out.replace(/\\mathbb\{([A-Z])\}/g, (_m, letter: string) =>
+    ({ N: 'ℕ', R: 'ℝ', Z: 'ℤ', Q: 'ℚ', C: 'ℂ' } as Record<string, string>)[letter] ?? letter
+  );
+  // Command lookup: longest letter-run after `\` (so `\sum_{…}` matches
+  // even though `_` is a word char, where `\b` would fail). Unknown
+  // commands (`\mathbb`, `\begin`, …) are left untouched.
+  out = out.replace(/\\([A-Za-z]+)/g, (m, cmd: string) => MATH_GLYPHS[cmd] ?? m);
   // Superscripts / subscripts: $P^*$ → P*, $S_O$ → S with O subscript,
-  // $18^\circ C$ → 18°C, $O(b^{d/2})$ keeps its exponent.
+  // $18^\circ C$ → 18°C (handled above), $O(b^{d/2})$ keeps its exponent.
   out = out.replace(/\^\{([^}]*)\}|\^(\S)/g, '<sup>$1$2</sup>');
   out = out.replace(/_\{([^}]*)\}|_([A-Za-z0-9])/g, '<sub>$1$2</sub>');
-  out = out.replace(/\\[ ,;:]/g, ' ').replace(/\\#/g, '#');
+  out = out.replace(/\\[ ,;:]/g, ' ').replace(/\\&amp;/g, '&amp;').replace(/\\%/g, '%').replace(/\\_/g, '&#95;').replace(/\\\$/g, '$').replace(/\\#/g, '#');
   return out.trim();
 }
 
