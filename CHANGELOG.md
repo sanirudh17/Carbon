@@ -2,6 +2,13 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
+## [0.1.11] — 2026-09-03
+
+### Fixed
+- **Math covers study-note symbols** — audited against the Foundations-of-AI PDFs: `\Longrightarrow`→⟹, `\Leftrightarrow`→⇔, `\mapsto`→↦, `\sum`→∑ / `\prod`→∏ / `\int`→∫ (subscripts like `\sum_{i=1}^{n}` now convert), `\wedge`→∧ / `\vee`→∨ / `\neg`→¬ / `\models`→⊨ / `\vdash`→⊢, `\sim`→∼ / `\div`→÷, capital Greek (`\Delta`→Δ, `\Alpha`→Α, …), `\varepsilon`→ϵ, `\prime`→′ / `\ast`→∗ / `\star`→★ / `\bullet`→•, `\subseteq`→⊆ / `\bigcap`→⋂, blackboard sets (`\mathbb{N}`→ℕ, ℝ, ℤ, ℚ, ℂ), upright operators (`\lim`, `\argmax`, …). `\circ` now renders function composition (∘) while `18^\circ C` still gives 18°C, and `\left`/`\right` no longer eat `\rightarrow`-style prefixes.
+- **Focused arrows stop at the edge** — clicking the preview image or rendered rich/markdown doc focuses it and all four arrows scroll/pan within; reaching the end no longer jumps to the next capture (an overshoot can't swap the whole preview). `Esc` now releases focus first and only closes on a second press; tooltips note the release.
+- **Settings Save button removed** — every control already persists instantly, so the button just re-saved the same state.
+
 ## [0.1.10] — 2026-08-30
 
 ### Fixed
