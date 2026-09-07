@@ -14,14 +14,14 @@ export default defineConfig(async () => ({
   clearScreen: false,
   // 2. tauri expects a fixed port, fail if that port is not available
   // (Windows dynamically excludes TCP port ranges for Hyper-V/WSL and
-  // reshuffles them on every reboot: earlier 1420/1445, then 1599/1600 all
-  // ended up inside reserved ranges → bind EACCES. As of the current
-  // exclusions (1033-1232, 1432-1531, 1545-1644, 10564-10663, 50000-50059),
-  // 2170/2171 sit outside every range. If EACCES strikes again after a
-  // reboot, re-check `netsh interface ipv4 show excludedportrange
-  // protocol=tcp` and pick ports above the highest reserved boundary.)
+  // reshuffles them on every reboot: 1420/1445, then 1599/1600, then
+  // 2170/2171 all ended up inside reserved ranges → bind EACCES.
+  // Current exclusions (1033-1232, 2077-2176, 4218-4317, 8825-8924,
+  // 50000-50059): 3210/3211 sit outside every range. If EACCES strikes
+  // again after a reboot, re-check `netsh interface ipv4 show
+  // excludedportrange protocol=tcp` and pick ports clear of all ranges.)
   server: {
-    port: 2170,
+    port: 3210,
     strictPort: true,
     // Bind IPv4 loopback explicitly: on this machine Node cannot listen on the
     // IPv6 loopback (::1 → EACCES) when IPv6 is disabled, which breaks the
@@ -31,7 +31,7 @@ export default defineConfig(async () => ({
       ? {
           protocol: "ws",
           host,
-          port: 2171,
+          port: 3211,
         }
       : undefined,
     watch: {

@@ -29,6 +29,7 @@ import {
   DeleteIcon,
   FilterIcon,
   StarIcon,
+  DragHandleIcon,
   snippetIconFor,
   getTypeIcon,
   getTypeColor,
@@ -44,6 +45,11 @@ declare global {
     __carbonSetSnippets?: (data: Snippet[]) => void;
     __carbonInitialSnippets?: Snippet[];
   }
+}
+
+const emptyDragImg = typeof Image !== 'undefined' ? new Image() : null;
+if (emptyDragImg) {
+  emptyDragImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 }
 
 interface DateGroup {
@@ -91,6 +97,7 @@ const OverlayRow = memo(function OverlayRow({
   item,
   index,
   isSelected,
+  isDragging,
   queueIdx,
   onSelect,
   onDragStart,
@@ -99,6 +106,7 @@ const OverlayRow = memo(function OverlayRow({
   item: ClipItem;
   index: number;
   isSelected: boolean;
+  isDragging: boolean;
   queueIdx: number;
   onSelect: (idx: number) => void;
   onDragStart: (item: ClipItem, e: React.DragEvent) => void;
@@ -108,12 +116,11 @@ const OverlayRow = memo(function OverlayRow({
   return (
     <div
       id={`overlay-row-${index}`}
-      className={`row ${isSelected ? 'selected' : ''} ${queueIdx >= 0 ? 'in-queue' : ''}`}
-      onClick={() => onSelect(index)}
-      draggable
-      title="Drag to drop into any app"
+      draggable={true}
       onDragStart={(e) => onDragStart(item, e)}
       onDragEnd={onDragEnd}
+      className={`row ${isSelected ? 'selected' : ''} ${isDragging ? 'is-dragging' : ''} ${queueIdx >= 0 ? 'in-queue' : ''}`}
+      onClick={() => onSelect(index)}
     >
       <div
         className="type-icon"
@@ -150,6 +157,9 @@ const OverlayRow = memo(function OverlayRow({
       </div>
 
       <div className="row-right">
+        <div className="drag-handle" title="Drag and drop clip">
+          <DragHandleIcon />
+        </div>
         <div className="row-meta">
           <span className="row-time">{formatTimeAgo(item.created_at)}</span>
         </div>
@@ -166,6 +176,7 @@ export const QuickOverlay: React.FC = () => {
   const [items, setItems] = useState<ClipItem[]>(() => (typeof window !== 'undefined' && window.__carbonInitialData) || []);
   const [initialLoaded, setInitialLoaded] = useState(() => Boolean(typeof window !== 'undefined' && window.__carbonInitialData && window.__carbonInitialData.length > 0));
   const [pasteQueue, setPasteQueue] = useState<ClipItem[]>([]);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
   // Pending native-window resize for the preview toggle (see togglePreview)
   const previewResizeTimer = useRef<number | null>(null);
   const [collections, setCollections] = useState<Collection[]>([]);
@@ -586,9 +597,9 @@ export const QuickOverlay: React.FC = () => {
     focusSearchInput();
   }, []);
 
-  // Drag-out: rows carry the shared payload so drops onto external apps
-  // (editors, browsers, chat) paste text / images / files. Sensitive clips
-  // only expose their masked label, never the secret.
+  // Drag-out: exact mirror of the main window — same payload, same empty
+  // drag image, same dragging highlight. Sensitive clips only expose their
+  // masked label, never the secret.
   const handleOverlayDragStart = useCallback((item: ClipItem, e: React.DragEvent) => {
     if (item.is_sensitive) {
       e.dataTransfer.effectAllowed = 'copy';
@@ -597,11 +608,20 @@ export const QuickOverlay: React.FC = () => {
       } catch {}
       return;
     }
+    setDraggingId(item.id);
     window.__carbonDraggingClipIds = [item.id];
+
+    if (e.dataTransfer && emptyDragImg && e.dataTransfer.setDragImage) {
+      try {
+        e.dataTransfer.setDragImage(emptyDragImg, 0, 0);
+      } catch {}
+    }
+
     setClipDragData(e, item);
   }, []);
 
   const handleOverlayDragEnd = useCallback(() => {
+    setDraggingId(null);
     window.__carbonDraggingClipIds = null;
   }, []);
 
@@ -1586,6 +1606,7 @@ export const QuickOverlay: React.FC = () => {
                           item={item}
                           index={currentIdx}
                           isSelected={isSelected}
+                          isDragging={draggingId === item.id}
                           queueIdx={queueIdx}
                           onSelect={handleSelectRow}
                           onDragStart={handleOverlayDragStart}

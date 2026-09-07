@@ -1,16 +1,9 @@
+import { convertFileSrc } from '@tauri-apps/api/core';
 import type { ClipItem } from '../types';
 
-// Local file path -> file:// URL external apps can resolve on drop.
-// (Tauri's convertFileSrc asset URLs only work inside our own webviews.)
-export const filePathToFileUrl = (p: string) => {
-  const normalized = p.replace(/\\/g, '/');
-  return `file://${normalized.startsWith('/') ? normalized : `/${normalized}`}`;
-};
-
-// Shared drag-out payload so clips dropped onto any external text area or
-// image-capable app carry something usable: plain text everywhere, HTML for
-// rich targets, and real file:// URLs for images/files/links. Internal
-// Carbon drops keep working via the carbon/clip-ids flavor.
+// Exact same drag-out payload as the main window (EnlargedWindow): plain
+// text everywhere, HTML for rich targets, and URI lists for links / images /
+// files, plus the internal carbon/clip-ids flavor for Carbon-to-Carbon drops.
 export const setClipDragData = (
   e: React.DragEvent | DragEvent,
   item: ClipItem,
@@ -21,43 +14,25 @@ export const setClipDragData = (
   const list = ids && ids.length > 0 ? ids : [item.id];
   dt.effectAllowed = 'all';
 
-  const text = item.text_content || item.title || item.id;
-  try {
-    dt.setData('text/plain', text);
-  } catch {}
-  try {
-    dt.setData('application/json', JSON.stringify({ ids: list, clipId: item.id }));
-  } catch {}
-  try {
-    dt.setData('carbon/clip-ids', JSON.stringify(list));
-  } catch {}
+  const text = item.text_content || item.title || item.id || 'carbon-clip';
+  dt.setData('text/plain', text);
+  dt.setData('application/json', JSON.stringify({ ids: list, clipId: item.id }));
+  dt.setData('carbon/clip-ids', JSON.stringify(list));
 
   if (item.html_content) {
-    try {
-      dt.setData('text/html', item.html_content);
-    } catch {}
-  } else if (item.content_type === 'image' && item.image_path) {
-    try {
-      dt.setData('text/html', `<img src="${filePathToFileUrl(item.image_path)}" alt="">`);
-    } catch {}
+    dt.setData('text/html', item.html_content);
   }
 
   if (item.content_type === 'link') {
-    try {
-      dt.setData('text/uri-list', text);
-    } catch {}
+    dt.setData('text/uri-list', text);
   } else if (item.content_type === 'image' && item.image_path) {
-    try {
-      dt.setData('text/uri-list', filePathToFileUrl(item.image_path));
-    } catch {}
+    dt.setData('text/uri-list', convertFileSrc(item.image_path));
   } else if (item.content_type === 'file' && item.file_paths) {
     try {
       const paths: string[] = JSON.parse(item.file_paths);
-      dt.setData('text/uri-list', paths.map(filePathToFileUrl).join('\r\n'));
+      dt.setData('text/uri-list', paths.map((p) => 'file:///' + p.replace(/\\/g, '/')).join('\r\n'));
     } catch {
-      try {
-        dt.setData('text/plain', item.file_paths);
-      } catch {}
+      dt.setData('text/plain', item.file_paths);
     }
   }
 };
