@@ -7,6 +7,7 @@ import { collectionColorFor, normalizeCollectionColor } from '../utils/collectio
 import { ClipPreview, ClipMetaStrip, getQrCopyLabel, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
 import { getActionsForClip, getPasteActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
 import { matchesHotkeyCombo } from '../utils/hotkeys';
+import { setClipDragData } from '../utils/clipDrag';
 import { SnippetsView } from './SnippetsView';
 import {
   SearchIcon,
@@ -641,7 +642,6 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       : [item.id];
     setDraggingId(item.id);
     window.__carbonDraggingClipIds = ids;
-    e.dataTransfer.effectAllowed = 'all';
 
     if (e.dataTransfer && emptyDragImg && e.dataTransfer.setDragImage) {
       try {
@@ -649,27 +649,9 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       } catch {}
     }
 
-    const text = item.text_content || item.title || item.id || 'carbon-clip';
-    e.dataTransfer.setData('text/plain', text);
-    e.dataTransfer.setData('application/json', JSON.stringify({ ids, clipId: item.id }));
-    e.dataTransfer.setData('carbon/clip-ids', JSON.stringify(ids));
-
-    if (item.html_content) {
-      e.dataTransfer.setData('text/html', item.html_content);
-    }
-
-    if (item.content_type === 'link') {
-      e.dataTransfer.setData('text/uri-list', text);
-    } else if (item.content_type === 'image' && item.image_path) {
-      e.dataTransfer.setData('text/uri-list', convertFileSrc(item.image_path));
-    } else if (item.content_type === 'file' && item.file_paths) {
-      try {
-        const paths: string[] = JSON.parse(item.file_paths);
-        e.dataTransfer.setData('text/uri-list', paths.map((p) => 'file:///' + p.replace(/\\/g, '/')).join('\r\n'));
-      } catch {
-        e.dataTransfer.setData('text/plain', item.file_paths);
-      }
-    }
+    // Shared payload: plain text + HTML + real file:// URLs so external
+    // apps (editors, browsers, chat) accept the drop, not just Carbon.
+    setClipDragData(e, item, ids);
   }, [selectedIds]);
 
   const handleDragEnd = useCallback(() => {

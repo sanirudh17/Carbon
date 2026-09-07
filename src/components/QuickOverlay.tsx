@@ -6,6 +6,7 @@ import { ClipItem, HotkeyStatus, AppSettings, Collection, Snippet } from '../typ
 import { ClipPreview, ClipMetaStrip, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
 import { getActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
 import { matchesHotkeyCombo } from '../utils/hotkeys';
+import { setClipDragData } from '../utils/clipDrag';
 import { collectionColorFor, normalizeCollectionColor } from '../utils/collections';
 import {
   filterSnippets,
@@ -92,12 +93,16 @@ const OverlayRow = memo(function OverlayRow({
   isSelected,
   queueIdx,
   onSelect,
+  onDragStart,
+  onDragEnd,
 }: {
   item: ClipItem;
   index: number;
   isSelected: boolean;
   queueIdx: number;
   onSelect: (idx: number) => void;
+  onDragStart: (item: ClipItem, e: React.DragEvent) => void;
+  onDragEnd: () => void;
 }) {
   const tint = getTypeColor(item.content_type);
   return (
@@ -105,6 +110,10 @@ const OverlayRow = memo(function OverlayRow({
       id={`overlay-row-${index}`}
       className={`row ${isSelected ? 'selected' : ''} ${queueIdx >= 0 ? 'in-queue' : ''}`}
       onClick={() => onSelect(index)}
+      draggable
+      title="Drag to drop into any app"
+      onDragStart={(e) => onDragStart(item, e)}
+      onDragEnd={onDragEnd}
     >
       <div
         className="type-icon"
@@ -575,6 +584,25 @@ export const QuickOverlay: React.FC = () => {
   const handleSelectRow = useCallback((idx: number) => {
     setSelectedIndex(idx);
     focusSearchInput();
+  }, []);
+
+  // Drag-out: rows carry the shared payload so drops onto external apps
+  // (editors, browsers, chat) paste text / images / files. Sensitive clips
+  // only expose their masked label, never the secret.
+  const handleOverlayDragStart = useCallback((item: ClipItem, e: React.DragEvent) => {
+    if (item.is_sensitive) {
+      e.dataTransfer.effectAllowed = 'copy';
+      try {
+        e.dataTransfer.setData('text/plain', 'Sensitive Clip');
+      } catch {}
+      return;
+    }
+    window.__carbonDraggingClipIds = [item.id];
+    setClipDragData(e, item);
+  }, []);
+
+  const handleOverlayDragEnd = useCallback(() => {
+    window.__carbonDraggingClipIds = null;
   }, []);
 
   // ── Settings-driven behavior ───────────────────────────────────────
@@ -1560,6 +1588,8 @@ export const QuickOverlay: React.FC = () => {
                           isSelected={isSelected}
                           queueIdx={queueIdx}
                           onSelect={handleSelectRow}
+                          onDragStart={handleOverlayDragStart}
+                          onDragEnd={handleOverlayDragEnd}
                         />
                       );
                   })}
@@ -1692,7 +1722,15 @@ export const QuickOverlay: React.FC = () => {
                     </div>
                     <div className="overlay-preview-content">
                       {selectedItem.content_type === 'image' || selectedItem.content_type === 'file' ? (
-                        <ClipPreview item={selectedItem} />
+                        <div
+                          draggable
+                          title="Drag to drop into any app"
+                          style={{ display: 'contents' }}
+                          onDragStart={(e) => handleOverlayDragStart(selectedItem, e)}
+                          onDragEnd={handleOverlayDragEnd}
+                        >
+                          <ClipPreview item={selectedItem} />
+                        </div>
                       ) : hasRenderedVersion && renderMode ? (
                         <div className="preview-render">
                           <ClipPreview item={selectedItem} forceRaw={false} />
