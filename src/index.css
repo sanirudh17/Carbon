@@ -426,16 +426,13 @@ html[data-material="solid"] .enlarged::before {
 
 /* Tab-switcher header removed: searchbars are now direct children of the
    overlay — keep the same spacing the wrapper used to provide.
-   The field itself uses the darker sidebar glass so the overlay reads
-   dark-top / translucent-list / dark-bottom-bar like the library's
-   dark-sides / translucent-middle columns. Focus never changes it:
-   still zero highlight, only the text cursor. */
+   Fully transparent like the main-app .main-top: the crisp edge of the old
+   dark field read as a border around the search bar. Focus never changes
+   it: still zero highlight, only the text cursor. */
 .overlay > .searchbar {
   margin: 10px 10px 8px;
   flex-shrink: 0;
-  background: var(--ov-side) !important;
-  /* Borderless like the main-app search: the darker field alone marks the
-     top zone, consistent in clips and snippets tabs. */
+  background: transparent !important;
   border: none !important;
   box-shadow: none !important;
   outline: none !important;
@@ -447,7 +444,7 @@ html[data-material="solid"] .enlarged::before {
   border: none !important;
   outline: none !important;
   box-shadow: none !important;
-  background: var(--ov-side) !important;
+  background: transparent !important;
 }
 
 .searchbar {
@@ -2265,7 +2262,9 @@ section:last-child {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--ov-side);
+  /* Exact main-app preview token (was obsidian --ov-side, which composited
+     darker than the library). Same token over the same slab = same look. */
+  background: var(--glass-preview);
   border-left: 1px solid var(--glass-hairline);
   /* Single crisp reveal: width + quick fade, no translate slide */
   transition: flex-basis 130ms var(--ease-out),
