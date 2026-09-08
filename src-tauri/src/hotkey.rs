@@ -297,6 +297,14 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     };
     if overlay_win.outer_size().ok() != Some(want) {
         let _ = overlay_win.set_size(tauri::Size::Physical(want));
+        // set_size is async: the immediate clip below can still read the OLD
+        // rect, leaving a stale region (corner tabs / gray bleed). Re-clip
+        // once the resize has landed.
+        let reclip_win = overlay_win.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(220));
+            crate::vibrancy::set_round_corners(&reclip_win);
+        });
     }
     crate::vibrancy::set_round_corners(&overlay_win);
 

@@ -365,7 +365,11 @@ input, textarea, select, button {
   height: 100%;
   border-radius: 14px;
   overflow: hidden;
-  background: var(--glass-panel-bg);
+  /* Transparent like .enlarged: the single body.win-overlay slab provides the
+     base tint, while the list scrim / preview pane / bottom bar layer the
+     same two-tone frosted depth as the library columns. A second 0.70 slab
+     here used to double-stack to ~0.91 opaque, making the overlay flat dark. */
+  background: transparent;
   border: none;
   box-shadow: var(--glass-highlight), var(--glass-shadow);
   display: flex;

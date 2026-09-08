@@ -686,8 +686,15 @@ fn set_overlay_preview(
             let gen = ANIM_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             let total_ms: u64 = 150;
             let steps: u32 = 9;
+            // DPI-aware corner radius so the HWND clip tracks the CSS 14px
+            // rounded rect at every animation frame (kills corner protrusion
+            // and the stale-region "gray window" after Tab toggles preview).
+            let clip_r = (14.0 * scale).round() as i32;
             std::thread::spawn(move || {
                 let h = HWND(h_raw as *mut _);
+                let clip_step = |ww: i32, hh: i32| {
+                    crate::vibrancy::clip_raw_hwnd(h_raw, "overlay", ww, hh, clip_r);
+                };
                 for i in 1..=steps {
                     std::thread::sleep(std::time::Duration::from_millis(total_ms / steps as u64));
                     if ANIM_GEN.load(std::sync::atomic::Ordering::Relaxed) != gen {
@@ -696,17 +703,20 @@ fn set_overlay_preview(
                     let t = i as f32 / steps as f32;
                     let e = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t); // ease-out cubic
                     let lerp = |a: i32, b: i32| a + ((b - a) as f32 * e).round() as i32;
+                    let cw = lerp(fw, w_phys as i32);
+                    let ch = lerp(fh, h_phys as i32);
                     unsafe {
                         let _ = SetWindowPos(
                             h,
                             None,
                             lerp(fx, pos_x),
                             lerp(fy, pos_y),
-                            lerp(fw, w_phys as i32),
-                            lerp(fh, h_phys as i32),
+                            cw,
+                            ch,
                             SWP_NOACTIVATE | SWP_NOZORDER,
                         );
                     }
+                    clip_step(cw, ch);
                 }
                 if ANIM_GEN.load(std::sync::atomic::Ordering::Relaxed) == gen {
                     unsafe {
@@ -720,6 +730,7 @@ fn set_overlay_preview(
                             SWP_NOACTIVATE | SWP_NOZORDER,
                         );
                     }
+                    clip_step(w_phys as i32, h_phys as i32);
                 }
             });
         }
