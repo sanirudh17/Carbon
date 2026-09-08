@@ -76,7 +76,10 @@
 
 body.win-overlay,
 html.win-overlay body {
-  background: var(--glass-panel-bg);
+  /* Same base tint as the library window (was the bluer --glass-panel-bg):
+     both windows now composite from one identical base, so the preview
+     panes read as the same color and transparency. */
+  background: var(--glass-base);
   /* 8px matches the DWM ROUND arc exactly: a larger CSS arc leaves a
      blur-only band outside the CSS curve at the top corners (the mild
      protruding tabs). Library/enlarged keep 14px — untouched. */
@@ -160,7 +163,7 @@ html.win-library body {
 [data-theme="light"] body.win-overlay,
 html[data-theme="light"].win-overlay body,
 body.win-overlay[data-theme="light"] {
-  background: var(--glass-panel-bg);
+  background: var(--glass-base);
 }
 
 [data-theme="light"] body.win-library,
@@ -4873,6 +4876,14 @@ section:last-child {
 html[data-material="solid"] .sn-content-preview {
   background: var(--elev);
   border-color: var(--line-soft);
+}
+
+/* Captures pattern for the snippet pane: the content box flex-fills the
+   column (no 320px cap) so Information sits at the bottom like clips. */
+.sn-detail-body .sn-content-preview {
+  flex: 1 1 auto;
+  min-height: 140px;
+  max-height: none;
 }
 
 .sn-content-empty {
