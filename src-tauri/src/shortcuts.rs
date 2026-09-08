@@ -58,7 +58,7 @@ fn apply(app: &AppHandle, strict: bool) -> Result<(), String> {
         match bind_shortcut(&quick) {
             Ok(shortcut) => {
                 crate::paste::log_diag(&format!("[SHORTCUTS] Registering quick hotkey: {}", quick));
-                if app
+                if let Err(e) = app
                     .global_shortcut()
                     .on_shortcut(
                         shortcut,
@@ -70,9 +70,8 @@ fn apply(app: &AppHandle, strict: bool) -> Result<(), String> {
                             }
                         },
                     )
-                    .is_err()
                 {
-                    crate::paste::log_diag(&format!("[SHORTCUTS] Failed to register quick hotkey: {}", quick));
+                    crate::paste::log_diag(&format!("[SHORTCUTS] Failed to register quick hotkey: {} ({e:?}). Hint: another carbon.exe already holds it — kill duplicates.", quick));
                     overlay_ok = false;
                     failures.push(format!("Quick Overlay hotkey \"{quick}\""));
                 }
@@ -90,7 +89,7 @@ fn apply(app: &AppHandle, strict: bool) -> Result<(), String> {
         match bind_shortcut(&enlarged) {
             Ok(shortcut) => {
                 crate::paste::log_diag(&format!("[SHORTCUTS] Registering enlarged hotkey: {}", enlarged));
-                if app
+                if let Err(e) = app
                     .global_shortcut()
                     .on_shortcut(
                         shortcut,
@@ -101,9 +100,8 @@ fn apply(app: &AppHandle, strict: bool) -> Result<(), String> {
                             }
                         },
                     )
-                    .is_err()
                 {
-                    crate::paste::log_diag(&format!("[SHORTCUTS] Failed to register enlarged hotkey: {}", enlarged));
+                    crate::paste::log_diag(&format!("[SHORTCUTS] Failed to register enlarged hotkey: {} ({e:?}). Hint: another carbon.exe already holds it — kill duplicates.", enlarged));
                     enlarged_ok = false;
                     failures.push(format!("Enlarged Window hotkey \"{enlarged}\""));
                 }

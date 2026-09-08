@@ -1131,6 +1131,32 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            // Singleton guard: never allow two carbon.exe to hold the DB +
+            // global hotkeys at once. The single-instance plugin notifies the
+            // first instance, but a second process still ran setup all the way
+            // to PREWARM while failing to register hotkeys (log 14:25:53).
+            // A named OS mutex exits duplicates before they touch DB/shortcuts.
+            #[cfg(target_os = "windows")]
+            {
+                unsafe {
+                    use windows::core::w;
+                    use windows::Win32::Foundation::{GetLastError, BOOL, ERROR_ALREADY_EXISTS};
+                    use windows::Win32::System::Threading::CreateMutexW;
+                    match CreateMutexW(None, BOOL(1), w!("com.carbon.clipboard.single-instance")) {
+                        Ok(handle) => {
+                            if GetLastError() == ERROR_ALREADY_EXISTS {
+                                eprintln!("[SINGLETON] Duplicate carbon.exe detected — exiting so the first instance keeps the hotkeys.");
+                                std::process::exit(0);
+                            }
+                            std::mem::forget(handle);
+                        }
+                        Err(e) => {
+                            eprintln!("[SINGLETON] CreateMutexW failed ({e:?}) — continuing without singleton guard.");
+                        }
+                    }
+                }
+            }
+
             let app_handle = app.handle().clone();
 
             let app_data_dir = app
