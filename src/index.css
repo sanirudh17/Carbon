@@ -4794,8 +4794,10 @@ section:last-child {
   width: 0;
   overflow: hidden;
   flex-shrink: 0;
-  background: var(--surface);
-  border-left: 1px solid var(--line);
+  /* Glass like the clips .preview pane (was opaque --surface, which killed
+     the frosted effect across the whole snippet detail column). */
+  background: var(--glass-preview);
+  border-left: 1px solid var(--glass-hairline);
   transition: width 200ms var(--ease-out);
 }
 
@@ -4850,12 +4852,12 @@ section:last-child {
 }
 
 .sn-content-preview {
-  /* Translucent card (was opaque --elev): lets the frosted blur show through
-     in the main-app detail pane and the picker preview alike. Theme-adaptive
-     via color-mix on --elev; tokens untouched. */
-  background: color-mix(in srgb, var(--elev) 55%, transparent);
+  /* Bare glass card like the clips .preview-text.mono block: text floats on
+     the pane frost with only a hairline box (was a 55% --elev slab that read
+     flat/dark next to the airy clips preview). Theme-adaptive; tokens kept. */
+  background: transparent;
   background-clip: padding-box;
-  border: 1px solid var(--glass-hairline);
+  border: 1px solid var(--glass-border);
   border-radius: var(--r-panel);
   padding: 10px 12px;
   font-family: var(--mono, monospace);
@@ -5227,11 +5229,18 @@ html[data-material="solid"] .sn-content-preview {
   border: none;
   border-radius: 6px;
   background: none;
-  color: var(--text-2);
+  /* Full-brightness glyphs + soft separation shadow so options stay legible
+     where blurred page text bleeds through. Backgrounds untouched. */
+  color: var(--text);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
   font-family: var(--font);
   font-size: 12px;
   text-align: left;
   cursor: pointer;
+}
+
+[data-theme="light"] .c-dropdown-item {
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.65);
 }
 
 .c-dropdown-item.active {
@@ -5248,8 +5257,10 @@ html[data-material="solid"] .sn-content-preview {
   display: inline-flex;
   width: 16px;
   justify-content: center;
-  color: var(--text-2);
+  color: inherit;
   flex-shrink: 0;
+  /* Inherit the brightened item text (was dim text-2, lost over bleed). */
+  text-shadow: inherit;
 }
 
 .c-dropdown-item.selected .c-dropdown-item-ic {
