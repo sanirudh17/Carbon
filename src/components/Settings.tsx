@@ -58,6 +58,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     image_size_limit_mb: 20,
     accent_color: '#5B7CFA',
     theme: 'dark',
+    window_material: 'acrylic',
     ignore_apps: [],
     preview_enabled: true,
     overlay_default_tab: 'clips',
@@ -109,6 +110,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   const committedRef = useRef(false);
   const clipMergeDebounceRef = useRef<number | null>(null);
   const clipMergePendingRef = useRef<number | null>(null);
+  const materialTimerRef = useRef<number | null>(null);
   // Serializes fire-and-forget settings saves so rapid toggle clicks persist
   // in order (see updateSetting).
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -120,6 +122,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   useEffect(() => {
     return () => {
       if (clipMergeDebounceRef.current) window.clearTimeout(clipMergeDebounceRef.current);
+      if (materialTimerRef.current) window.clearTimeout(materialTimerRef.current);
     };
   }, []);
 
@@ -423,6 +426,45 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
     if (key === 'accent_color') {
       applyAccentColor(value as string);
+    }
+    if (key === 'window_material') {
+      const mat = value as string;
+      const isSolid = mat === 'solid';
+      try { localStorage.setItem('carbon_window_material', mat); } catch {}
+
+      if (materialTimerRef.current) {
+        window.clearTimeout(materialTimerRef.current);
+        materialTimerRef.current = null;
+      }
+
+      if (isSolid) {
+        // 1. Immediately apply solid styles in DOM so WebView2 renders the opaque solid background.
+        document.documentElement.setAttribute('data-material', 'solid');
+
+        // 2. Wait until the browser compositor has actually committed and presented the opaque frame
+        // to the DirectX swapchain before instructing DWM to clear blur. Clearing blur prematurely
+        // causes the unblurred desktop wallpaper to flash through the still-translucent client area.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            materialTimerRef.current = window.setTimeout(() => {
+              materialTimerRef.current = null;
+              invoke('set_window_material', { material: mat }).catch((err) => {
+                console.error('Failed to set window material:', err);
+              });
+            }, 60);
+          });
+        });
+      } else {
+        // Switching to glass: enable DWM blur behind the window first so it is active
+        // before the transparent glass panels are drawn.
+        invoke('set_window_material', { material: mat }).catch((err) => {
+          console.error('Failed to set window material:', err);
+        });
+        requestAnimationFrame(() => {
+          document.documentElement.setAttribute('data-material', 'glass');
+        });
+      }
+      return;
     }
 
     // Hotkeys must await the save: the backend atomically swaps both global
@@ -1434,6 +1476,35 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               >
                 Switch to {currentTheme === 'light' ? 'Dark' : 'Light'}
               </button>
+            </div>
+          </div>
+
+          <div className="set-row">
+            <div className="set-label">
+              Window material
+              <div className="set-hint">
+                {settings.window_material === 'solid'
+                  ? 'Solid: original opaque panels with no OS blur'
+                  : 'Glass: frosted-glass blur-behind translucency'}
+              </div>
+            </div>
+            <div className="set-control">
+              <div className="segmented-control" role="radiogroup" aria-label="Window material">
+                {[
+                  { value: 'acrylic', label: 'Glass' },
+                  { value: 'solid', label: 'Solid' },
+                ].map((option) => (
+                  <button
+                    key={option.value}
+                    role="radio"
+                    aria-checked={(settings.window_material || 'acrylic') === option.value}
+                    className={`seg-btn ${(settings.window_material || 'acrylic') === option.value ? 'active' : ''}`}
+                    onClick={() => updateSetting('window_material', option.value as any)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </section>

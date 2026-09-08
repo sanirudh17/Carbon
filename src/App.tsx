@@ -64,6 +64,11 @@ export function App() {
     if (typeof settings.preview_enabled === 'boolean') {
       try { localStorage.setItem('carbon_preview_enabled', String(settings.preview_enabled)); } catch {}
     }
+    if (settings.window_material) {
+      const mat = settings.window_material === 'acrylic' ? 'glass' : settings.window_material;
+      document.documentElement.setAttribute('data-material', mat);
+      try { localStorage.setItem('carbon_window_material', settings.window_material); } catch {}
+    }
   };
 
   useEffect(() => {
@@ -142,6 +147,13 @@ export function App() {
       }
     } catch {}
 
+    const isOverlay = windowLabel === 'overlay' || (windowLabel === 'browser' && activeTab === 'overlay');
+    const winClass = isOverlay ? 'win-overlay' : 'win-library';
+    document.body.classList.remove('win-overlay', 'win-library');
+    document.body.classList.add(winClass);
+    document.documentElement.classList.remove('win-overlay', 'win-library');
+    document.documentElement.classList.add(winClass);
+
     invoke<AppSettings>('get_settings')
       .then(applySettingsData)
       .catch(console.error);
@@ -149,6 +161,25 @@ export function App() {
     const unlistenPromise = listen<AppSettings>('settings-updated', (event) => {
       applySettingsData(event.payload);
     });
+
+    const unlistenMaterialPromise = listen<string>('window-material-changed', (event) => {
+      if (event.payload) {
+        const mat = event.payload === 'acrylic' ? 'glass' : event.payload;
+        document.documentElement.setAttribute('data-material', mat);
+        try { localStorage.setItem('carbon_window_material', event.payload); } catch {}
+      }
+    });
+
+    const mediaQuery = window.matchMedia('(prefers-reduced-transparency: reduce)');
+    const handleReducedTransparency = (e: MediaQueryListEvent | MediaQueryList) => {
+      if (e.matches) {
+        document.documentElement.setAttribute('data-reduced-transparency', 'true');
+      } else {
+        document.documentElement.removeAttribute('data-reduced-transparency');
+      }
+    };
+    handleReducedTransparency(mediaQuery);
+    mediaQuery.addEventListener('change', handleReducedTransparency);
 
     const onFocus = () => {
       invoke<AppSettings>('get_settings')
@@ -169,10 +200,21 @@ export function App() {
 
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
+      unlistenMaterialPromise.then((unlisten) => unlisten());
+      mediaQuery.removeEventListener('change', handleReducedTransparency);
       window.removeEventListener('keydown', blockBrowserDefaultHotkeys, true);
       window.removeEventListener('focus', onFocus);
     };
   }, []);
+
+  useEffect(() => {
+    const isOverlay = windowLabel === 'overlay' || (windowLabel === 'browser' && activeTab === 'overlay');
+    const winClass = isOverlay ? 'win-overlay' : 'win-library';
+    document.body.classList.remove('win-overlay', 'win-library');
+    document.body.classList.add(winClass);
+    document.documentElement.classList.remove('win-overlay', 'win-library');
+    document.documentElement.classList.add(winClass);
+  }, [windowLabel, activeTab]);
 
   const toggleTheme = async () => {
     const nextTheme = theme === 'dark' ? 'light' : 'dark';
@@ -231,7 +273,7 @@ export function App() {
       // is intentionally hidden here so "Check for latest updates" only
       // updates the Settings row, never the top popup.
       return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--bg0)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--app-window-bg, transparent)' }}>
           <div style={{ flex: 1, overflow: 'hidden' }}>
             <Settings
               onBack={() => setActiveTab('enlarged')}
@@ -243,7 +285,7 @@ export function App() {
       );
     }
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--bg0)' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--app-window-bg, transparent)' }}>
         {bannerEl}
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <EnlargedWindow onOpenSettings={() => setActiveTab('settings')} />

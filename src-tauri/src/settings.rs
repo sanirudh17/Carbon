@@ -104,11 +104,18 @@ pub struct AppSettings {
     /// stop an already-enabled expansion hook.
     #[serde(default = "default_show_snippets")]
     pub show_snippets: bool,
+    /// Window material blur-behind: "acrylic" | "mica" | "blur" | "solid".
+    #[serde(default = "default_window_material")]
+    pub window_material: String,
     /// The update version the user dismissed via "Later" — banner stays quiet
     /// for this exact version across restarts. Empty means nothing dismissed.
     /// Only the banner respects this; manual check in Settings always shows.
     #[serde(default, rename = "dismissedUpdateVersion")]
     pub dismissed_update_version: String,
+}
+
+fn default_window_material() -> String {
+    "acrylic".to_string()
 }
 
 fn default_false() -> bool {
@@ -129,6 +136,10 @@ fn sanitize_settings(s: &mut AppSettings) {
     s.enlarged_hotkey = s.enlarged_hotkey.trim().to_string();
     s.accent_color = s.accent_color.trim().to_string();
     s.theme = s.theme.trim().to_string();
+    s.window_material = match s.window_material.trim().to_lowercase().as_str() {
+        "solid" => "solid".to_string(),
+        _ => "acrylic".to_string(),
+    };
 }
 
 impl Default for AppSettings {
@@ -144,6 +155,7 @@ impl Default for AppSettings {
             image_size_limit_mb: 20,
             accent_color: "#5B7CFA".to_string(),
             theme: "dark".to_string(),
+            window_material: "acrylic".to_string(),
             ignore_apps: vec![
                 "1Password.exe".to_string(),
                 "KeePass.exe".to_string(),
@@ -290,4 +302,55 @@ pub fn set_autostart(enable: bool) -> Result<(), String> {
         let _ = RegCloseKey(hkey);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_window_material_migration_missing_key() {
+        // Simulates an existing settings.json from an older Carbon version without window_material
+        let json = r##"{
+            "quick_hotkey": "Ctrl+Shift+Z",
+            "enlarged_hotkey": "Ctrl+Alt+X",
+            "paste_plain_text": false,
+            "move_to_top_on_paste": true,
+            "start_with_windows": true,
+            "retention_days": 30,
+            "max_entries": 5000,
+            "image_size_limit_mb": 20,
+            "accent_color": "#5B7CFA",
+            "theme": "dark",
+            "ignore_apps": []
+        }"##;
+
+        let mut settings: AppSettings = serde_json::from_str(json).expect("should deserialize older settings JSON");
+        sanitize_settings(&mut settings);
+        assert_eq!(settings.window_material, "acrylic", "missing window_material must default to acrylic");
+    }
+
+    #[test]
+    fn test_window_material_sanitization_and_preservation() {
+        let cases = vec![
+            ("acrylic", "acrylic"),
+            ("ACRYLIC", "acrylic"),
+            (" Acrylic ", "acrylic"),
+            ("mica", "acrylic"),
+            ("Mica", "acrylic"),
+            ("blur", "acrylic"),
+            ("BLUR", "acrylic"),
+            ("solid", "solid"),
+            ("Solid", "solid"),
+            ("invalid_value", "acrylic"),
+            ("", "acrylic"),
+        ];
+
+        for (input, expected) in cases {
+            let mut s = AppSettings::default();
+            s.window_material = input.to_string();
+            sanitize_settings(&mut s);
+            assert_eq!(s.window_material, expected, "input '{}' should sanitize to '{}'", input, expected);
+        }
+    }
 }

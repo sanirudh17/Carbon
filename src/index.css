@@ -11,6 +11,7 @@
   --text: #ECECEF;
   --text-2: #8F94A0;
   --text-3: #585D68;
+  --text-secondary: var(--text-2);
   --accent-base: #5B7CFA;
   --accent: var(--accent-base);
   --accent-hover: color-mix(in srgb, var(--accent-base) 82%, white);
@@ -48,6 +49,43 @@
   --mono: "Cascadia Code", "Consolas", "SF Mono", monospace;
   --ease-out: cubic-bezier(.16, 1, .3, 1);
   color-scheme: dark;
+
+  /* ── Raycast / Tinycast Frosted-Glass Material Tokens (Dark) ── */
+  --glass-base: rgba(14, 14, 16, 0.72);   /* library window base */
+  --glass-panel-bg: rgba(18, 18, 22, 0.70); /* overlay panel */
+  --glass-sidebar: rgba(10, 10, 12, 0.30);  /* library sidebar */
+  --glass-list: rgba(10, 10, 12, 0.12);     /* library list col */
+  --glass-overlay-scrim: rgba(10, 10, 12, 0.12); /* overlay list-column content scrim */
+  --glass-preview: rgba(10, 10, 12, 0.22);  /* library preview */
+  --glass-elev: rgba(20, 20, 23, 0.30);
+  --glass-elev-hover: rgba(255, 255, 255, 0.05);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-border-inner: rgba(255, 255, 255, 0.06);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --glass-shadow: 0 24px 64px rgba(0, 0, 0, 0.42);
+  --glass-row-selected: var(--accent-soft);
+  --glass-hairline: rgba(255, 255, 255, 0.07);
+  --glass-pill-bg: rgba(255, 255, 255, 0.07);
+  --glass-pill-border: rgba(255, 255, 255, 0.10);
+  --glass-pill-text: rgba(255, 255, 255, 0.90);
+  --glass-bg: var(--glass-panel-bg);
+  --glass-surface: var(--glass-sidebar);
+  --inapp-blur: blur(20px) saturate(160%);
+  --app-window-bg: transparent;
+}
+
+body.win-overlay,
+html.win-overlay body {
+  background: var(--glass-panel-bg);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+body.win-library,
+html.win-library body {
+  --glass-base: rgba(14, 14, 16, 0.72);
+  border-radius: 14px;
+  overflow: hidden;
 }
 
 [data-theme="light"] {
@@ -62,6 +100,7 @@
   --text: #0F172A;
   --text-2: #334155;
   --text-3: #64748B;
+  --text-secondary: var(--text-2);
   --accent: color-mix(in srgb, var(--accent-base, #5B7CFA) 90%, black);
   --accent-hover: color-mix(in srgb, var(--accent-base, #5B7CFA) 78%, black);
   --accent-fg: #ffffff;
@@ -90,6 +129,128 @@
   --sn-tok-cursor: #D97706;
   --sn-tok-bad: #DC2626;
   color-scheme: light;
+
+  /* ── Raycast / Tinycast Frosted-Glass Material Tokens (Light) ── */
+  --glass-base: rgba(244, 244, 246, 0.75);
+  --glass-panel-bg: rgba(248, 248, 250, 0.74);
+  --glass-sidebar: rgba(255, 255, 255, 0.30);
+  --glass-list: rgba(255, 255, 255, 0.12);
+  --glass-overlay-scrim: rgba(255, 255, 255, 0.12); /* overlay list-column content scrim */
+  --glass-preview: rgba(255, 255, 255, 0.22);
+  --glass-elev: rgba(255, 255, 255, 0.30);
+  --glass-elev-hover: rgba(0, 0, 0, 0.04);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --glass-border-inner: rgba(0, 0, 0, 0.06);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.70);
+  --glass-shadow: 0 24px 64px rgba(0, 0, 0, 0.18);
+  --glass-row-selected: var(--accent-soft);
+  --glass-hairline: rgba(0, 0, 0, 0.08);
+  --glass-pill-bg: rgba(0, 0, 0, 0.05);
+  --glass-pill-border: rgba(0, 0, 0, 0.08);
+  --glass-pill-text: rgba(0, 0, 0, 0.80);
+  --glass-bg: var(--glass-panel-bg);
+  --glass-surface: var(--glass-sidebar);
+  --inapp-blur: blur(20px) saturate(160%);
+  --app-window-bg: transparent;
+}
+
+[data-theme="light"] body.win-overlay,
+html[data-theme="light"].win-overlay body,
+body.win-overlay[data-theme="light"] {
+  background: var(--glass-panel-bg);
+}
+
+[data-theme="light"] body.win-library,
+html[data-theme="light"].win-library body,
+body.win-library[data-theme="light"] {
+  --glass-base: rgba(244, 244, 246, 0.75);
+}
+
+/* Solid mode or reduced-transparency accessibility fallback */
+html[data-material="solid"] body,
+html[data-reduced-transparency="true"]:not([data-material="acrylic"]):not([data-material="glass"]):not([data-material="mica"]):not([data-material="blur"]) body {
+  --glass-base: var(--bg0);
+  --glass-panel-bg: var(--bg0);
+  --glass-sidebar: var(--surface);
+  --glass-list: var(--bg0);
+  --glass-overlay-scrim: transparent;
+  --glass-preview: var(--surface);
+  --glass-elev: var(--elev);
+  --glass-elev-hover: var(--elev-hover);
+  --glass-border: var(--line);
+  --glass-border-inner: var(--line-soft);
+  --glass-highlight: none;
+  --glass-shadow: 0 24px 64px rgba(0, 0, 0, 0.42);
+  --glass-row-selected: var(--accent-soft);
+  --glass-hairline: var(--line-soft);
+  --glass-pill-bg: var(--elev);
+  --glass-pill-border: var(--line);
+  --glass-pill-text: var(--text-2);
+  --glass-bg: var(--bg0);
+  --glass-surface: var(--surface);
+  --app-window-bg: var(--bg0);
+  --text-secondary: var(--text-2);
+}
+
+/* Glass-mode-only secondary text lift (NEUTRAL gray, no accent cast) */
+html[data-material="glass"],
+html[data-material="acrylic"],
+html:not([data-material="solid"]) {
+  --text-secondary: #a3a3ab; /* dark */
+}
+
+html[data-material="glass"][data-theme="light"],
+html[data-material="acrylic"][data-theme="light"],
+html[data-theme="light"][data-material="glass"],
+html[data-theme="light"][data-material="acrylic"],
+html[data-theme="light"]:not([data-material="solid"]) {
+  --text-secondary: #55555c; /* light */
+}
+
+html[data-material="solid"],
+html[data-material="solid"] body,
+html[data-material="solid"] #root {
+  background: var(--bg0) !important;
+}
+
+html[data-material="solid"].win-library body,
+html[data-material="solid"] body.win-library,
+html[data-material="solid"][data-theme="light"].win-library body,
+html[data-theme="light"][data-material="solid"].win-library body,
+html[data-theme="light"][data-material="solid"] body.win-library {
+  --glass-base: var(--bg0) !important;
+  background: var(--bg0) !important;
+}
+
+html[data-material="solid"] .enlarged,
+html[data-material="solid"] .settings {
+  background: var(--bg0) !important;
+}
+
+html[data-material="solid"].win-overlay body,
+html[data-material="solid"] body.win-overlay {
+  background: var(--bg0) !important;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+html[data-material="solid"],
+html[data-material="solid"] body {
+  --text-secondary: var(--text-2);
+}
+
+html[data-material="solid"] .paste-dropdown-menu,
+html[data-material="solid"] .action-modal,
+html[data-material="solid"] .modal-card,
+html[data-material="solid"] .context-menu-popover,
+html[data-material="solid"] .c-dropdown-list,
+html[data-reduced-transparency="true"] .paste-dropdown-menu,
+html[data-reduced-transparency="true"] .action-modal,
+html[data-reduced-transparency="true"] .modal-card,
+html[data-reduced-transparency="true"] .context-menu-popover,
+html[data-reduced-transparency="true"] .c-dropdown-list {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 * {
@@ -107,12 +268,19 @@ html, body, #root {
   margin: 0;
   padding: 0;
   font-family: var(--font);
-  background: transparent;
   color: var(--text);
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   user-select: none;
+}
+
+html, #root {
+  background: transparent;
+}
+
+body {
+  background: var(--glass-base);
 }
 
 input, textarea, select, button {
@@ -166,12 +334,15 @@ input, textarea, select, button {
 
 /* ═══════════ QUICK OVERLAY ═══════════ */
 .overlay-container {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: stretch;
+  justify-content: stretch;
   padding: 0;
+  box-sizing: border-box;
   margin: 0;
   background: transparent;
   animation: overlayPopIn 150ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
@@ -180,24 +351,44 @@ input, textarea, select, button {
 @keyframes overlayPopIn {
   from {
     opacity: 0;
-    transform: scale(0.985);
   }
   to {
     opacity: 1;
-    transform: scale(1);
   }
 }
 
 .overlay, .overlay-window {
+  position: relative;
+  inset: 0;
+  margin: 0;
   width: 100%;
   height: 100%;
-  border-radius: var(--r-popup);
+  border-radius: 14px;
   overflow: hidden;
-  background: var(--bg0);
-  border: 1px solid var(--line);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, .55), 0 2px 8px rgba(0, 0, 0, .4);
+  background: var(--glass-panel-bg);
+  border: none;
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
   display: flex;
   flex-direction: column;
+}
+
+/* Subtle noise texture overlay to eliminate gradient banding */
+.overlay::before,
+.enlarged::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  opacity: 0.025;
+  pointer-events: none;
+  mix-blend-mode: overlay;
+  z-index: 0;
+}
+
+html[data-material="solid"] .overlay::before,
+html[data-material="solid"] .enlarged::before {
+  display: none;
 }
 
 .overlay-body {
@@ -217,6 +408,19 @@ input, textarea, select, button {
 .overlay > .searchbar {
   margin: 10px 10px 8px;
   flex-shrink: 0;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.overlay > .searchbar:focus,
+.overlay > .searchbar:focus-within,
+.overlay > .searchbar:focus-visible {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
 }
 
 .searchbar {
@@ -224,13 +428,19 @@ input, textarea, select, button {
   display: flex;
   align-items: center;
   border-radius: var(--r-btn);
-  background: var(--elev);
-  border: 1px solid var(--line);
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
 }
 
-.searchbar:focus-within {
-  border-color: var(--line);
-  box-shadow: none;
+.searchbar:focus,
+.searchbar:focus-within,
+.searchbar:focus-visible {
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  background: transparent !important;
 }
 
 .searchbar .search-ic {
@@ -246,12 +456,24 @@ input, textarea, select, button {
   color: var(--text-2);
 }
 
-.searchbar input {
+.searchbar input,
+.searchbar input:focus,
+.searchbar input:focus-visible,
+.overlay > .searchbar input,
+.overlay > .searchbar input:focus,
+.overlay > .searchbar input:focus-visible,
+.main-top .searchbar input,
+.main-top .searchbar input:focus,
+.main-top .searchbar input:focus-visible,
+.sn-searchbar input,
+.sn-searchbar input:focus,
+.sn-searchbar input:focus-visible {
   flex: 1;
   min-width: 0;
   background: none;
-  border: none;
-  outline: none;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
   color: var(--text);
   font-size: 13px;
   font-weight: 450;
@@ -272,6 +494,50 @@ input, textarea, select, button {
   gap: 3px;
   flex: 1;
   overflow-y: auto;
+  background: var(--glass-overlay-scrim, transparent);
+}
+
+/* Overlay list content-zone secondary text lift */
+html[data-material="glass"] .overlay-list .row-snippet,
+html[data-material="acrylic"] .overlay-list .row-snippet,
+html:not([data-material="solid"]) .overlay-list .row-snippet {
+  color: var(--text-secondary);
+}
+
+html[data-material="glass"] .overlay-list .row-meta,
+html[data-material="acrylic"] .overlay-list .row-meta,
+html:not([data-material="solid"]) .overlay-list .row-meta,
+html[data-material="glass"] .overlay-list .row-time,
+html[data-material="acrylic"] .overlay-list .row-time,
+html:not([data-material="solid"]) .overlay-list .row-time,
+html[data-material="glass"] .overlay-list .row-size,
+html[data-material="acrylic"] .overlay-list .row-size,
+html:not([data-material="solid"]) .overlay-list .row-size,
+html[data-material="glass"] .overlay-list .sn-row-time,
+html[data-material="acrylic"] .overlay-list .sn-row-time,
+html:not([data-material="solid"]) .overlay-list .sn-row-time {
+  color: var(--text-secondary);
+}
+
+html[data-material="glass"] .overlay-list .row.selected .row-time,
+html[data-material="acrylic"] .overlay-list .row.selected .row-time,
+html:not([data-material="solid"]) .overlay-list .row.selected .row-time,
+html[data-material="glass"] .overlay-list .row.selected .row-size,
+html[data-material="acrylic"] .overlay-list .row.selected .row-size,
+html:not([data-material="solid"]) .overlay-list .row.selected .row-size {
+  color: var(--text-secondary);
+}
+
+html[data-material="glass"] .overlay-list .date-group-label,
+html[data-material="acrylic"] .overlay-list .date-group-label,
+html:not([data-material="solid"]) .overlay-list .date-group-label {
+  color: var(--text-secondary);
+}
+
+html[data-material="glass"] .overlay-list .empty .sub,
+html[data-material="acrylic"] .overlay-list .empty .sub,
+html:not([data-material="solid"]) .overlay-list .empty .sub {
+  color: var(--text-secondary);
 }
 
 .overlay-bar {
@@ -279,8 +545,8 @@ input, textarea, select, button {
   align-items: center;
   justify-content: space-between;
   padding: 8px 14px;
-  background: var(--surface);
-  border-top: 1px solid var(--line-soft);
+  background: var(--glass-surface);
+  border-top: 1px solid var(--glass-hairline);
 }
 
 .bar-left {
@@ -296,7 +562,7 @@ input, textarea, select, button {
 .bar-sep {
   width: 1px;
   height: 14px;
-  background: var(--line);
+  background: var(--glass-hairline);
 }
 
 .key {
@@ -307,13 +573,13 @@ input, textarea, select, button {
   height: 19px;
   padding: 0 6px;
   border-radius: 5px;
-  border: 1px solid var(--line);
-  background: var(--elev);
+  border: 1px solid var(--glass-pill-border);
+  background: var(--glass-pill-bg);
   font-size: 10px;
   font-weight: 600;
-  color: var(--text-2);
+  color: var(--glass-pill-text);
   font-family: var(--font);
-  box-shadow: 0 1px 0 var(--line);
+  box-shadow: none;
 }
 
 .hint {
@@ -329,7 +595,7 @@ input, textarea, select, button {
 }
 
 .hint:hover {
-  background: var(--elev-hover);
+  background: var(--glass-elev-hover);
 }
 
 .hint b {
@@ -354,17 +620,20 @@ input, textarea, select, button {
   position: relative;
   transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
   margin: 1px 0;
+  background: transparent;
+  overflow: hidden;
+  background-clip: padding-box;
 }
 
 .row:hover {
-  background: var(--elev-hover);
+  background: var(--glass-elev-hover);
   z-index: 20;
 }
 
 .row.selected {
   background: var(--accent-soft);
   border-color: var(--accent-ring);
-  box-shadow: 0 0 0 1px var(--accent-ring);
+  box-shadow: inset 0 0 0 1px var(--accent-ring);
 }
 
 .date-group {
@@ -415,8 +684,10 @@ input, textarea, select, button {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  background: var(--surface);
-  border: 1px solid var(--line);
+  background: var(--glass-surface);
+  backdrop-filter: var(--inapp-blur);
+  -webkit-backdrop-filter: var(--inapp-blur);
+  border: 1px solid var(--glass-border);
   border-radius: var(--r-panel);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   padding: 6px;
@@ -496,12 +767,14 @@ input, textarea, select, button {
   place-items: center;
   flex-shrink: 0;
   overflow: hidden;
+  background-clip: padding-box;
 }
 
 .type-icon img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  border-radius: inherit;
 }
 
 .row-body {
@@ -602,12 +875,15 @@ input, textarea, select, button {
 
 /* ═══════════ ENLARGED WINDOW ═══════════ */
 .enlarged {
+  position: relative;
   width: 100vw;
   height: 100vh;
+  border-radius: 14px;
   overflow: hidden;
-  background: var(--bg0);
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
+  background: transparent;
   display: flex;
-  border: 1px solid var(--line);
+  border: none;
   outline: none;
 }
 
@@ -616,8 +892,8 @@ input, textarea, select, button {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border-right: 1px solid var(--line);
+  background: var(--glass-sidebar);
+  border-right: 1px solid var(--glass-hairline);
   padding: 12px 10px;
   gap: 4px;
   overflow: hidden;
@@ -881,6 +1157,7 @@ input, textarea, select, button {
   display: flex;
   flex-direction: column;
   contain: layout;
+  background: var(--glass-list);
 }
 
 .main-top {
@@ -888,12 +1165,25 @@ input, textarea, select, button {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
+  border-bottom: none !important;
 }
 
 .main-top .searchbar {
   flex: 1;
   /* Embedded tag filter sits inset at the right edge, like the quick overlay */
   padding-right: 4px;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.main-top .searchbar:focus,
+.main-top .searchbar:focus-within,
+.main-top .searchbar:focus-visible {
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  background: transparent !important;
 }
 
 .total {
@@ -906,7 +1196,7 @@ input, textarea, select, button {
 
 .banner {
   padding: 9px 14px;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--glass-hairline);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -955,6 +1245,8 @@ input, textarea, select, button {
   flex-direction: column;
   gap: 2px;
   contain: layout paint;
+  mask-image: linear-gradient(to bottom, transparent 0, black 24px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 24px);
 }
 
 /* Preview Pane */
@@ -962,8 +1254,8 @@ input, textarea, select, button {
   width: 0;
   overflow: hidden;
   flex-shrink: 0;
-  background: var(--surface);
-  border-left: 1px solid var(--line);
+  background: var(--glass-preview);
+  border-left: 1px solid var(--glass-hairline);
   transition: width 200ms var(--ease-out);
 }
 
@@ -1059,8 +1351,8 @@ input, textarea, select, button {
   flex: 1;
   min-height: 260px;
   resize: none;
-  background: var(--well-bg);
-  border: 1px solid var(--well-line);
+  background: transparent;
+  border: 1px solid var(--glass-border);
   border-radius: var(--r-panel);
   outline: none;
   font-family: var(--mono);
@@ -1075,6 +1367,8 @@ input, textarea, select, button {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   transition: border-color 120ms ease, box-shadow 120ms ease;
+  overflow: auto;
+  background-clip: padding-box;
 }
 
 .preview-edit:focus {
@@ -1082,6 +1376,7 @@ input, textarea, select, button {
   border-color: var(--text-3);
   box-shadow: none;
   color: var(--text);
+  background: transparent;
 }
 
 .preview-media {
@@ -1099,19 +1394,21 @@ input, textarea, select, button {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--elev);
+  background: transparent;
   border-radius: var(--r-panel);
-  border: 1px solid var(--line);
-  overflow: auto;
+  border: 1px solid var(--glass-border);
+  overflow: hidden;
   padding: 8px;
   position: relative;
   user-select: none;
+  background-clip: padding-box;
 }
 
 .preview-image-wrapper.zoomed {
   cursor: grab;
   align-items: flex-start;
   justify-content: flex-start;
+  overflow: auto;
 }
 
 .preview-image-wrapper.zoomed:active {
@@ -1121,12 +1418,12 @@ input, textarea, select, button {
 /* Focused long-capture state: clicking the preview image focuses it so
    arrow keys scroll inside instead of jumping clips. */
 .preview-image-wrapper.img-focused {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 .preview-image-wrapper:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 .preview-image-wrapper img {
@@ -1146,12 +1443,14 @@ input, textarea, select, button {
 .preview-file-card {
   width: 100%;
   padding: 14px;
-  background: var(--elev);
+  background: transparent;
   border-radius: var(--r-panel);
-  border: 1px solid var(--line);
+  border: 1px solid var(--glass-border);
   display: flex;
   flex-direction: column;
   gap: 8px;
+  overflow: hidden;
+  background-clip: padding-box;
 }
 
 .preview-file-title {
@@ -1173,7 +1472,8 @@ input, textarea, select, button {
   border-radius: var(--r-panel);
   overflow: hidden;
   background: #000;
-  border: 1px solid var(--line);
+  border: 1px solid var(--glass-border);
+  background-clip: padding-box;
 }
 
 .preview-video-wrapper video {
@@ -1186,7 +1486,7 @@ input, textarea, select, button {
   width: 100%;
   height: 80px;
   border-radius: var(--r-panel);
-  border: 1px solid var(--line);
+  border: 1px solid var(--glass-border);
   margin-bottom: 12px;
   display: flex;
   align-items: center;
@@ -1195,6 +1495,8 @@ input, textarea, select, button {
   font-weight: 600;
   font-size: 14px;
   color: #fff;
+  overflow: hidden;
+  background-clip: padding-box;
   text-shadow: 0 1px 3px rgba(0,0,0,0.8);
 }
 
@@ -1203,7 +1505,7 @@ input, textarea, select, button {
   align-items: center;
   gap: 6px;
   padding: 8px 14px;
-  border-top: 1px solid var(--line-soft);
+  border-top: 1px solid var(--glass-hairline);
   font-size: 10.5px;
   color: var(--text-3);
 }
@@ -1217,8 +1519,10 @@ input, textarea, select, button {
 .settings {
   width: 100%;
   height: 100%;
+  border-radius: 14px;
   overflow-y: auto;
-  background: var(--surface);
+  overflow-x: hidden;
+  background: var(--glass-list);
   display: flex;
   flex-direction: column;
 }
@@ -1228,7 +1532,7 @@ input, textarea, select, button {
   align-items: center;
   gap: 8px;
   padding: 10px 16px;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--glass-hairline);
 }
 
 .settings-head h2 {
@@ -1297,6 +1601,8 @@ section:last-child {
   margin: 2px 12px 4px;
   padding: 7px 9px;
   border-radius: var(--r-btn);
+  overflow: hidden;
+  background-clip: padding-box;
   background: color-mix(in srgb, #F59E0B 12%, transparent);
   border: 1px solid color-mix(in srgb, #F59E0B 35%, transparent);
   color: color-mix(in srgb, #F59E0B 75%, var(--text));
@@ -1314,6 +1620,8 @@ section:last-child {
   margin: 2px 0 10px;
   padding: 12px 14px;
   border-radius: 10px;
+  overflow: hidden;
+  background-clip: padding-box;
   background: color-mix(in srgb, var(--accent) 7%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
   font-size: 11.5px;
@@ -1394,6 +1702,42 @@ section:last-child {
 .toggle.on .knob {
   transform: translate(15px, -50%);
   background: var(--accent-fg);
+}
+
+/* Segmented Control (Appearance / Window Material) */
+.segmented-control {
+  display: inline-flex;
+  background: var(--glass-elev);
+  border: 1px solid var(--glass-border-inner);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 2px;
+}
+
+.seg-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-2);
+  padding: 4px 10px;
+  font-size: 11.5px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.seg-btn:hover {
+  color: var(--text);
+  background: var(--glass-elev-hover);
+}
+
+.seg-btn.active {
+  background: var(--glass-surface);
+  color: var(--text);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2), var(--glass-highlight);
+  font-weight: 600;
 }
 
 .btn {
@@ -1527,6 +1871,8 @@ section:last-child {
   margin-bottom: 8px;
   padding: 6px 10px;
   border-radius: 6px;
+  overflow: hidden;
+  background-clip: padding-box;
   background: color-mix(in srgb, var(--danger, #ef4444) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--danger, #ef4444) 30%, transparent);
   color: var(--danger, #ef4444);
@@ -1545,6 +1891,8 @@ section:last-child {
   margin-top: 14px;
   padding: 10px 12px;
   border-radius: 8px;
+  overflow: hidden;
+  background-clip: padding-box;
   background: color-mix(in srgb, #f59e0b 10%, transparent);
   border: 1px solid color-mix(in srgb, #f59e0b 35%, transparent);
   color: var(--text);
@@ -1722,8 +2070,11 @@ section:last-child {
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: none;
+}
+
+:focus-visible:not(input):not(textarea):not(select) {
+  box-shadow: 0 0 0 2px var(--accent);
 }
 
 /* Action Panel Modal (Ctrl+K) */
@@ -1748,9 +2099,10 @@ section:last-child {
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-gutter: stable;
-  background: color-mix(in srgb, var(--surface) 96%, transparent);
-  backdrop-filter: blur(20px);
-  border: 1px solid var(--line);
+  background: var(--glass-surface);
+  backdrop-filter: var(--inapp-blur);
+  -webkit-backdrop-filter: var(--inapp-blur);
+  border: 1px solid var(--glass-border);
   border-radius: var(--r-popup);
   box-shadow: 0 16px 40px -4px rgba(0, 0, 0, 0.65), 0 4px 12px rgba(0, 0, 0, 0.4);
   padding: 6px;
@@ -1857,8 +2209,8 @@ section:last-child {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border-left: 1px solid var(--line);
+  background: var(--glass-preview);
+  border-left: 1px solid var(--glass-hairline);
   /* Single crisp reveal: width + quick fade, no translate slide */
   transition: flex-basis 130ms var(--ease-out),
               max-width 130ms var(--ease-out),
@@ -1882,7 +2234,7 @@ section:last-child {
   justify-content: space-between;
   gap: 8px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--glass-hairline);
 }
 
 .overlay-preview-head-actions {
@@ -1957,11 +2309,12 @@ section:last-child {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg0);
+  background: transparent;
   border-radius: var(--r-panel);
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--glass-border);
   overflow: hidden;
   padding: 8px;
+  background-clip: padding-box;
 }
 
 .preview-image-simple img {
@@ -1993,19 +2346,23 @@ section:last-child {
   font-size: 12.5px;
   letter-spacing: 0;
   line-height: 1.7;
-  background: var(--well-bg);
-  border: 1px solid var(--well-line);
+  background: transparent;
+  border: 1px solid var(--glass-border);
   border-radius: var(--r-panel);
   padding: 16px 18px;
   max-height: 100%;
   overflow-y: auto;
+  overflow-x: hidden;
+  background-clip: padding-box;
 }
 
 .preview-text.plain {
-  background: var(--well-bg);
-  border: 1px solid var(--well-line);
+  background: transparent;
+  border: 1px solid var(--glass-border);
   border-radius: var(--r-panel);
   padding: 16px 18px;
+  overflow: hidden;
+  background-clip: padding-box;
 }
 
 /* Rendered rich text (headers, lists, bold — not raw source).
@@ -2153,7 +2510,8 @@ section:last-child {
 /* Metadata strip (Tinycast-style compact information panel:
    label left / value right, hairline row separators) */
 .meta-strip {
-  border-top: 1px solid var(--line-soft);
+  border-top: 1px solid var(--glass-hairline);
+  background: transparent;
   padding: 10px 22px 12px;
   display: flex;
   flex-direction: column;
@@ -2171,13 +2529,13 @@ section:last-child {
 
 .meta-title {
   font-size: 12.5px;
-  font-weight: 600;
+  font-weight: 650;
   color: var(--text-2);
   padding-bottom: 6px;
 }
 
 .meta-row + .meta-row {
-  border-top: 1px solid color-mix(in srgb, var(--line-soft) 55%, transparent);
+  border-top: 1px solid var(--glass-hairline);
 }
 
 .meta-label {
@@ -2235,12 +2593,12 @@ section:last-child {
 /* Focused document state: clicking the rendered preview focuses it so
    arrow keys scroll long documents instead of jumping clips. */
 .preview-render.preview-focused {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 .preview-render:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 /* Segmented toggle (Render / Raw) */
@@ -2296,6 +2654,8 @@ section:last-child {
   flex-shrink: 0;
   white-space: nowrap;
   line-height: 1;
+  overflow: hidden;
+  background-clip: padding-box;
 }
 
 .search-app-pill-x {
@@ -2540,8 +2900,10 @@ section:last-child {
   gap: 10px;
   padding: 8px 10px;
   background: var(--elev);
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--glass-border);
   border-radius: 8px;
+  overflow: hidden;
+  background-clip: padding-box;
   transition: border-color 120ms, background 120ms;
 }
 
@@ -2558,6 +2920,8 @@ section:last-child {
   place-items: center;
   font-size: 13px;
   flex-shrink: 0;
+  overflow: hidden;
+  background-clip: padding-box;
 }
 
 .bulk-card-body {
@@ -2627,8 +2991,10 @@ section:last-child {
   padding: 6px 10px 6px 12px;
   margin: 6px 14px;
   background: var(--surface-1);
-  border: 1px solid var(--line);
+  border: 1px solid var(--glass-border);
   border-radius: 6px;
+  overflow: hidden;
+  background-clip: padding-box;
   animation: fadeInDown 120ms ease-out;
   flex-shrink: 0;
   gap: 10px;
@@ -2910,7 +3276,7 @@ section:last-child {
 
 .capture-rule-card {
   background: var(--surface);
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--glass-border);
   border-radius: var(--r-btn);
   padding: 8px 10px;
   display: flex;
@@ -2918,6 +3284,8 @@ section:last-child {
   gap: 6px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   transition: border-color 140ms ease;
+  overflow: hidden;
+  background-clip: padding-box;
 }
 
 .capture-rule-card:focus-within {
@@ -3145,8 +3513,8 @@ section:last-child {
 }
 
 .collection-item:focus-visible {
-  outline: 2px solid var(--accent-ring);
-  outline-offset: 1px;
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent-ring);
 }
 
 .collection-item.drop-target {
@@ -3221,8 +3589,10 @@ section:last-child {
   align-items: center;
   text-align: center;
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: 1px solid var(--glass-border);
   border-radius: var(--r-popup);
+  overflow: hidden;
+  background-clip: padding-box;
   padding: 22px 20px;
   width: 100%;
   max-width: 295px;
@@ -3603,14 +3973,15 @@ section:last-child {
 }
 
 .modal-card {
-  background: color-mix(in srgb, var(--surface) 97%, transparent);
-  backdrop-filter: blur(20px);
-  border: 1px solid var(--line);
+  background: var(--glass-surface);
+  backdrop-filter: var(--inapp-blur);
+  -webkit-backdrop-filter: var(--inapp-blur);
+  border: 1px solid var(--glass-border);
   border-radius: var(--r-popup);
   width: 340px;
   max-width: calc(100vw - 32px);
   box-shadow: 0 20px 48px -6px rgba(0, 0, 0, 0.7), 0 4px 16px rgba(0, 0, 0, 0.4),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    var(--glass-highlight);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -3966,11 +4337,12 @@ section:last-child {
   position: fixed;
   min-width: 220px;
   max-width: 280px;
-  background: color-mix(in srgb, var(--surface) 96%, transparent);
-  backdrop-filter: blur(20px);
-  border: 1px solid var(--line);
+  background: var(--glass-surface);
+  backdrop-filter: var(--inapp-blur);
+  -webkit-backdrop-filter: var(--inapp-blur);
+  border: 1px solid var(--glass-border);
   border-radius: var(--r-popup);
-  box-shadow: 0 16px 40px -4px rgba(0, 0, 0, 0.65), 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--glass-shadow);
   padding: 6px;
   display: flex;
   flex-direction: column;
@@ -4244,6 +4616,8 @@ section:last-child {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  mask-image: linear-gradient(to bottom, transparent 0, black 24px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 24px);
 }
 
 .snippet-row {
@@ -4254,16 +4628,21 @@ section:last-child {
   border-radius: var(--r-item, 8px);
   cursor: pointer;
   background: transparent;
+  border: 1px solid transparent;
   transition: background 60ms ease;
   user-select: none;
+  overflow: hidden;
+  background-clip: padding-box;
 }
 
 .snippet-row:hover {
-  background: var(--elev-hover);
+  background: var(--glass-elev-hover);
 }
 
 .snippet-row.selected {
   background: var(--accent-soft);
+  border-color: var(--accent-ring);
+  box-shadow: inset 0 0 0 1px var(--accent-ring);
 }
 
 .sn-row-ic {
@@ -4275,6 +4654,8 @@ section:last-child {
   border-radius: 8px;
   background: var(--elev);
   color: var(--text-2);
+  overflow: hidden;
+  background-clip: padding-box;
 }
 
 .snippet-row.selected .sn-row-ic {
@@ -4744,8 +5125,10 @@ section:last-child {
   flex-direction: column;
   gap: 1px;
   border-radius: 10px;
-  border: 1px solid var(--line);
-  background: var(--elev);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-surface);
+  backdrop-filter: var(--inapp-blur);
+  -webkit-backdrop-filter: var(--inapp-blur);
   box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.55), 0 3px 10px rgba(0, 0, 0, 0.35);
   animation: cDropdownIn 120ms var(--ease-out);
 }

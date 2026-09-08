@@ -46,6 +46,7 @@ fn ensure_overlay_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
             Ok(builder) => match builder.build() {
                 Ok(w) => {
                     crate::paste::log_diag("[HOTKEY] Recreated overlay from tauri.conf");
+                    crate::vibrancy::init_window_vibrancy(&w, app);
                     return Some(w);
                 }
                 Err(e) => crate::paste::log_diag(&format!(
@@ -76,6 +77,7 @@ fn ensure_overlay_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     {
         Ok(w) => {
             crate::paste::log_diag("[HOTKEY] Recreated overlay via manual builder");
+            crate::vibrancy::init_window_vibrancy(&w, app);
             Some(w)
         }
         Err(e) => {
@@ -105,6 +107,7 @@ fn ensure_main_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
             Ok(builder) => match builder.build() {
                 Ok(w) => {
                     crate::paste::log_diag("[HOTKEY] Recreated main from tauri.conf");
+                    crate::vibrancy::init_window_vibrancy(&w, app);
                     return Some(w);
                 }
                 Err(e) => crate::paste::log_diag(&format!(
@@ -128,10 +131,12 @@ fn ensure_main_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     .resizable(true)
     .decorations(false)
     .visible(false)
+    .transparent(true)
     .build()
     {
         Ok(w) => {
             crate::paste::log_diag("[HOTKEY] Recreated main via manual builder");
+            crate::vibrancy::init_window_vibrancy(&w, app);
             Some(w)
         }
         Err(e) => {

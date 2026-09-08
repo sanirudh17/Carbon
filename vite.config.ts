@@ -21,7 +21,7 @@ export default defineConfig(async () => ({
   // reboot, re-check `netsh interface ipv4 show excludedportrange
   // protocol=tcp` and pick ports above the highest reserved boundary.)
   server: {
-    port: 2170,
+    port: 3210,
     strictPort: true,
     // Bind IPv4 loopback explicitly: on this machine Node cannot listen on the
     // IPv6 loopback (::1 → EACCES) when IPv6 is disabled, which breaks the
@@ -31,7 +31,7 @@ export default defineConfig(async () => ({
       ? {
           protocol: "ws",
           host,
-          port: 2171,
+          port: 3211,
         }
       : undefined,
     watch: {

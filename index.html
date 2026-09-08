@@ -12,6 +12,20 @@
           if (accent) document.documentElement.style.setProperty('--accent-base', accent);
           var theme = localStorage.getItem('carbon_theme');
           if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+          var rawMat = localStorage.getItem('carbon_window_material') || 'acrylic';
+          var material = rawMat === 'acrylic' ? 'glass' : rawMat;
+          document.documentElement.setAttribute('data-material', material);
+
+          var label = (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.metadata && window.__TAURI_INTERNALS__.metadata.currentWindow && window.__TAURI_INTERNALS__.metadata.currentWindow.label);
+          var winClass = label === 'overlay' ? 'win-overlay' : 'win-library';
+          document.documentElement.classList.add(winClass);
+          if (document.body) {
+            document.body.classList.add(winClass);
+          } else {
+            document.addEventListener('DOMContentLoaded', function() {
+              if (document.body) document.body.classList.add(winClass);
+            });
+          }
         } catch(e) {}
       })();
     </script>

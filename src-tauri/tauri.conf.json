@@ -5,7 +5,7 @@
   "identifier": "com.carbon.clipboard",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://127.0.0.1:2170",
+    "devUrl": "http://127.0.0.1:3210",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -24,6 +24,7 @@
         "center": true,
         "visible": false,
         "focus": false,
+        "transparent": true,
         "backgroundThrottling": "disabled",
         "dragDropEnabled": false
       },
@@ -34,6 +35,7 @@
         "height": 440,
         "resizable": false,
         "decorations": false,
+        "shadow": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "center": true,

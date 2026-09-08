@@ -9,6 +9,7 @@ mod sensitive;
 mod settings;
 mod shortcuts;
 mod titles;
+mod vibrancy;
 
 use clipboard_watcher::ClipboardWatcher;
 use db::{ClipItem, Collection, DbState, DbStats, Snippet};
@@ -441,15 +442,22 @@ fn save_settings(
         }
     }
     let old_expansion = state.settings.get().snippet_expansion_enabled;
-    let old_hotkeys = {
+    let (old_hotkeys, old_material, old_theme) = {
         let s = state.settings.get();
-        (s.quick_hotkey, s.enlarged_hotkey)
+        ((s.quick_hotkey, s.enlarged_hotkey), s.window_material, s.theme)
     };
     // Persist the user's choice first, then swap the global shortcuts.
     state.settings.update(new_settings)?;
 
     let mut current = state.settings.get();
     state.db.trim_history(current.retention_days, current.max_entries).ok();
+
+    // If window_material or theme changed, refresh OS blur material on all windows
+    if old_material != current.window_material || old_theme != current.theme {
+        let mat = vibrancy::WindowMaterial::from_str(&current.window_material);
+        vibrancy::apply_to_all_windows(&app, mat, &current.theme);
+        let _ = app.emit("window-material-changed", mat.as_str());
+    }
 
     // Swappable hotkeys (Glint-style): on save, clear everything and
     // re-apply strictly. If Windows rejects a combo, roll back to the
@@ -471,6 +479,42 @@ fn save_settings(
     let _ = app.emit("settings-updated", &current);
     let _ = app.emit("expansion-status-changed", expansion::get_expansion_status());
     let _ = app.emit("clipboard-updated", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn set_window_material(
+    material: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<String, String> {
+    let mat = vibrancy::WindowMaterial::from_str(&material);
+    let theme = {
+        let mut s = state.settings.get();
+        s.window_material = mat.as_str().to_string();
+        state.settings.update(s.clone())?;
+        let _ = app.emit("settings-updated", &s);
+        s.theme
+    };
+    vibrancy::apply_to_all_windows(&app, mat, &theme);
+    let _ = app.emit("window-material-changed", mat.as_str());
+    Ok(mat.as_str().to_string())
+}
+
+#[tauri::command]
+fn clear_window_material(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let theme = {
+        let mut s = state.settings.get();
+        s.window_material = "solid".to_string();
+        state.settings.update(s.clone())?;
+        let _ = app.emit("settings-updated", &s);
+        s.theme
+    };
+    vibrancy::apply_to_all_windows(&app, vibrancy::WindowMaterial::Solid, &theme);
+    let _ = app.emit("window-material-changed", "solid");
     Ok(())
 }
 
@@ -1137,6 +1181,14 @@ pub fn run() {
             // destroyed) — no ShowWindow at startup, so no 0.5s flash. DB
             // warming is the critical path; it starts immediately like the
             // preview (dev) build.
+            // Apply OS-level window material / vibrancy blur-behind once at creation
+            {
+                let state = app.state::<AppState>();
+                let current_settings = state.settings.get();
+                let mat = vibrancy::WindowMaterial::from_str(&current_settings.window_material);
+                vibrancy::apply_to_all_windows(app.handle(), mat, &current_settings.theme);
+            }
+
             {
                 let handle = app_handle.clone();
                 std::thread::spawn(move || {
@@ -1287,6 +1339,8 @@ pub fn run() {
             get_selected_text_snapshot,
             copy_snippet_text,
             paste_snippet_text,
+            set_window_material,
+            clear_window_material,
             log_client_event
         ])
         .run(tauri::generate_context!())

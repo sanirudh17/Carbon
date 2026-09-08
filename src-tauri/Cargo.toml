@@ -54,5 +54,6 @@ quircs = "0.10.3"
 url = "2.5"
 sha2 = "0.10"
 hex = "0.4"
+window-vibrancy = "0.8.0"
 
 
