@@ -150,7 +150,16 @@ const OverlayRow = memo(function OverlayRow({
 });
 
 export const QuickOverlay: React.FC = () => {
-  const [tab, setTab] = useState<'clips' | 'snippets'>('clips');
+  // Last-used tab wins: reopen where you left off (persisted per summon).
+  const [tab, setTab] = useState<'clips' | 'snippets'>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const last = localStorage.getItem('carbon_overlay_tab');
+        if (last === 'snippets' || last === 'clips') return last;
+      } catch {}
+    }
+    return 'clips';
+  });
   const tabRef = useRef(tab);
   tabRef.current = tab;
 
@@ -569,6 +578,8 @@ export const QuickOverlay: React.FC = () => {
     if (next === 'snippets' && !showSnippets) return;
     tabRef.current = next;
     setTab(next);
+    // Remember for the next summon: the overlay reopens where it was left.
+    try { localStorage.setItem('carbon_overlay_tab', next); } catch {}
     setSnActionOpen(false);
     setActionPanelOpen(false);
     focusSearchInput();
@@ -581,8 +592,10 @@ export const QuickOverlay: React.FC = () => {
   }, []);
 
   // ── Settings-driven behavior ───────────────────────────────────────
-  // The overlay opens with the user's chosen tab and preview state, and
-  // stays in sync live (settings-updated fires in every window).
+  // Preview visibility and snippet availability sync live (settings-updated
+  // fires in every window). The active TAB is never forced here: the overlay
+  // reopens on the last-used tab (see switchTab persistence) — the old
+  // "Overlay opens on" default has been removed.
   const applyOverlaySettings = useCallback((s: AppSettings) => {
     if (!s) return;
     if (typeof s.preview_enabled === 'boolean') {
@@ -598,9 +611,6 @@ export const QuickOverlay: React.FC = () => {
         return;
       }
     }
-    const next = s.overlay_default_tab === 'snippets' ? 'snippets' : 'clips';
-    tabRef.current = next;
-    setTab(next);
   }, []);
 
   useEffect(() => {
@@ -691,13 +701,11 @@ export const QuickOverlay: React.FC = () => {
       loadTargetApp();
       fetchItems();
       fetchSnippets();
-      // Always open on the user's chosen default tab (Behavior -> "Overlay opens on")
-      // so the overlay reliably shows the expected first tab on every summon.
+      // Re-sync live settings (preview/snippets flags) without touching the
+      // tab — the overlay reopens on the last-used tab.
       invoke<AppSettings>('get_settings')
         .then((s) => {
-          if (s && typeof s.overlay_default_tab === 'string') {
-            applyOverlaySettings(s);
-          }
+          if (s) applyOverlaySettings(s);
           focusSearchInput();
         })
         .catch(() => {

@@ -788,43 +788,6 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="sec-title">Behavior</div>
           <div className="set-row">
             <div className="set-label">
-              Overlay opens on
-              <div className="set-hint">Which tab the quick overlay shows first — Clips history or Snippets.</div>
-            </div>
-            <div className="set-control">
-              <div className="seg">
-                <button
-                  className={`seg-btn ${settings.overlay_default_tab !== 'snippets' ? 'active' : ''}`}
-                  onClick={() => {
-                    setSettings((prev) => ({ ...prev, overlay_default_tab: 'clips' }));
-                    invoke('set_overlay_default_tab', { tab: 'clips' }).catch((err) => {
-                      console.error(err);
-                      showToast('error', String(err));
-                      fetchSettings();
-                    });
-                  }}
-                >
-                  Clips
-                </button>
-                <button
-                  className={`seg-btn ${settings.overlay_default_tab === 'snippets' ? 'active' : ''}`}
-                  onClick={() => {
-                    setSettings((prev) => ({ ...prev, overlay_default_tab: 'snippets' }));
-                    invoke('set_overlay_default_tab', { tab: 'snippets' }).catch((err) => {
-                      console.error(err);
-                      showToast('error', String(err));
-                      fetchSettings();
-                    });
-                  }}
-                >
-                  Snippets
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="set-row">
-            <div className="set-label">
               Start with Windows
               <div className="set-hint">Runs quietly in the tray on login</div>
             </div>

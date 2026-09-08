@@ -521,9 +521,10 @@ html[data-material="solid"] .enlarged::before {
   gap: 3px;
   flex: 1;
   overflow-y: auto;
-  /* Middle column = pure body slab (no scrim): maximally translucent against
-     the obsidian --ov-side zones, mirroring the library's light-middle. */
-  background: transparent;
+  /* Main-middle parity: the same 0.12 scrim as the library middle column,
+     so the expanded picker composites list-vs-preview exactly like the
+     main window (relative judgment matches, not just absolute tokens). */
+  background: var(--glass-overlay-scrim);
 }
 
 /* First-summon skeleton: the list window can open before prewarm/fetch
@@ -1770,7 +1771,7 @@ section:last-child {
   gap: 2px;
 }
 
-.seg-btn {
+.segmented-control .seg-btn {
   background: transparent;
   border: none;
   color: var(--text-2);
@@ -1784,12 +1785,12 @@ section:last-child {
   white-space: nowrap;
 }
 
-.seg-btn:hover {
+.segmented-control .seg-btn:hover {
   color: var(--text);
   background: var(--glass-elev-hover);
 }
 
-.seg-btn.active {
+.segmented-control .seg-btn.active {
   background: var(--glass-surface);
   color: var(--text);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2), var(--glass-highlight);
@@ -2659,16 +2660,21 @@ section:last-child {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
-/* Segmented toggle (Render / Raw) */
+/* Segmented toggle (Render / Raw) — moat construction like
+   .segmented-control so the active pill overlaps its slot exactly
+   (the old flush + divider + inherited radius-6 shadow never lined up). */
 .seg {
   display: inline-flex;
+  align-items: stretch;
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
   background: var(--elev);
+  padding: 2px;
+  gap: 2px;
 }
 
-.seg-btn {
+.seg .seg-btn {
   border: none;
   background: none;
   padding: 4px 10px;
@@ -2676,21 +2682,19 @@ section:last-child {
   font-weight: 600;
   font-family: var(--font);
   color: var(--text-3);
+  border-radius: 6px;
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease;
 }
 
-.seg-btn + .seg-btn {
-  border-left: 1px solid var(--line);
-}
-
-.seg-btn:hover {
+.seg .seg-btn:hover {
   color: var(--text);
 }
 
-.seg-btn.active {
+.seg .seg-btn.active {
   background: var(--accent-soft);
   color: var(--accent);
+  border-radius: 6px;
 }
 
 /* ═══════════ v1.2 ENHANCEMENTS ═══════════ */
