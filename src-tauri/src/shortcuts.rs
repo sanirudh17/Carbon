@@ -57,6 +57,7 @@ fn apply(app: &AppHandle, strict: bool) -> Result<(), String> {
     if !quick.trim().is_empty() {
         match bind_shortcut(&quick) {
             Ok(shortcut) => {
+                crate::paste::log_diag(&format!("[SHORTCUTS] Registering quick hotkey: {}", quick));
                 if app
                     .global_shortcut()
                     .on_shortcut(
@@ -64,17 +65,20 @@ fn apply(app: &AppHandle, strict: bool) -> Result<(), String> {
                         move |handle: &AppHandle, _shortcut, event| {
                             // Only fire on key-down; ignore release (no double-fire).
                             if event.state == ShortcutState::Pressed {
+                                crate::paste::log_diag("[SHORTCUTS] Fired quick overlay hotkey");
                                 crate::hotkey::handle_overlay_hotkey(handle);
                             }
                         },
                     )
                     .is_err()
                 {
+                    crate::paste::log_diag(&format!("[SHORTCUTS] Failed to register quick hotkey: {}", quick));
                     overlay_ok = false;
                     failures.push(format!("Quick Overlay hotkey \"{quick}\""));
                 }
             }
             Err(e) => {
+                crate::paste::log_diag(&format!("[SHORTCUTS] Invalid quick hotkey \"{}\": {}", quick, e));
                 overlay_ok = false;
                 failures.push(format!("Quick Overlay {e}"));
             }
@@ -85,23 +89,27 @@ fn apply(app: &AppHandle, strict: bool) -> Result<(), String> {
     if !enlarged.trim().is_empty() {
         match bind_shortcut(&enlarged) {
             Ok(shortcut) => {
+                crate::paste::log_diag(&format!("[SHORTCUTS] Registering enlarged hotkey: {}", enlarged));
                 if app
                     .global_shortcut()
                     .on_shortcut(
                         shortcut,
                         move |handle: &AppHandle, _shortcut, event| {
                             if event.state == ShortcutState::Pressed {
+                                crate::paste::log_diag("[SHORTCUTS] Fired enlarged window hotkey");
                                 crate::hotkey::handle_enlarged_hotkey(handle);
                             }
                         },
                     )
                     .is_err()
                 {
+                    crate::paste::log_diag(&format!("[SHORTCUTS] Failed to register enlarged hotkey: {}", enlarged));
                     enlarged_ok = false;
                     failures.push(format!("Enlarged Window hotkey \"{enlarged}\""));
                 }
             }
             Err(e) => {
+                crate::paste::log_diag(&format!("[SHORTCUTS] Invalid enlarged hotkey \"{}\": {}", enlarged, e));
                 enlarged_ok = false;
                 failures.push(format!("Enlarged Window {e}"));
             }

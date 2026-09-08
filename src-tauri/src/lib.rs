@@ -1209,16 +1209,20 @@ pub fn run() {
                 .menu(&tray_menu)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "show" => {
+                        crate::paste::log_diag("[TRAY] 'Open Carbon' clicked");
                         handle_enlarged_hotkey(app);
                     }
                     "overlay" => {
+                        crate::paste::log_diag("[TRAY] 'Quick Overlay' clicked");
                         handle_overlay_hotkey(app);
                     }
                     "pause" => {
+                        crate::paste::log_diag("[TRAY] 'Pause Capture' clicked");
                         let state = app.state::<AppState>();
                         state.watcher.toggle_pause();
                     }
                     "quit" => {
+                        crate::paste::log_diag("[TRAY] 'Quit Carbon' clicked");
                         std::process::exit(0);
                     }
                     _ => {}
@@ -1228,11 +1232,6 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| match event {
-            WindowEvent::Resized(..) => {
-                if let Some(w) = window.app_handle().get_webview_window(window.label()) {
-                    crate::vibrancy::set_round_corners(&w);
-                }
-            }
             WindowEvent::CloseRequested { api, .. } => {
                 // Windows stay warm for instant reopen: intercept close and
                 // hide instead. Quitting happens explicitly via the tray

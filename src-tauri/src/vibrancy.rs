@@ -71,6 +71,8 @@ pub fn set_round_corners(window: &WebviewWindow) {
                 // taking display scaling into account so no underlying rectangular acrylic backdrop or ghost frame can protrude at corners.
                 let label = window.label();
                 if label == "overlay" || label == "pill" {
+                    static LAST_APPLIED: std::sync::Mutex<Option<std::collections::HashMap<String, (i32, i32, i32)>>> =
+                        std::sync::Mutex::new(None);
                     let mut rect = windows::Win32::Foundation::RECT::default();
                     if GetClientRect(hwnd, &mut rect).is_ok() {
                         let w = rect.right - rect.left;
@@ -78,9 +80,15 @@ pub fn set_round_corners(window: &WebviewWindow) {
                         if w > 0 && h > 0 {
                             let scale = window.scale_factor().unwrap_or(1.0);
                             let r = (14.0 * scale).round() as i32;
-                            let d = r * 2;
-                            let hrgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, d + 1, d + 1);
-                            let _ = SetWindowRgn(hwnd, hrgn, true);
+                            let key = label.to_string();
+                            let mut map_guard = LAST_APPLIED.lock().unwrap();
+                            let map = map_guard.get_or_insert_with(std::collections::HashMap::new);
+                            if map.get(&key) != Some(&(w, h, r)) {
+                                map.insert(key, (w, h, r));
+                                let d = r * 2;
+                                let hrgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, d + 1, d + 1);
+                                let _ = SetWindowRgn(hwnd, hrgn, true);
+                            }
                         }
                     }
                 }

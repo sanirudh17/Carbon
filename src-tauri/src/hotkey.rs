@@ -356,6 +356,7 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
 }
 
 pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
+    crate::paste::log_diag("[HOTKEY] handle_enlarged_hotkey triggered.");
     // Normalized behavior: if the overlay is open, this press only swaps to
     // the library — it never toggles the library closed in the same press
     // (that "both collapse" confusion). Capture overlay state BEFORE
@@ -369,7 +370,7 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
     let main_win = match ensure_main_window(app_handle) {
         Some(w) => w,
         None => {
-            eprintln!("[carbon] main window not found and recreation failed — hotkey did nothing");
+            crate::paste::log_diag("[HOTKEY] ERROR: main window not found and recreation failed!");
             return;
         }
     };
@@ -377,12 +378,14 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
         crate::paste::log_diag("[HOTKEY] Overlay was open — showing main instead of toggling.");
         save_target_window(app_handle);
         let _ = main_win.unminimize();
-        let _ = main_win.show();
-        let _ = main_win.set_focus();
+        let show_res = main_win.show();
+        let focus_res = main_win.set_focus();
+        crate::paste::log_diag(&format!("[HOTKEY] main_win.show() -> {:?}, set_focus() -> {:?}", show_res, focus_res));
         let _ = app_handle.emit("enlarged-opened", ());
         return;
     }
     let is_visible = main_win.is_visible().unwrap_or(false);
+    crate::paste::log_diag(&format!("[HOTKEY] Main window state: is_visible={}", is_visible));
     if is_visible {
         restore_target_window();
         // Always hide, never close (windows stay warm for instant reopen).
@@ -391,8 +394,9 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
         save_target_window(app_handle);
         crate::paste::capture_selection_snapshot();
         let _ = main_win.unminimize();
-        let _ = main_win.show();
-        let _ = main_win.set_focus();
+        let show_res = main_win.show();
+        let focus_res = main_win.set_focus();
+        crate::paste::log_diag(&format!("[HOTKEY] main_win.show() -> {:?}, set_focus() -> {:?}", show_res, focus_res));
         // Windows sometimes refuses the first SetForegroundWindow while the
         // window is still materializing. One gentle retry after it settles
         // keeps Enter-to-paste reliable when the user keys in immediately.
