@@ -850,21 +850,35 @@ export const QuickOverlay: React.FC = () => {
     }
   };
 
+  // Latest committed preview state (mirrors previewOpen every render so the
+  // Tab throttle below never acts on a stale closure).
+  const previewOpenRef = useRef(previewOpen);
+  previewOpenRef.current = previewOpen;
+  // Trailing-edge Tab throttle: one toggle settles (~1 native snap + 130ms
+  // CSS reflow + surface present) before the next may start. Rapid Tabs
+  // collapse into a single trailing toggle instead of overlapping resizes,
+  // which is what flashed the white surface.
+  const previewBusy = useRef(false);
+  const previewQueued = useRef(false);
+
   const togglePreview = () => {
-    setPreviewOpen((prev) => {
-      const next = !prev;
-      // The native window now snaps instantly (one SetWindowPos, no surface
-      // realloc animation), so tell Rust immediately in both directions.
-      // The old 150ms close-delay left the folded pane inside a big window.
-      if (previewResizeTimer.current) window.clearTimeout(previewResizeTimer.current);
-      previewResizeTimer.current = window.setTimeout(
-        () => {
-          invoke('set_overlay_preview', { enabled: next }).catch(console.error);
-        },
-        0
-      );
-      return next;
-    });
+    if (previewBusy.current) {
+      previewQueued.current = true;
+      return;
+    }
+    previewBusy.current = true;
+    const next = !previewOpenRef.current;
+    previewOpenRef.current = next;
+    setPreviewOpen(next);
+    invoke('set_overlay_preview', { enabled: next }).catch(console.error);
+    if (previewResizeTimer.current) window.clearTimeout(previewResizeTimer.current);
+    previewResizeTimer.current = window.setTimeout(() => {
+      previewBusy.current = false;
+      if (previewQueued.current) {
+        previewQueued.current = false;
+        togglePreview();
+      }
+    }, 220);
   };
 
   // The highlighted clip of the VISIBLE (possibly app-filtered) list — every

@@ -35,7 +35,7 @@
         "height": 440,
         "resizable": false,
         "decorations": false,
-        "shadow": false,
+        "shadow": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "center": true,
