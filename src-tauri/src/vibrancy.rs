@@ -37,21 +37,24 @@ impl WindowMaterial {
 }
 
 /// Returns the tint color tuple (R, G, B, A) corresponding to the theme.
-/// For dark theme: deeper, subtle dark tint (18, 18, 20, 160).
-/// For light theme: clean, bright translucent white/slate tint (246, 246, 248, 160).
+/// For dark theme: translucent dark tint (18, 18, 22, 60) allowing background colors to radiate through.
+/// For light theme: clean, bright translucent white tint (250, 250, 252, 90).
 pub fn get_tint_color(theme: &str) -> window_vibrancy::Color {
     if theme == "light" {
-        (246, 246, 248, 160)
+        (250, 250, 252, 90)
     } else {
-        (18, 18, 20, 160)
+        (18, 18, 22, 60)
     }
 }
 
-/// Configures Windows DWM rounded corners for the window if supported.
+/// Configures Windows DWM rounded corners for the window and clips frameless HUD windows to exact rounded geometry.
 pub fn set_round_corners(window: &WebviewWindow) {
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE};
+        use windows::Win32::Graphics::Gdi::{CreateRoundRectRgn, SetWindowRgn};
+        use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+
         if let Ok(w_hwnd) = window.hwnd() {
             unsafe {
                 let hwnd = windows::Win32::Foundation::HWND(w_hwnd.0 as _);
@@ -63,6 +66,21 @@ pub fn set_round_corners(window: &WebviewWindow) {
                     &preference as *const _ as *const std::ffi::c_void,
                     std::mem::size_of::<i32>() as u32,
                 );
+
+                // For frameless HUD windows (overlay, pill), clip the HWND region to a 14px rounded rect
+                // so no underlying rectangular acrylic backdrop or ghost frame can protrude at corners.
+                let label = window.label();
+                if label == "overlay" || label == "pill" {
+                    let mut rect = windows::Win32::Foundation::RECT::default();
+                    if GetClientRect(hwnd, &mut rect).is_ok() {
+                        let w = rect.right - rect.left;
+                        let h = rect.bottom - rect.top;
+                        if w > 0 && h > 0 {
+                            let hrgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, 28, 28);
+                            let _ = SetWindowRgn(hwnd, hrgn, true);
+                        }
+                    }
+                }
             }
         }
     }
