@@ -77,7 +77,10 @@
 body.win-overlay,
 html.win-overlay body {
   background: var(--glass-panel-bg);
-  border-radius: 14px;
+  /* 8px matches the DWM ROUND arc exactly: a larger CSS arc leaves a
+     blur-only band outside the CSS curve at the top corners (the mild
+     protruding tabs). Library/enlarged keep 14px — untouched. */
+  border-radius: 8px;
   overflow: hidden;
 }
 
@@ -230,7 +233,7 @@ html[data-material="solid"] .settings {
 html[data-material="solid"].win-overlay body,
 html[data-material="solid"] body.win-overlay {
   background: var(--bg0) !important;
-  border-radius: 14px;
+  border-radius: 8px;
   overflow: hidden;
 }
 
@@ -363,7 +366,7 @@ input, textarea, select, button {
   margin: 0;
   width: 100%;
   height: 100%;
-  border-radius: 14px;
+  border-radius: 8px;
   overflow: hidden;
   /* Transparent like .enlarged: the single body.win-overlay slab provides the
      base tint, while the list scrim / preview pane / bottom bar layer the
@@ -431,7 +434,9 @@ html[data-material="solid"] .enlarged::before {
   margin: 10px 10px 8px;
   flex-shrink: 0;
   background: var(--ov-side) !important;
-  border: 1px solid var(--glass-hairline) !important;
+  /* Borderless like the main-app search: the darker field alone marks the
+     top zone, consistent in clips and snippets tabs. */
+  border: none !important;
   box-shadow: none !important;
   outline: none !important;
 }
@@ -439,7 +444,7 @@ html[data-material="solid"] .enlarged::before {
 .overlay > .searchbar:focus,
 .overlay > .searchbar:focus-within,
 .overlay > .searchbar:focus-visible {
-  border: 1px solid var(--glass-hairline) !important;
+  border: none !important;
   outline: none !important;
   box-shadow: none !important;
   background: var(--ov-side) !important;
@@ -519,6 +524,33 @@ html[data-material="solid"] .enlarged::before {
   /* Middle column = pure body slab (no scrim): maximally translucent against
      the obsidian --ov-side zones, mirroring the library's light-middle. */
   background: transparent;
+}
+
+/* First-summon skeleton: the list window can open before prewarm/fetch
+   lands — shimmer instead of a void (never a blank panel). */
+.ov-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 4px;
+  flex: 1;
+}
+
+.ov-loading .sk {
+  height: 52px;
+  border-radius: 10px;
+  background: linear-gradient(100deg, var(--glass-elev-hover) 30%, var(--glass-pill-bg) 50%, var(--glass-elev-hover) 70%);
+  background-size: 200% 100%;
+  animation: ovShimmer 1.1s linear infinite;
+}
+
+@keyframes ovShimmer {
+  to { background-position: -200% 0; }
+}
+
+html[data-material="solid"] .ov-loading .sk {
+  animation: none;
+  background: var(--elev);
 }
 
 /* Overlay list content-zone secondary text lift */
@@ -4819,8 +4851,12 @@ section:last-child {
 }
 
 .sn-content-preview {
-  background: var(--elev);
-  border: 1px solid var(--line-soft);
+  /* Translucent card (was opaque --elev): lets the frosted blur show through
+     in the main-app detail pane and the picker preview alike. Theme-adaptive
+     via color-mix on --elev; tokens untouched. */
+  background: color-mix(in srgb, var(--elev) 55%, transparent);
+  background-clip: padding-box;
+  border: 1px solid var(--glass-hairline);
   border-radius: var(--r-panel);
   padding: 10px 12px;
   font-family: var(--mono, monospace);
@@ -4831,6 +4867,11 @@ section:last-child {
   color: var(--text-2);
   max-height: 320px;
   overflow-y: auto;
+}
+
+html[data-material="solid"] .sn-content-preview {
+  background: var(--elev);
+  border-color: var(--line-soft);
 }
 
 .sn-content-empty {
@@ -4873,7 +4914,7 @@ section:last-child {
   justify-content: space-between;
   gap: 10px;
   padding: 10px 14px 12px;
-  border-top: 1px solid var(--line-soft);
+  border-top: 1px solid var(--glass-hairline);
 }
 
 .sn-foot-label {

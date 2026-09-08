@@ -203,6 +203,7 @@ export const QuickOverlay: React.FC = () => {
 
   // ── Snippets tab state ────────────────────────────────────────────
   const [snSnippets, setSnSnippets] = useState<Snippet[]>(() => (typeof window !== 'undefined' && window.__carbonInitialSnippets) || []);
+  const [snInitialLoaded, setSnInitialLoaded] = useState(() => Boolean(typeof window !== 'undefined' && window.__carbonInitialSnippets));
   const [snSearch, setSnSearch] = useState('');
   const [snTagFilter, setSnTagFilter] = useState('__all__');
   const [snSelectedId, setSnSelectedId] = useState<string | null>(null);
@@ -293,6 +294,8 @@ export const QuickOverlay: React.FC = () => {
       }
     } catch (err) {
       console.error('Failed to fetch snippets:', err);
+    } finally {
+      setSnInitialLoaded(true);
     }
   };
 
@@ -620,6 +623,7 @@ export const QuickOverlay: React.FC = () => {
     window.__carbonSetSnippets = (data: Snippet[]) => {
       if (Array.isArray(data)) {
         setSnSnippets(data);
+        setSnInitialLoaded(true);
         setSnSelectedId((prev) => {
           if (data.length === 0) return null;
           return prev && data.some((s) => s.id === prev) ? prev : data[0].id;
@@ -668,6 +672,7 @@ export const QuickOverlay: React.FC = () => {
       if (Array.isArray(e.payload)) {
         const list = e.payload;
         setSnSnippets(list);
+        setSnInitialLoaded(true);
         setSnSelectedId((prev) => {
           if (list.length === 0) return null;
           return prev && list.some((s) => s.id === prev) ? prev : list[0].id;
@@ -1550,7 +1555,16 @@ export const QuickOverlay: React.FC = () => {
                     </div>
                   )}
                 </div>
-              ) : null
+              ) : (
+                <div className="ov-loading" aria-label="Loading clips">
+                  <div className="sk" />
+                  <div className="sk" />
+                  <div className="sk" />
+                  <div className="sk" />
+                  <div className="sk" />
+                  <div className="sk" />
+                </div>
+              )
             ) : (
               (() => {
                 const groups = groupItemsByDate(displayItems);
@@ -1583,10 +1597,19 @@ export const QuickOverlay: React.FC = () => {
           {/* Snippets list (always mounted; hidden when the Clips tab is active) */}
           <div className={`overlay-list sn-overlay-list ${tab === 'clips' ? 'inactive-tab' : ''}`}>
             {snSnippets.length === 0 ? (
-              <div className="empty">
-                <div className="big">No snippets yet</div>
-                <div className="sub">Create snippets from the full window, then recall them here.</div>
-              </div>
+              snInitialLoaded ? (
+                <div className="empty">
+                  <div className="big">No snippets yet</div>
+                  <div className="sub">Create snippets from the full window, then recall them here.</div>
+                </div>
+              ) : (
+                <div className="ov-loading" aria-label="Loading snippets">
+                  <div className="sk" />
+                  <div className="sk" />
+                  <div className="sk" />
+                  <div className="sk" />
+                </div>
+              )
             ) : snFiltered.length === 0 ? (
               <div className="empty">
                 <div className="big">No snippets found</div>
