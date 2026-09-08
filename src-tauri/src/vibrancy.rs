@@ -37,13 +37,13 @@ impl WindowMaterial {
 }
 
 /// Returns the tint color tuple (R, G, B, A) corresponding to the theme.
-/// For dark theme: translucent dark tint (18, 18, 22, 60) allowing background colors to radiate through.
-/// For light theme: clean, bright translucent white tint (250, 250, 252, 90).
+/// For dark theme: deeper, subtle dark tint (18, 18, 20, 160).
+/// For light theme: clean, bright translucent white/slate tint (246, 246, 248, 160).
 pub fn get_tint_color(theme: &str) -> window_vibrancy::Color {
     if theme == "light" {
-        (250, 250, 252, 90)
+        (246, 246, 248, 160)
     } else {
-        (18, 18, 22, 60)
+        (18, 18, 20, 160)
     }
 }
 
@@ -67,8 +67,8 @@ pub fn set_round_corners(window: &WebviewWindow) {
                     std::mem::size_of::<i32>() as u32,
                 );
 
-                // For frameless HUD windows (overlay, pill), clip the HWND region to a 14px rounded rect
-                // so no underlying rectangular acrylic backdrop or ghost frame can protrude at corners.
+                // For frameless HUD windows (overlay, pill), clip the HWND region to an exact 14px rounded rect
+                // taking display scaling into account so no underlying rectangular acrylic backdrop or ghost frame can protrude at corners.
                 let label = window.label();
                 if label == "overlay" || label == "pill" {
                     let mut rect = windows::Win32::Foundation::RECT::default();
@@ -76,7 +76,10 @@ pub fn set_round_corners(window: &WebviewWindow) {
                         let w = rect.right - rect.left;
                         let h = rect.bottom - rect.top;
                         if w > 0 && h > 0 {
-                            let hrgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, 28, 28);
+                            let scale = window.scale_factor().unwrap_or(1.0);
+                            let r = (14.0 * scale).round() as i32;
+                            let d = r * 2;
+                            let hrgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, d + 1, d + 1);
                             let _ = SetWindowRgn(hwnd, hrgn, true);
                         }
                     }
@@ -110,6 +113,19 @@ pub fn clear_window_effects(window: &WebviewWindow) {
 pub fn apply_window_material(window: &WebviewWindow, material: WindowMaterial, theme: &str) {
     #[cfg(target_os = "windows")]
     {
+        use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+        if let Ok(w_hwnd) = window.hwnd() {
+            unsafe {
+                let hwnd = windows::Win32::Foundation::HWND(w_hwnd.0 as _);
+                let is_dark: i32 = if theme == "light" { 0 } else { 1 };
+                let _ = DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_USE_IMMERSIVE_DARK_MODE,
+                    &is_dark as *const _ as *const std::ffi::c_void,
+                    std::mem::size_of::<i32>() as u32,
+                );
+            }
+        }
         set_round_corners(window);
         match material {
             WindowMaterial::Solid => {
@@ -138,6 +154,18 @@ pub fn apply_window_material(window: &WebviewWindow, material: WindowMaterial, t
                     }
                 } else {
                     log::info!("[Vibrancy] Applied acrylic to window '{}'", window.label());
+                }
+                if let Ok(w_hwnd) = window.hwnd() {
+                    unsafe {
+                        let hwnd = windows::Win32::Foundation::HWND(w_hwnd.0 as _);
+                        let is_dark: i32 = if theme == "light" { 0 } else { 1 };
+                        let _ = DwmSetWindowAttribute(
+                            hwnd,
+                            DWMWA_USE_IMMERSIVE_DARK_MODE,
+                            &is_dark as *const _ as *const std::ffi::c_void,
+                            std::mem::size_of::<i32>() as u32,
+                        );
+                    }
                 }
             }
         }

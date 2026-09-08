@@ -297,8 +297,8 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     };
     if overlay_win.outer_size().ok() != Some(want) {
         let _ = overlay_win.set_size(tauri::Size::Physical(want));
-        crate::vibrancy::set_round_corners(&overlay_win);
     }
+    crate::vibrancy::set_round_corners(&overlay_win);
 
     let (pos_x, pos_y) = calculate_overlay_position(cx, cy, win_w, win_h, scale_factor);
     crate::paste::log_diag(&format!(

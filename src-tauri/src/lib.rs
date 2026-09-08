@@ -1228,6 +1228,11 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| match event {
+            WindowEvent::Resized(..) => {
+                if let Some(w) = window.app_handle().get_webview_window(window.label()) {
+                    crate::vibrancy::set_round_corners(&w);
+                }
+            }
             WindowEvent::CloseRequested { api, .. } => {
                 // Windows stay warm for instant reopen: intercept close and
                 // hide instead. Quitting happens explicitly via the tray
