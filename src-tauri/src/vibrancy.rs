@@ -47,42 +47,17 @@ pub fn get_tint_color(theme: &str) -> window_vibrancy::Color {
     }
 }
 
-/// Configures Windows DWM rounded corners for the window and clips frameless HUD windows to exact rounded geometry.
-#[cfg(target_os = "windows")]
-static LAST_APPLIED: std::sync::Mutex<Option<std::collections::HashMap<String, (i32, i32, i32)>>> =
-    std::sync::Mutex::new(None);
-
-/// Clip a raw HWND to an exact rounded rect (deduped per key/size/radius).
-/// Used by the Tab-resize animation thread, which only has the HWND.
-#[cfg(target_os = "windows")]
-pub fn clip_raw_hwnd(hwnd_raw: isize, key: &str, w: i32, h: i32, radius_px: i32) {
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::Graphics::Gdi::{CreateRoundRectRgn, SetWindowRgn};
-    if w <= 0 || h <= 0 || radius_px <= 0 {
-        return;
-    }
-    let mut map_guard = LAST_APPLIED.lock().unwrap();
-    let map = map_guard.get_or_insert_with(std::collections::HashMap::new);
-    if map.get(key) == Some(&(w, h, radius_px)) {
-        return;
-    }
-    map.insert(key.to_string(), (w, h, radius_px));
-    drop(map_guard);
-    unsafe {
-        let hwnd = HWND(hwnd_raw as *mut _);
-        // EXACT client rect and corner diameter: the old w+1/h+1/d+1 overshot
-        // by 1px, leaving transparent tabs protruding at the rounded corners.
-        let d = radius_px * 2;
-        let hrgn = CreateRoundRectRgn(0, 0, w, h, d, d);
-        let _ = SetWindowRgn(hwnd, hrgn, true);
-    }
-}
-
+/// Configures Windows DWM rounded corners for the window.
+/// Deliberately DWM-only (no SetWindowRgn): the library window proves this is
+/// pixel-perfect — DWM rounds the whole surface including the acrylic blur at
+/// the compositor level. GDI round-rect regions were tried for overlay/pill
+/// and always left 1px halo tabs at the corners: GDI arcs can't match
+/// Chromium's Skia arcs subpixel-for-subpixel, and blur-behind vs. region
+/// disagree about the corner pixels.
 pub fn set_round_corners(window: &WebviewWindow) {
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE};
-        use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
         if let Ok(w_hwnd) = window.hwnd() {
             unsafe {
@@ -95,22 +70,6 @@ pub fn set_round_corners(window: &WebviewWindow) {
                     &preference as *const _ as *const std::ffi::c_void,
                     std::mem::size_of::<i32>() as u32,
                 );
-
-                // For frameless HUD windows (overlay, pill), clip the HWND region to an exact 14px rounded rect
-                // taking display scaling into account so no underlying rectangular acrylic backdrop or ghost frame can protrude at corners.
-                let label = window.label();
-                if label == "overlay" || label == "pill" {
-                    let mut rect = windows::Win32::Foundation::RECT::default();
-                    if GetClientRect(hwnd, &mut rect).is_ok() {
-                        let w = rect.right - rect.left;
-                        let h = rect.bottom - rect.top;
-                        if w > 0 && h > 0 {
-                            let scale = window.scale_factor().unwrap_or(1.0);
-                            let r = (14.0 * scale).round() as i32;
-                            clip_raw_hwnd(hwnd.0 as isize, label, w, h, r);
-                        }
-                    }
-                }
             }
         }
     }

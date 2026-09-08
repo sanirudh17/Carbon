@@ -853,17 +853,15 @@ export const QuickOverlay: React.FC = () => {
   const togglePreview = () => {
     setPreviewOpen((prev) => {
       const next = !prev;
-      // Sequence: let the pane slide shut/open via CSS first, THEN resize the
-      // native window once the content has settled. Resizing simultaneously
-      // made the OS-level snap fight the animation (the "jump").
+      // The native window now snaps instantly (one SetWindowPos, no surface
+      // realloc animation), so tell Rust immediately in both directions.
+      // The old 150ms close-delay left the folded pane inside a big window.
       if (previewResizeTimer.current) window.clearTimeout(previewResizeTimer.current);
       previewResizeTimer.current = window.setTimeout(
         () => {
           invoke('set_overlay_preview', { enabled: next }).catch(console.error);
         },
-        // Opening: grow the (smoothly animated) window right away so the pane
-        // unfolds into new space. Closing: fold the pane first, then contract.
-        next ? 0 : 150
+        0
       );
       return next;
     });

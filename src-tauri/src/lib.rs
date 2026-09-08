@@ -665,74 +665,25 @@ fn set_overlay_preview(
         };
         if let Ok(hwnd) = window.hwnd() {
             let h_raw: isize = hwnd.0 as isize;
-            let (fx, fy, fw, fh) = if let (Ok(old_pos), Ok(old_size)) =
-                (window.outer_position(), window.outer_size())
-            {
-                (
-                    old_pos.x,
-                    old_pos.y,
-                    old_size.width as i32,
-                    old_size.height as i32,
-                )
-            } else {
-                (pos_x, pos_y, w_phys as i32, h_phys as i32)
-            };
 
-            // Animate the shell resize (~150ms ease-out) instead of snapping.
-            // A generation counter aborts stale animations when Tab is spammed;
-            // the final exact frame guarantees the settled rect is correct.
-            static ANIM_GEN: std::sync::atomic::AtomicU32 =
-                std::sync::atomic::AtomicU32::new(0);
-            let gen = ANIM_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            let total_ms: u64 = 150;
-            let steps: u32 = 9;
-            // DPI-aware corner radius so the HWND clip tracks the CSS 14px
-            // rounded rect at every animation frame (kills corner protrusion
-            // and the stale-region "gray window" after Tab toggles preview).
-            let clip_r = (14.0 * scale).round() as i32;
-            std::thread::spawn(move || {
+            // Instant snap (was a 150ms/9-step animation): every SetWindowPos
+            // reallocates the WebView2 composition surface, so animating
+            // starved the renderer and flashed a white surface for ~0.5s on
+            // every Tab toggle. One SetWindowPos = one recomposition, no
+            // flash. Tab spam is harmless: each toggle just snaps to its own
+            // final rect.
+            unsafe {
                 let h = HWND(h_raw as *mut _);
-                let clip_step = |ww: i32, hh: i32| {
-                    crate::vibrancy::clip_raw_hwnd(h_raw, "overlay", ww, hh, clip_r);
-                };
-                for i in 1..=steps {
-                    std::thread::sleep(std::time::Duration::from_millis(total_ms / steps as u64));
-                    if ANIM_GEN.load(std::sync::atomic::Ordering::Relaxed) != gen {
-                        return;
-                    }
-                    let t = i as f32 / steps as f32;
-                    let e = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t); // ease-out cubic
-                    let lerp = |a: i32, b: i32| a + ((b - a) as f32 * e).round() as i32;
-                    let cw = lerp(fw, w_phys as i32);
-                    let ch = lerp(fh, h_phys as i32);
-                    unsafe {
-                        let _ = SetWindowPos(
-                            h,
-                            None,
-                            lerp(fx, pos_x),
-                            lerp(fy, pos_y),
-                            cw,
-                            ch,
-                            SWP_NOACTIVATE | SWP_NOZORDER,
-                        );
-                    }
-                    clip_step(cw, ch);
-                }
-                if ANIM_GEN.load(std::sync::atomic::Ordering::Relaxed) == gen {
-                    unsafe {
-                        let _ = SetWindowPos(
-                            h,
-                            None,
-                            pos_x,
-                            pos_y,
-                            w_phys as i32,
-                            h_phys as i32,
-                            SWP_NOACTIVATE | SWP_NOZORDER,
-                        );
-                    }
-                    clip_step(w_phys as i32, h_phys as i32);
-                }
-            });
+                let _ = SetWindowPos(
+                    h,
+                    None,
+                    pos_x,
+                    pos_y,
+                    w_phys as i32,
+                    h_phys as i32,
+                    SWP_NOACTIVATE | SWP_NOZORDER,
+                );
+            }
         }
     }
     #[cfg(not(windows))]
