@@ -613,6 +613,71 @@ export const QuickOverlay: React.FC = () => {
     }
   }, []);
 
+  // ── Show/hide choreography (state machine: hidden|showing|shown|hiding) ──
+  // The overlay window is warm (hidden, never destroyed), so body-class state
+  // survives across shows. HIDE: fade #root out via body.is-hidden (70ms),
+  // then the native hide() runs on transitionend (80ms timeout fallback).
+  // SHOW: the window is shown while the mask is still on; two rAF ticks
+  // guarantee one presented painted frame before the mask lifts (100ms fade).
+  // Re-pressing the hotkey while a fade-hide is pending cancels it and
+  // reveals — hotkey spam toggles cleanly instead of racing show/hide.
+  const overlayPhaseRef = useRef<'hidden' | 'showing' | 'shown' | 'hiding'>('hidden');
+  const pendingHideRef = useRef<{ cancel: (reveal: boolean) => void } | null>(null);
+
+  const requestHide = (gen?: number | null) => {
+    // Tell Rust this generation is handled: its 250ms fallback only fires if
+    // the webview never acknowledged (e.g. a crashed renderer).
+    if (typeof gen === 'number') invoke('overlay_hide_ack', { gen }).catch(() => {});
+
+    if (pendingHideRef.current) {
+      // Already fading out: this is a toggle re-press — cancel and reveal.
+      pendingHideRef.current.cancel(true);
+      return;
+    }
+
+    const body = document.body;
+    const rootEl = document.getElementById('root');
+    overlayPhaseRef.current = 'hiding';
+    body.classList.add('is-hidden');
+    let cancelled = false;
+    let finished = false;
+    const finish = () => {
+      if (cancelled || finished) return;
+      finished = true;
+      pendingHideRef.current = null;
+      overlayPhaseRef.current = 'hidden';
+      rootEl?.removeEventListener('transitionend', onEnd);
+      // Blur/paste may have hidden the window mid-fade — only call the native
+      // hide (which restores focus to the target app) if we are still visible.
+      getCurrentWindow()
+        .isVisible()
+        .then((vis) => {
+          if (vis) invoke('hide_overlay').catch(console.error);
+        })
+        .catch(() => invoke('hide_overlay').catch(console.error));
+    };
+    const onEnd = (e: TransitionEvent) => {
+      if (e.target === rootEl && e.propertyName === 'opacity') finish();
+    };
+    rootEl?.addEventListener('transitionend', onEnd);
+    const timer = window.setTimeout(finish, 80); // 70ms fade + slack
+    pendingHideRef.current = {
+      cancel: (reveal: boolean) => {
+        if (cancelled || finished) return;
+        cancelled = true;
+        finished = true;
+        window.clearTimeout(timer);
+        rootEl?.removeEventListener('transitionend', onEnd);
+        pendingHideRef.current = null;
+        if (reveal) {
+          overlayPhaseRef.current = 'shown';
+          body.classList.remove('is-hidden'); // fade back in (100ms)
+        }
+        // reveal=false: the show path keeps the mask on and lifts it itself.
+      },
+    };
+  };
+
   useEffect(() => {
     logClient('QuickOverlay mounted.');
     invoke<AppSettings>('get_settings')
@@ -692,6 +757,27 @@ export const QuickOverlay: React.FC = () => {
 
     const unlistenOpened = safeListen('overlay-opened', () => {
       logClient('Received overlay-opened event.');
+      // ── Show choreography ──
+      // Cancel any in-flight fade-hide (a toggle re-press mid-fade), keep the
+      // is-hidden mask on, wait TWO presented frames (guarantees one painted
+      // present after show()), then lift the mask -> 100ms fade-in.
+      if (pendingHideRef.current) pendingHideRef.current.cancel(false);
+      overlayPhaseRef.current = 'showing';
+      const body = document.body;
+      const rootEl = document.getElementById('root');
+      if (!body.classList.contains('is-hidden')) {
+        // Last hide was native (paste/blur paths): snap the mask on with no
+        // transition — nothing may animate while the window was invisible.
+        body.classList.add('is-hidden', 'no-anim');
+        void rootEl?.offsetWidth; // flush styles into this frame
+        body.classList.remove('no-anim');
+      }
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          body.classList.remove('is-hidden');
+          overlayPhaseRef.current = 'shown';
+        });
+      });
       setSearch('');
       setActionPanelOpen(false);
       setActionIndex(0);
@@ -711,6 +797,11 @@ export const QuickOverlay: React.FC = () => {
         .catch(() => {
           focusSearchInput();
         });
+    });
+
+    const unlistenHideReq = safeListen<number>('overlay-hide-requested', (e) => {
+      logClient(`Received overlay-hide-requested (gen=${e.payload}).`);
+      requestHide(e.payload);
     });
 
     const unlistenSettings = safeListen<AppSettings>('settings-updated', (e) => {
@@ -784,6 +875,7 @@ export const QuickOverlay: React.FC = () => {
       unlistenData.then((fn) => fn());
       unlistenSnData.then((fn) => fn());
       unlistenOpened.then((fn) => fn());
+      unlistenHideReq.then((fn) => fn());
       unlistenSettings.then((fn) => fn());
       unlistenCycle.then((fn) => fn());
       unlistenStatus.then((fn) => fn());
@@ -1052,7 +1144,7 @@ export const QuickOverlay: React.FC = () => {
     // Global hotkey toggles (Ctrl+Shift+Z hides overlay, Ctrl+Alt+X toggles enlarged)
     if (matchesHotkeyCombo(e, hotkeyStatus?.overlay || 'Ctrl+Shift+Z')) {
       e.preventDefault();
-      invoke('hide_overlay').catch(console.error);
+      requestHide();
       return;
     }
     if (matchesHotkeyCombo(e, hotkeyStatus?.enlarged || 'Ctrl+Alt+X')) {
@@ -1064,7 +1156,7 @@ export const QuickOverlay: React.FC = () => {
     // Escape always hides overlay
     if (e.key === 'Escape') {
       e.preventDefault();
-      invoke('hide_overlay').catch(console.error);
+      requestHide();
       return;
     }
 
@@ -1171,8 +1263,8 @@ export const QuickOverlay: React.FC = () => {
     if (matchesHotkeyCombo(e, hotkeyStatus?.overlay || 'Ctrl+Shift+Z')) {
       e.preventDefault();
       e.stopPropagation();
-      logClient('Overlay toggle hotkey pressed inside overlay webview, invoking hide_overlay');
-      invoke('hide_overlay').catch(console.error);
+      logClient('Overlay toggle hotkey pressed inside overlay webview, running hide choreography');
+      requestHide();
       return;
     }
     if (matchesHotkeyCombo(e, hotkeyStatus?.enlarged || 'Ctrl+Alt+X')) {
@@ -1270,8 +1362,8 @@ export const QuickOverlay: React.FC = () => {
     // Escape always hides overlay
     if (e.key === 'Escape') {
       e.preventDefault();
-      logClient('Escape pressed, invoking hide_overlay');
-      invoke('hide_overlay').catch(console.error);
+      logClient('Escape pressed, running hide choreography');
+      requestHide();
       return;
     }
 
@@ -1801,7 +1893,7 @@ export const QuickOverlay: React.FC = () => {
             </span>
           </div>
           <div className="bar-right">
-            <span className="hint" onClick={() => invoke('hide_overlay')}>
+            <span className="hint" onClick={() => requestHide()}>
               <span className="key">Esc</span>
               <b>Close</b>
             </span>

@@ -1,6 +1,6 @@
 use crate::paste::{get_cursor_position, restore_target_window, save_target_window};
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager};
@@ -21,6 +21,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 static CURRENT_CYCLE_INDEX: AtomicU32 = AtomicU32::new(0);
 static APP_HANDLE_HOLDER: Mutex<Option<AppHandle>> = Mutex::new(None);
 static RECORDING_TARGET: Mutex<Option<String>> = Mutex::new(None);
+/// Generation of webview-routed overlay hide requests (bumped per request and
+/// on every show) + the last generation the overlay webview acknowledged.
+/// The 250ms fallback only fires when the webview never acknowledged AND no
+/// newer request/show happened — so hotkey spam and quick re-shows never
+/// race the fallback, while a crashed renderer still gets a native hide.
+static OVERLAY_HIDE_GEN: AtomicU64 = AtomicU64::new(0);
+static OVERLAY_HIDE_ACK: AtomicU64 = AtomicU64::new(0);
 
 pub fn set_recording_target(target: Option<String>) {
     *RECORDING_TARGET.lock().unwrap() = target;
@@ -279,8 +286,8 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     ));
 
     if is_visible {
-        crate::paste::log_diag("[HOTKEY] Overlay is visible. Calling hide_overlay_window (toggle)...");
-        hide_overlay_window(app_handle);
+        crate::paste::log_diag("[HOTKEY] Overlay is visible. Requesting choreographed fade-hide via webview (toggle)...");
+        request_webview_overlay_hide(app_handle);
         return;
     }
 
@@ -300,6 +307,9 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     // Fast path: save target HWND while it is still foreground (must be before show)
     crate::paste::log_diag("[HOTKEY] Overlay opening. Calling save_target_window...");
     save_target_window(app_handle);
+    // Invalidate any pending webview-hide fallback: a show always wins over a
+    // stale hide request (the fade choreography lives in QuickOverlay.tsx).
+    OVERLAY_HIDE_GEN.fetch_add(1, Ordering::SeqCst);
     // Capture selected text while target is still focused. UIA is instant; clipboard
     // fallback (Ctrl+C + 120ms) is rare and only runs when UIA has no selection.
     crate::paste::capture_selection_snapshot();
@@ -323,11 +333,9 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     };
     if overlay_win.outer_size().ok() != Some(want) {
         let _ = overlay_win.set_size(tauri::Size::Physical(want));
-        if let Some(state) = app_handle.try_state::<crate::AppState>() {
-            let settings = state.settings.get();
-            let mat = crate::vibrancy::WindowMaterial::from_str(&settings.window_material);
-            crate::vibrancy::apply_window_material(&overlay_win, mat, &settings.theme);
-        }
+        // No material re-apply here: acrylic is applied ONCE at creation
+        // (prewarm/recreate) and on preview-toggle geometry changes — never
+        // on show. Re-driving the DWM backdrop per show caused resume churn.
     }
     crate::vibrancy::set_round_corners(&overlay_win);
 
@@ -445,6 +453,37 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
         });
         let _ = app_handle.emit("enlarged-opened", ());
     }
+}
+
+/// Records that the overlay webview acknowledged a hide-request generation.
+pub fn note_overlay_hide_ack(gen: u64) {
+    OVERLAY_HIDE_ACK.fetch_max(gen, Ordering::SeqCst);
+}
+
+/// Routes the hide through the overlay webview so its choreography can fade
+/// #root out BEFORE the native hide() and cancel a pending hide on a re-press
+/// (hotkey spam = clean toggle, no show/hide race). A 250ms fallback hides
+/// natively if the webview never acknowledges (crashed renderer), so the
+/// hotkey can never go dead. Blur/paste paths still hide natively+immediately.
+fn request_webview_overlay_hide(app: &AppHandle) {
+    let gen = OVERLAY_HIDE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    let _ = app.emit_to("overlay", "overlay-hide-requested", gen);
+    let app2 = app.clone();
+    thread::spawn(move || {
+        thread::sleep(std::time::Duration::from_millis(250));
+        if OVERLAY_HIDE_GEN.load(Ordering::SeqCst) == gen
+            && OVERLAY_HIDE_ACK.load(Ordering::SeqCst) < gen
+        {
+            if let Some(win) = app2.get_webview_window("overlay") {
+                if win.is_visible().unwrap_or(false) {
+                    crate::paste::log_diag(
+                        "[HOTKEY] Webview hide-request unacknowledged — native hide fallback.",
+                    );
+                    hide_overlay_window(&app2);
+                }
+            }
+        }
+    });
 }
 
 /// Guard to prevent re-entrant calls to hide_overlay_window.

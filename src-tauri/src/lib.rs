@@ -714,6 +714,14 @@ async fn get_stats(state: State<'_, AppState>) -> Result<DbStats, String> {
     state.db.get_stats()
 }
 
+/// Ack from the overlay webview: it received a hide-request generation and is
+/// running the fade-out choreography. Lets hotkey.rs's 250ms fallback tell
+/// "webview alive, fading" apart from "webview dead, hide natively now".
+#[tauri::command]
+fn overlay_hide_ack(gen: u64) {
+    hotkey::note_overlay_hide_ack(gen);
+}
+
 #[tauri::command]
 fn hide_overlay(app_handle: AppHandle) -> Result<(), String> {
     hotkey::hide_overlay_window(&app_handle);
@@ -1082,6 +1090,17 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        .plugin(
+            // Inline micro-plugin: fires at EVERY webview creation (config
+            // windows + safety-net recreates), forcing the WebView2 controller
+            // surface transparent at creation — belt-and-braces on top of the
+            // WEBVIEW2_DEFAULT_BACKGROUND_COLOR=0 env var set above.
+            tauri::plugin::Builder::<tauri::Wry>::new("carbon-webview-transparent")
+                .on_webview_ready(|webview| {
+                    crate::vibrancy::set_webview_transparent_background(&webview);
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Second launch (e.g., via Start menu search) should focus the
             // existing instance instead of spawning a duplicate background
@@ -1308,6 +1327,7 @@ pub fn run() {
             set_overlay_default_tab,
             get_stats,
             hide_overlay,
+            overlay_hide_ack,
             hide_enlarged,
             toggle_overlay,
             toggle_enlarged,

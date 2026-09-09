@@ -48,6 +48,12 @@
   --font: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
   --mono: "Cascadia Code", "Consolas", "SF Mono", monospace;
   --ease-out: cubic-bezier(.16, 1, .3, 1);
+  /* Preview expand/collapse choreography (width/opacity/transform ONLY —
+     never box-shadow/backdrop-filter/blur, never vertical sizes). */
+  --dur-expand: 170ms;
+  --dur-collapse: 130ms;
+  --ease-cream: cubic-bezier(0.16, 1, 0.3, 1); /* decelerate, creamy */
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
   color-scheme: dark;
 
   /* ── Raycast / Tinycast Frosted-Glass Material Tokens (Dark) ── */
@@ -290,6 +296,26 @@ html, #root {
 
 body {
   background: var(--glass-base);
+}
+
+/* ── Overlay show/hide choreography ──
+   HIDE: body.is-hidden fades #root out (70ms linear); the native hide() runs
+   on transitionend (80ms timeout fallback). SHOW: the warm window is shown
+   while the mask is still on; after two presented frames the mask lifts and
+   #root fades back in (100ms linear). Together with the transparent WebView2
+   surface this masks the unpainted first-present frame on rapid toggles. */
+#root {
+  opacity: 1;
+  transition: opacity 100ms linear;
+}
+
+body.is-hidden #root {
+  opacity: 0;
+  transition: opacity 70ms linear;
+}
+
+body.no-anim #root {
+  transition: none !important;
 }
 
 input, textarea, select, button {
@@ -1287,18 +1313,41 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 24px);
 }
 
-/* Preview Pane */
+/* Preview Pane — same width-only choreography as the overlay preview
+   (expand 170ms cream / collapse 130ms exit; hairline + content opacity
+   synced; width/opacity/transform only). */
 .preview {
   width: 0;
   overflow: hidden;
   flex-shrink: 0;
+  position: relative;
   background: var(--glass-preview);
-  border-left: 1px solid var(--glass-hairline);
-  transition: width 200ms var(--ease-out);
+  border-left: none;
+  transition: width var(--dur-collapse) var(--ease-exit);
+}
+
+.preview::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--glass-hairline);
+  opacity: 0;
+  transition: opacity 60ms var(--ease-exit);
+  pointer-events: none;
+  z-index: 1;
 }
 
 .preview.open {
   width: 480px;
+  transition: width var(--dur-expand) var(--ease-cream);
+}
+
+.preview.open::before {
+  opacity: 1;
+  transition: opacity 120ms var(--ease-cream) 20ms;
 }
 
 .preview-inner {
@@ -1306,6 +1355,17 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   height: 100%;
   display: flex;
   flex-direction: column;
+  opacity: 0;
+  transform: translateX(8px);
+  transition: opacity 60ms var(--ease-exit),
+              transform 0ms linear 60ms;
+}
+
+.preview.open > .preview-inner {
+  opacity: 1;
+  transform: translateX(0);
+  transition: opacity 120ms var(--ease-cream) 20ms,
+              transform 120ms var(--ease-cream) 20ms;
 }
 
 .preview-head {
@@ -2235,6 +2295,9 @@ section:last-child {
 .overlay-list {
   flex: 1 1 40%;
   min-width: 0;
+  /* The flex list absorbs the preview's width animation every frame;
+     contain:layout keeps that reflow cheap (no descendant invalidation). */
+  contain: layout;
 }
 
 .overlay-body {
@@ -2243,28 +2306,81 @@ section:last-child {
   min-height: 0;
 }
 
+/* Preview pane animates WIDTH only (expand 170ms cream / collapse 130ms
+   exit). It is a flex child with a hard width — the flex:1 list absorbs the
+   change — and overflow stays hidden permanently: scrolling lives on
+   .overlay-preview-content, so no scrollbar can pop mid-transition and no
+   transitionend overflow restore is needed. Width/opacity/transform only;
+   never box-shadow/backdrop-filter/blur, nothing vertical (window height is
+   constant). CSS transitions retarget natively, so interrupting an
+   in-flight toggle is smooth by construction. */
 .overlay-preview {
-  flex: 1 1 58%;
+  flex: 0 0 auto;
+  width: 0;
   min-width: 0;
+  position: relative;
   display: flex;
   flex-direction: column;
   /* Exact main-app preview token (was obsidian --ov-side, which composited
      darker than the library). Same token over the same slab = same look. */
   background: var(--glass-preview);
-  border-left: 1px solid var(--glass-hairline);
-  transition: flex-basis 130ms var(--ease-out),
-              max-width 130ms var(--ease-out);
-  opacity: 1;
+  /* Hairline is drawn by ::before so its opacity can be animated; no real
+     border keeps the animated width identical to the layout box. */
+  border-left: none;
+  transition: width var(--dur-collapse) var(--ease-exit);
   overflow: hidden;
 }
 
-.overlay-preview.collapsed {
-  display: none !important;
-  flex-basis: 0% !important;
-  max-width: 0% !important;
-  border-left-color: transparent !important;
+.overlay-preview:not(.collapsed) {
+  /* ~59% of the 1020px open window — matches the old 58/40 flex split. */
+  width: 59.5%;
+  transition: width var(--dur-expand) var(--ease-cream);
+}
+
+/* Divider hairline: opacity synced with the pane — fades out first on
+   collapse, eases in with the content on expand. */
+.overlay-preview::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--glass-hairline);
+  opacity: 0;
+  transition: opacity 60ms var(--ease-exit);
   pointer-events: none;
-  overflow: hidden !important;
+  z-index: 1;
+}
+
+.overlay-preview:not(.collapsed)::before {
+  opacity: 1;
+  transition: opacity 120ms var(--ease-cream) 20ms;
+}
+
+/* Inner content: expand = fade + 8px slide-in (120ms cream, 20ms delay);
+   collapse = 60ms fade first, transform releases only after the fade so
+   nothing visibly jumps. */
+.overlay-preview > * {
+  opacity: 0;
+  transform: translateX(8px);
+  transition: opacity 60ms var(--ease-exit),
+              transform 0ms linear 60ms;
+}
+
+.overlay-preview:not(.collapsed) > * {
+  opacity: 1;
+  transform: translateX(0);
+  transition: opacity 120ms var(--ease-cream) 20ms,
+              transform 120ms var(--ease-cream) 20ms;
+}
+
+/* Must come after the :not(.collapsed) rules (equal specificity) so a
+   collapsed pane always lands at width 0. No display:none — that would kill
+   the transition and reset scroll/selection state mid-spam. */
+.overlay-preview.collapsed {
+  width: 0 !important;
+  pointer-events: none;
 }
 
 .overlay-preview-head {
@@ -4623,6 +4739,25 @@ section:last-child {
   .col-select-row {
     animation: none !important;
     transition: none !important;
+  }
+
+  /* Preview choreography: instant snap (0ms) — width/opacity/transform. */
+  .preview,
+  .preview.open,
+  .preview::before,
+  .preview.open::before,
+  .preview .preview-inner,
+  .overlay-preview,
+  .overlay-preview:not(.collapsed),
+  .overlay-preview::before,
+  .overlay-preview:not(.collapsed)::before,
+  .overlay-preview > * {
+    transition: none !important;
+  }
+
+  .preview .preview-inner,
+  .overlay-preview > * {
+    transform: none !important;
   }
 }
 

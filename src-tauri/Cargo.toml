@@ -56,4 +56,14 @@ sha2 = "0.10"
 hex = "0.4"
 window-vibrancy = "0.8.0"
 
+# Direct handle on the WebView2 COM API: force the controller's
+# DefaultBackgroundColor to fully transparent at creation (show-flash fix,
+# see vibrancy.rs). Kept in lockstep with the webview2-com version wry
+# already pulls in (Cargo.lock: 0.38.x) so no second copy is compiled.
+[target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = "0.38"
+# Same version family webview2-com-sys 0.38 uses (0.61) so the
+# windows_core::Interface cast trait unifies with the controller() handle.
+windows-core = "0.61"
+
 
