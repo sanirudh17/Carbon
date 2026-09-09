@@ -619,21 +619,24 @@ export const QuickOverlay: React.FC = () => {
   // then the native hide() runs on transitionend (80ms timeout fallback).
   // SHOW: the window is shown while the mask is still on; two rAF ticks
   // guarantee one presented painted frame before the mask lifts (100ms fade).
-  // Re-pressing the hotkey while a fade-hide is pending cancels it and
-  // reveals — hotkey spam toggles cleanly instead of racing show/hide.
+  // Hide is idempotent: a re-press while fading does NOT cancel (the
+  // cancel path exists only so an actual show can abort an in-flight fade);
+  // the mask stays ON whenever the window is invisible, so a re-press or a
+  // stale timeout rAF can never remove it while hidden (no rebound reveal).
   const overlayPhaseRef = useRef<'hidden' | 'showing' | 'shown' | 'hiding'>('hidden');
-  const pendingHideRef = useRef<{ cancel: (reveal: boolean) => void } | null>(null);
+  const pendingHideRef = useRef<{ cancel: () => void } | null>(null);
+  // Bumped on every overlay-opened; each show's rAF chain only lifts the mask
+  // for its own epoch, so overlapping shows under hotkey spam can't fight.
+  const showEpochRef = useRef(0);
 
   const requestHide = (gen?: number | null) => {
     // Tell Rust this generation is handled: its 250ms fallback only fires if
     // the webview never acknowledged (e.g. a crashed renderer).
     if (typeof gen === 'number') invoke('overlay_hide_ack', { gen }).catch(() => {});
 
-    if (pendingHideRef.current) {
-      // Already fading out: this is a toggle re-press — cancel and reveal.
-      pendingHideRef.current.cancel(true);
-      return;
-    }
+    // Already fading out: keep the fade (restart semantics would re-run the
+    // fade anyway). Crucially, never lift the mask while invisible.
+    if (pendingHideRef.current) return;
 
     const body = document.body;
     const rootEl = document.getElementById('root');
@@ -649,6 +652,7 @@ export const QuickOverlay: React.FC = () => {
       rootEl?.removeEventListener('transitionend', onEnd);
       // Blur/paste may have hidden the window mid-fade — only call the native
       // hide (which restores focus to the target app) if we are still visible.
+      // The mask class stays ON while invisible; the show path lifts it.
       getCurrentWindow()
         .isVisible()
         .then((vis) => {
@@ -662,18 +666,15 @@ export const QuickOverlay: React.FC = () => {
     rootEl?.addEventListener('transitionend', onEnd);
     const timer = window.setTimeout(finish, 80); // 70ms fade + slack
     pendingHideRef.current = {
-      cancel: (reveal: boolean) => {
+      // Only the show path calls cancel: abort the fade WITHOUT lifting the
+      // mask (the show handler lifts it itself after two presented frames).
+      cancel: () => {
         if (cancelled || finished) return;
         cancelled = true;
         finished = true;
         window.clearTimeout(timer);
         rootEl?.removeEventListener('transitionend', onEnd);
         pendingHideRef.current = null;
-        if (reveal) {
-          overlayPhaseRef.current = 'shown';
-          body.classList.remove('is-hidden'); // fade back in (100ms)
-        }
-        // reveal=false: the show path keeps the mask on and lifts it itself.
       },
     };
   };
@@ -760,8 +761,13 @@ export const QuickOverlay: React.FC = () => {
       // ── Show choreography ──
       // Cancel any in-flight fade-hide (a toggle re-press mid-fade), keep the
       // is-hidden mask on, wait TWO presented frames (guarantees one painted
-      // present after show()), then lift the mask -> 100ms fade-in.
-      if (pendingHideRef.current) pendingHideRef.current.cancel(false);
+      // present after show()), then lift the mask -> 100ms fade-in. The rAF
+      // chain is guarded by a show epoch: a stale chain from an earlier show
+      // (hotkey spam) can never lift a NEWER show's mask — each lift only
+      // applies to its own epoch, so a quick hide after the double rAF can't
+      // be undone by leftover callbacks (no rebound reveal).
+      const showEpoch = (showEpochRef.current += 1);
+      if (pendingHideRef.current) pendingHideRef.current.cancel();
       overlayPhaseRef.current = 'showing';
       const body = document.body;
       const rootEl = document.getElementById('root');
@@ -773,7 +779,15 @@ export const QuickOverlay: React.FC = () => {
         body.classList.remove('no-anim');
       }
       requestAnimationFrame(() => {
+        // Frame 1: the WebView2 surface has re-presented at least once since
+        // show(); keep the mask — this frame can still be the stale (white)
+        // one on a cold renderer.
+        if (showEpoch !== showEpochRef.current) return;
         requestAnimationFrame(() => {
+          // Frame 2: guaranteed a fresh painted frame now — only this show's
+          // own chain may lift the mask.
+          if (showEpoch !== showEpochRef.current) return;
+          if (overlayPhaseRef.current !== 'showing') return;
           body.classList.remove('is-hidden');
           overlayPhaseRef.current = 'shown';
         });

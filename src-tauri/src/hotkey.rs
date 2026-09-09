@@ -461,10 +461,13 @@ pub fn note_overlay_hide_ack(gen: u64) {
 }
 
 /// Routes the hide through the overlay webview so its choreography can fade
-/// #root out BEFORE the native hide() and cancel a pending hide on a re-press
-/// (hotkey spam = clean toggle, no show/hide race). A 250ms fallback hides
-/// natively if the webview never acknowledges (crashed renderer), so the
-/// hotkey can never go dead. Blur/paste paths still hide natively+immediately.
+/// #root out BEFORE the native hide(). Re-entrant + idempotent: a re-press
+/// while fading keeps the fade (mask stays ON until the native hide); cancel
+/// only happens for an actual show. A 250ms fallback hides natively if the
+/// webview never acknowledges (crashed renderer), so the hotkey can never go
+/// dead. Blur/paste paths still hide natively+immediately. In every case the
+/// mask class is left ON while invisible; the show path clears it after two
+/// presented frames so no stale/composited-white frame is ever revealed.
 fn request_webview_overlay_hide(app: &AppHandle) {
     let gen = OVERLAY_HIDE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
     let _ = app.emit_to("overlay", "overlay-hide-requested", gen);
@@ -503,6 +506,11 @@ pub fn hide_overlay_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("overlay") {
         // Always hide, never close: a live webview makes the next open instant
         // and avoids the recreate race that showed an unrendered window.
+        // Tell the renderer to keep the is-hidden mask ON even though #root
+        // is already at opacity 0: with a warm (never destroyed) webview the
+        // compositor can otherwise resurrect the last unmasked frame between
+        // hides, which reads as a flash/rebound on the next show.
+        let _ = win.eval("document.body.classList.add('is-hidden')");
         let hide_res = win.hide();
         crate::paste::log_diag(&format!("[HIDE_OVERLAY] win.hide() returned {:?}", hide_res));
     } else {
