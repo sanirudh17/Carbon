@@ -194,7 +194,7 @@ export const QuickOverlay: React.FC = () => {
         if (cached !== null) return cached === 'true';
       } catch {}
     }
-    return false;
+    return true;
   });
   const [showSnippets, setShowSnippets] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
@@ -692,14 +692,6 @@ export const QuickOverlay: React.FC = () => {
 
     const unlistenOpened = safeListen('overlay-opened', () => {
       logClient('Received overlay-opened event.');
-      // Restart the 90ms open fade (masks WebView2's first-present white
-      // frames on show). Reflow trick retriggers without remounting.
-      const shell = containerRef.current;
-      if (shell) {
-        shell.classList.remove('open-fade');
-        void shell.offsetWidth;
-        shell.classList.add('open-fade');
-      }
       setSearch('');
       setActionPanelOpen(false);
       setActionIndex(0);

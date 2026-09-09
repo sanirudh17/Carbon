@@ -34,7 +34,12 @@ fn ensure_overlay_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     // something destroyed the window unexpectedly (e.g. first launch before
     // prewarm). Recreate from config as a safety net.
     crate::paste::log_diag("[HOTKEY] Overlay window not found — recreating (safety net).");
-    if let Some(cfg) = app
+    let preview_on = app
+        .try_state::<crate::AppState>()
+        .map(|s| s.settings.get().preview_enabled)
+        .unwrap_or(true);
+    let (win_w, win_h) = if preview_on { (1020.0, 560.0) } else { (680.0, 440.0) };
+    if let Some(mut cfg) = app
         .config()
         .app
         .windows
@@ -42,6 +47,8 @@ fn ensure_overlay_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
         .find(|w| w.label == "overlay")
         .cloned()
     {
+        cfg.width = win_w;
+        cfg.height = win_h;
         match tauri::WebviewWindowBuilder::from_config(app, &cfg) {
             Ok(builder) => match builder.build() {
                 Ok(w) => {
@@ -66,7 +73,7 @@ fn ensure_overlay_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
         tauri::WebviewUrl::App("index.html".into()),
     )
     .title("Carbon Quick Paste")
-    .inner_size(680.0, 440.0)
+    .inner_size(win_w, win_h)
     .resizable(false)
     .decorations(false)
     .always_on_top(true)
@@ -169,6 +176,25 @@ pub fn prewarm_windows(app: &AppHandle) {
     // Warm DB cache and push snapshot directly into WebViews while hidden
     if let Some(state) = app.try_state::<crate::AppState>() {
         let settings = state.settings.get();
+
+        // Ensure overlay window is pre-sized to match preview_enabled and has vibrancy applied across full bounds
+        if let Some(win) = app.get_webview_window("overlay") {
+            let (win_w, win_h) = if settings.preview_enabled { (1020, 560) } else { (680, 440) };
+            let scale_factor = win.scale_factor().unwrap_or(1.0);
+            let phys_w = (win_w as f64 * scale_factor).round() as u32;
+            let phys_h = (win_h as f64 * scale_factor).round() as u32;
+            let want = tauri::PhysicalSize {
+                width: phys_w,
+                height: phys_h,
+            };
+            if win.outer_size().ok() != Some(want) {
+                let _ = win.set_size(tauri::Size::Physical(want));
+            }
+            crate::vibrancy::set_round_corners(&win);
+            let mat = crate::vibrancy::WindowMaterial::from_str(&settings.window_material);
+            crate::vibrancy::apply_window_material(&win, mat, &settings.theme);
+        }
+
         if let Ok(json) = serde_json::to_string(&settings) {
             for label in ["overlay", "main", "pill", "argprompt"] {
                 if let Some(win) = app.get_webview_window(label) {
@@ -297,6 +323,11 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     };
     if overlay_win.outer_size().ok() != Some(want) {
         let _ = overlay_win.set_size(tauri::Size::Physical(want));
+        if let Some(state) = app_handle.try_state::<crate::AppState>() {
+            let settings = state.settings.get();
+            let mat = crate::vibrancy::WindowMaterial::from_str(&settings.window_material);
+            crate::vibrancy::apply_window_material(&overlay_win, mat, &settings.theme);
+        }
     }
     crate::vibrancy::set_round_corners(&overlay_win);
 
@@ -312,7 +343,9 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
         y: pos_y,
     }));
 
-    let _ = overlay_win.unminimize();
+    if overlay_win.is_minimized().unwrap_or(false) {
+        let _ = overlay_win.unminimize();
+    }
     let show_res = overlay_win.show();
     let focus_res = overlay_win.set_focus();
     crate::paste::log_diag(&format!(

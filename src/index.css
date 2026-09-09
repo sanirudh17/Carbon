@@ -76,6 +76,7 @@
 
 body.win-overlay,
 html.win-overlay body {
+  --glass-base: rgba(14, 14, 16, 0.72);
   /* Same base tint as the library window (was the bluer --glass-panel-bg):
      both windows now composite from one identical base, so the preview
      panes read as the same color and transparency. */
@@ -353,33 +354,6 @@ input, textarea, select, button {
   box-sizing: border-box;
   margin: 0;
   background: transparent;
-  animation: overlayPopIn 150ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-@keyframes overlayPopIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-/* Per-show fade: WebView2 discards the composition surface while hidden, so
-   the first 1-2 frames after show() can present white — most visible when
-   rapidly toggling. A 90ms ramp from transparent masks those frames without
-   feeling slow (retriggered from JS on every overlay-opened; no remount). */
-.overlay-container.open-fade {
-  animation: overlayOpenFade 90ms ease-out;
-}
-
-@keyframes overlayOpenFade {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
 }
 
 .overlay, .overlay-window {
@@ -2278,18 +2252,16 @@ section:last-child {
      darker than the library). Same token over the same slab = same look. */
   background: var(--glass-preview);
   border-left: 1px solid var(--glass-hairline);
-  /* Single crisp reveal: width + quick fade, no translate slide */
   transition: flex-basis 130ms var(--ease-out),
-              max-width 130ms var(--ease-out),
-              opacity 100ms var(--ease-out);
+              max-width 130ms var(--ease-out);
   opacity: 1;
   overflow: hidden;
 }
 
 .overlay-preview.collapsed {
+  display: none !important;
   flex-basis: 0% !important;
   max-width: 0% !important;
-  opacity: 0;
   border-left-color: transparent !important;
   pointer-events: none;
   overflow: hidden !important;

@@ -622,7 +622,7 @@ fn set_overlay_preview(
 ) -> Result<(), String> {
     let mut settings = state.settings.get();
     settings.preview_enabled = enabled;
-    state.settings.update(settings)?;
+    state.settings.update(settings.clone())?;
 
     let scale = window.scale_factor().unwrap_or(1.0);
     let (w_log, h_log) = if enabled { (1020, 560) } else { (680, 440) };
@@ -684,6 +684,9 @@ fn set_overlay_preview(
                     SWP_NOACTIVATE | SWP_NOZORDER,
                 );
             }
+            crate::vibrancy::set_round_corners(&window);
+            let mat = crate::vibrancy::WindowMaterial::from_str(&settings.window_material);
+            crate::vibrancy::apply_window_material(&window, mat, &settings.theme);
         }
     }
     #[cfg(not(windows))]
@@ -1073,6 +1076,11 @@ fn paste_snippet_text(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::set_var("WEBVIEW2_DEFAULT_BACKGROUND_COLOR", "0");
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Second launch (e.g., via Start menu search) should focus the
