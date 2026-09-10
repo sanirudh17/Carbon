@@ -1,6 +1,6 @@
 use crate::paste::{get_cursor_position, restore_target_window, save_target_window};
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager};
@@ -14,20 +14,118 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
-    UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN,
-    WM_SYSKEYDOWN,
+    UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG,
+    WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
 };
 
 static CURRENT_CYCLE_INDEX: AtomicU32 = AtomicU32::new(0);
 static APP_HANDLE_HOLDER: Mutex<Option<AppHandle>> = Mutex::new(None);
 static RECORDING_TARGET: Mutex<Option<String>> = Mutex::new(None);
 
+const DWMWA_TRANSITIONS_FORCEDISABLED: u32 = 3;
+const DWMWA_CLOAK: u32 = 13;
+#[allow(dead_code)]
+const DWMWA_CLOAKED: u32 = 14;
+
+#[link(name = "dwmapi")]
+extern "system" {
+    fn DwmSetWindowAttribute(
+        hwnd: *mut std::ffi::c_void,
+        dw_attribute: u32,
+        pv_attribute: *const std::ffi::c_void,
+        cb_attribute: u32,
+    ) -> i32;
+    #[allow(dead_code)]
+    fn DwmGetWindowAttribute(
+        hwnd: *mut std::ffi::c_void,
+        dw_attribute: u32,
+        pv_attribute: *mut std::ffi::c_void,
+        cb_attribute: u32,
+    ) -> i32;
+    fn DwmFlush() -> i32;
+}
+
+pub static OVERLAY_CLOAKED: AtomicBool = AtomicBool::new(true);
+
+/// Epoch-milliseconds of the last overlay cloak, used to suppress the
+/// webview-keydown + global-shortcut double-fire reopen (see
+/// handle_overlay_hotkey). 0 = never hidden this run.
+pub static LAST_HIDE_MS: AtomicU64 = AtomicU64::new(0);
+
+fn epoch_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    if nanos <= 0 {
+        0
+    } else {
+        (nanos as u64) / 1_000_000
+    }
+}
+
+pub fn set_window_cloaked(hwnd: HWND, cloaked: bool) {
+    let val: i32 = if cloaked { 1 } else { 0 };
+    unsafe {
+        let hr = DwmSetWindowAttribute(
+            hwnd.0 as *mut std::ffi::c_void,
+            DWMWA_CLOAK,
+            &val as *const _ as *const std::ffi::c_void,
+            std::mem::size_of::<i32>() as u32,
+        );
+        crate::paste::log_diag(&format!(
+            "[DWM_CLOAK] set_window_cloaked(hwnd={:?}, cloaked={}) returned hr={:#x}",
+            hwnd.0, cloaked, hr
+        ));
+    }
+}
+
+#[allow(dead_code)]
+pub fn is_window_cloaked(hwnd: HWND) -> bool {
+    let mut cloaked_flags: u32 = 0;
+    unsafe {
+        let hr = DwmGetWindowAttribute(
+            hwnd.0 as *mut std::ffi::c_void,
+            DWMWA_CLOAKED,
+            &mut cloaked_flags as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
+        if hr == 0 {
+            cloaked_flags != 0
+        } else {
+            false
+        }
+    }
+}
+
+pub fn is_overlay_visible() -> bool {
+    !OVERLAY_CLOAKED.load(Ordering::SeqCst)
+}
+
 pub fn set_recording_target(target: Option<String>) {
     *RECORDING_TARGET.lock().unwrap() = target;
 }
 
+#[cfg(windows)]
+pub fn disable_window_dwm_transitions(win: &tauri::WebviewWindow) {
+    if let Ok(hwnd) = win.hwnd() {
+        let disable: i32 = 1;
+        unsafe {
+            let _ = DwmSetWindowAttribute(
+                hwnd.0 as *mut std::ffi::c_void,
+                DWMWA_TRANSITIONS_FORCEDISABLED,
+                &disable as *const _ as *const std::ffi::c_void,
+                std::mem::size_of::<i32>() as u32,
+            );
+        }
+    }
+}
+
 fn ensure_overlay_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     if let Some(win) = app.get_webview_window("overlay") {
+        #[cfg(windows)]
+        disable_window_dwm_transitions(&win);
         return Some(win);
     }
     // Windows stay warm for the whole app lifetime, so hitting this means
@@ -90,6 +188,8 @@ fn ensure_overlay_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
 
 fn ensure_main_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     if let Some(win) = app.get_webview_window("main") {
+        #[cfg(windows)]
+        disable_window_dwm_transitions(&win);
         return Some(win);
     }
     crate::paste::log_diag("[HOTKEY] Main window not found — recreating (safety net).");
@@ -161,9 +261,44 @@ pub fn prewarm_windows(app: &AppHandle) {
     let _ = ensure_overlay_window(app);
     let _ = ensure_main_window(app);
 
-    // Warm DB cache and push snapshot directly into WebViews while hidden
+    // Pre-size the overlay to match preview_enabled NOW, while hidden: if the
+    // size were only fixed at show time, the hidden WebView2 surface would be
+    // reallocated on every open whose size differed — the first present after
+    // show() then comes out unpainted (white). Pre-sizing makes the show-path
+    // resize a no-op in the common case.
     if let Some(state) = app.try_state::<crate::AppState>() {
         let settings = state.settings.get();
+        if let Some(win) = app.get_webview_window("overlay") {
+            let (win_w, win_h) = if settings.preview_enabled { (1020, 560) } else { (680, 440) };
+            let scale_factor = win.scale_factor().unwrap_or(1.0);
+            let phys_w = (win_w as f64 * scale_factor).round() as u32;
+            let phys_h = (win_h as f64 * scale_factor).round() as u32;
+            let want = tauri::PhysicalSize {
+                width: phys_w,
+                height: phys_h,
+            };
+            if win.outer_size().ok() != Some(want) {
+                let _ = win.set_size(tauri::Size::Physical(want));
+            }
+
+            // Cloak the overlay window and make it WS_VISIBLE without activating,
+            // so WebView2 connects its swapchain and finishes its first paint
+            // completely hidden from the desktop composition.
+            if let Ok(hwnd) = win.hwnd() {
+                let native = HWND(hwnd.0 as *mut _);
+                set_window_cloaked(native, true);
+                OVERLAY_CLOAKED.store(true, Ordering::SeqCst);
+                unsafe {
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        ShowWindow, SW_SHOWNOACTIVATE,
+                    };
+                    let _ = ShowWindow(native, SW_SHOWNOACTIVATE);
+                }
+                set_window_cloaked(native, true);
+            }
+        }
+
+        // Warm DB cache and push snapshot directly into WebViews while hidden
         if let Ok(json) = serde_json::to_string(&settings) {
             for label in ["overlay", "main", "pill", "argprompt"] {
                 if let Some(win) = app.get_webview_window(label) {
@@ -241,7 +376,7 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
             return;
         }
     };
-    let is_visible = overlay_win.is_visible().unwrap_or(false);
+    let is_visible = is_overlay_visible();
     crate::paste::log_diag(&format!(
         "[HOTKEY] Overlay state: is_visible={}",
         is_visible
@@ -253,13 +388,39 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
         return;
     }
 
+    // Re-open guard for the double-fire race: while the overlay has focus and
+    // the user presses Ctrl+Shift+Z to dismiss it, BOTH the webview's own
+    // keydown handler (invoke("hide_overlay")) AND the registered global
+    // shortcut fire for the SAME keystroke. Whichever lands second sees the
+    // cloak flag already reset and would RE-OPEN the overlay the user just
+    // closed — which manifests as "I press the shortcut to remove it and
+    // nothing happens". 300ms is far below any deliberate re-summon, but far
+    // above the interleaving of those two events.
+    let since_hide = {
+        let last = LAST_HIDE_MS.load(Ordering::SeqCst);
+        if last > 0 {
+            epoch_ms() - last
+        } else {
+            u64::max_value()
+        }
+    };
+    if since_hide < 300 {
+        crate::paste::log_diag(&format!(
+            "[HOTKEY] Open suppressed ({}ms after hide) — double-fire guard.",
+            since_hide
+        ));
+        return;
+    }
+
     // Normalized behavior: the overlay never opens on top of an already-open
     // main window (that "overlay pops inside the main app" confusion). If the
     // library is visible, just bring it to front instead.
     if let Some(main_win) = app_handle.get_webview_window("main") {
         if main_win.is_visible().unwrap_or(false) {
             crate::paste::log_diag("[HOTKEY] Main is open — focusing it instead of opening overlay.");
-            let _ = main_win.unminimize();
+            if main_win.is_minimized().unwrap_or(false) {
+                let _ = main_win.unminimize();
+            }
             let _ = main_win.show();
             let _ = main_win.set_focus();
             return;
@@ -283,16 +444,6 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     let scale_factor = overlay_win.scale_factor().unwrap_or(1.0);
     let phys_w = (win_w as f64 * scale_factor).round() as u32;
     let phys_h = (win_h as f64 * scale_factor).round() as u32;
-    // Resize ONLY when target size actually differs: resizing a hidden WebView2
-    // reallocates its composition surface, and the next present after show()
-    // comes out white until the renderer catches up (the white flash).
-    let want = tauri::PhysicalSize {
-        width: phys_w,
-        height: phys_h,
-    };
-    if overlay_win.outer_size().ok() != Some(want) {
-        let _ = overlay_win.set_size(tauri::Size::Physical(want));
-    }
 
     let (pos_x, pos_y) = calculate_overlay_position(cx, cy, win_w, win_h, scale_factor);
     crate::paste::log_diag(&format!(
@@ -300,18 +451,72 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
         pos_x, pos_y, phys_w, phys_h, scale_factor
     ));
 
-    // Position BEFORE show so window appears at correct monitor instantly (no flicker)
-    let _ = overlay_win.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-        x: pos_x,
-        y: pos_y,
-    }));
+    // Atomically position the window while it is still cloaked, then uncloak
+    // and force a synchronous present of the WebView2's warm frame BEFORE DWM
+    // composites. Two rules make the reveal flash-free:
+    //
+    //  1. Never re-issue a size that prewarm already applied (SWP_NOSIZE).
+    //     Re-sizing a DirectComposition surface reallocates it, and a fresh
+    //     surface is unpainted (white) until the compositor presents into it.
+    //     A pure move keeps the already-presented warm frame intact, so the
+    //     very first uncloaked compositor cycle shows real content.
+    //  2. No DwmFlush() while still cloaked. DwmFlush forces DWM to composite
+    //     the CURRENT state synchronously; if that state is the unpainted
+    //     post-resize surface it just snaps the white frame on screen. Instead
+    //     uncloak first, then RedrawWindow(RDW_UPDATENOW|RDW_ALLCHILDREN)
+    //     which forces the WM_PAINT chain (WebView2 presents its latest frame
+    //     synchronously), then DwmFlush so DWM picks that frame up this cycle.
+    //     The controller's transparent DefaultBackgroundColor (webview_bg.rs)
+    //     guarantees even a not-yet-painted region composites transparent —
+    //     never white.
+    if let Ok(hwnd) = overlay_win.hwnd() {
+        let native = HWND(hwnd.0 as *mut _);
+        let cur_size = overlay_win.outer_size().ok();
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOSIZE,
+                SWP_SHOWWINDOW, ShowWindow, SW_SHOWNOACTIVATE,
+            };
+            use windows::Win32::Graphics::Gdi::{
+                RedrawWindow, RDW_INVALIDATE, RDW_UPDATENOW, RDW_ALLCHILDREN,
+                RDW_FRAME,
+            };
+            let size_flag = match cur_size {
+                Some(s) => {
+                    if s.width == phys_w && s.height == phys_h {
+                        SWP_NOSIZE
+                    } else {
+                        Default::default()
+                    }
+                }
+                _ => Default::default(),
+            };
+            let _ = SetWindowPos(
+                native,
+                HWND_TOPMOST,
+                pos_x,
+                pos_y,
+                phys_w as i32,
+                phys_h as i32,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW | size_flag,
+            );
+            set_window_cloaked(native, false);
+            let _ = ShowWindow(native, SW_SHOWNOACTIVATE);
+            let _ = RedrawWindow(
+                native,
+                None,
+                None,
+                RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN | RDW_FRAME,
+            );
+            let _ = DwmFlush();
+        }
+    }
+    OVERLAY_CLOAKED.store(false, Ordering::SeqCst);
 
-    let _ = overlay_win.unminimize();
-    let show_res = overlay_win.show();
     let focus_res = overlay_win.set_focus();
     crate::paste::log_diag(&format!(
-        "[HOTKEY] overlay_win.show() -> {:?}, set_focus() -> {:?}",
-        show_res, focus_res
+        "[HOTKEY] overlay_win.set_focus() -> {:?}",
+        focus_res
     ));
     // Emit opened immediately so frontend can render skeleton instantly.
     // If a prewarm snapshot exists, push it *with* the open so the first
@@ -354,10 +559,7 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
     // the library — it never toggles the library closed in the same press
     // (that "both collapse" confusion). Capture overlay state BEFORE
     // dismissing so the decision is race-free.
-    let overlay_was_visible = app_handle
-        .get_webview_window("overlay")
-        .map(|w| w.is_visible().unwrap_or(false))
-        .unwrap_or(false);
+    let overlay_was_visible = is_overlay_visible();
     dismiss_overlay(app_handle);
 
     let main_win = match ensure_main_window(app_handle) {
@@ -370,7 +572,9 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
     if overlay_was_visible {
         crate::paste::log_diag("[HOTKEY] Overlay was open — showing main instead of toggling.");
         save_target_window(app_handle);
-        let _ = main_win.unminimize();
+        if main_win.is_minimized().unwrap_or(false) {
+            let _ = main_win.unminimize();
+        }
         let _ = main_win.show();
         let _ = main_win.set_focus();
         let _ = app_handle.emit("enlarged-opened", ());
@@ -384,7 +588,9 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
     } else {
         save_target_window(app_handle);
         crate::paste::capture_selection_snapshot();
-        let _ = main_win.unminimize();
+        if main_win.is_minimized().unwrap_or(false) {
+            let _ = main_win.unminimize();
+        }
         let _ = main_win.show();
         let _ = main_win.set_focus();
         // Windows sometimes refuses the first SetForegroundWindow while the
@@ -416,16 +622,20 @@ pub fn hide_overlay_window(app: &AppHandle) {
         crate::paste::log_diag("[HIDE_OVERLAY] Already executing hide_overlay_window (re-entrancy guard). Skipping.");
         return;
     }
-    crate::paste::log_diag("[HIDE_OVERLAY] hide_overlay_window entered. Hiding window...");
+    crate::paste::log_diag("[HIDE_OVERLAY] hide_overlay_window entered. Cloaking window...");
 
     if let Some(win) = app.get_webview_window("overlay") {
-        // Always hide, never close: a live webview makes the next open instant
-        // and avoids the recreate race that showed an unrendered window.
-        let hide_res = win.hide();
-        crate::paste::log_diag(&format!("[HIDE_OVERLAY] win.hide() returned {:?}", hide_res));
+        // Cloak the window so DWM stops compositing it, but keep the Win32 window
+        // WS_VISIBLE so Chromium's DirectComposition swapchain remains active and warm.
+        if let Ok(hwnd) = win.hwnd() {
+            let native = HWND(hwnd.0 as *mut _);
+            set_window_cloaked(native, true);
+        }
     } else {
         crate::paste::log_diag("[HIDE_OVERLAY] overlay window not found!");
     }
+    OVERLAY_CLOAKED.store(true, Ordering::SeqCst);
+    LAST_HIDE_MS.store(epoch_ms(), Ordering::SeqCst);
 
     // Now restore the previously-active window
     crate::paste::log_diag("[HIDE_OVERLAY] Calling restore_target_window()...");
@@ -442,11 +652,8 @@ pub fn is_overlay_hiding() -> bool {
 }
 
 fn dismiss_overlay(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window("overlay") {
-        if win.is_visible().unwrap_or(false) {
-            // Always hide, never close (windows stay warm for instant reopen).
-            let _ = win.hide();
-        }
+    if is_overlay_visible() {
+        hide_overlay_window(app);
     }
 }
 

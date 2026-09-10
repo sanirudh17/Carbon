@@ -5,7 +5,7 @@
   "identifier": "com.carbon.clipboard",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://127.0.0.1:2170",
+    "devUrl": "http://127.0.0.1:3210",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -25,7 +25,8 @@
         "visible": false,
         "focus": false,
         "backgroundThrottling": "disabled",
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-renderer-backgrounding"
       },
       {
         "label": "overlay",
@@ -41,7 +42,8 @@
         "focus": false,
         "transparent": true,
         "backgroundThrottling": "disabled",
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-renderer-backgrounding"
       },
       {
         "label": "pill",

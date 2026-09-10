@@ -1,6 +1,17 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <!-- Pre-bundle paint guard (must precede any bundle CSS): WebView2's
+         default surface is white until the first painted frame. Margin-less,
+         transparent html/body means even a cold-load first frame composites
+         transparent — never white. -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+      }
+    </style>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />

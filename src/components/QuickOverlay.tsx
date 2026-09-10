@@ -157,7 +157,9 @@ export const QuickOverlay: React.FC = () => {
   const [items, setItems] = useState<ClipItem[]>(() => (typeof window !== 'undefined' && window.__carbonInitialData) || []);
   const [initialLoaded, setInitialLoaded] = useState(() => Boolean(typeof window !== 'undefined' && window.__carbonInitialData && window.__carbonInitialData.length > 0));
   const [pasteQueue, setPasteQueue] = useState<ClipItem[]>([]);
-  // Pending native-window resize for the preview toggle (see togglePreview)
+  // Pending native-window resize for the preview toggle (see togglePreview).
+  // Declared BEFORE the show/hide choreography refs so overlay-opened can
+  // cancel a stale pending resize (Tab-then-hide-then-show race).
   const previewResizeTimer = useRef<number | null>(null);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [addToColModalOpen, setAddToColModalOpen] = useState(false);
@@ -677,6 +679,7 @@ export const QuickOverlay: React.FC = () => {
 
     const unlistenOpened = safeListen('overlay-opened', () => {
       logClient('Received overlay-opened event.');
+      if (previewResizeTimer.current) window.clearTimeout(previewResizeTimer.current);
       setSearch('');
       setActionPanelOpen(false);
       setActionIndex(0);
@@ -853,17 +856,12 @@ export const QuickOverlay: React.FC = () => {
   const togglePreview = () => {
     setPreviewOpen((prev) => {
       const next = !prev;
-      // Sequence: let the pane slide shut/open via CSS first, THEN resize the
-      // native window once the content has settled. Resizing simultaneously
-      // made the OS-level snap fight the animation (the "jump").
       if (previewResizeTimer.current) window.clearTimeout(previewResizeTimer.current);
       previewResizeTimer.current = window.setTimeout(
         () => {
           invoke('set_overlay_preview', { enabled: next }).catch(console.error);
         },
-        // Opening: grow the (smoothly animated) window right away so the pane
-        // unfolds into new space. Closing: fold the pane first, then contract.
-        next ? 0 : 150
+        next ? 0 : 280
       );
       return next;
     });
@@ -1758,7 +1756,7 @@ export const QuickOverlay: React.FC = () => {
             </span>
           </div>
           <div className="bar-right">
-            <span className="hint" onClick={() => invoke('hide_overlay')}>
+            <span className="hint" onClick={() => invoke('hide_overlay').catch(console.error)}>
               <span className="key">Esc</span>
               <b>Close</b>
             </span>

@@ -9,6 +9,7 @@ mod sensitive;
 mod settings;
 mod shortcuts;
 mod titles;
+mod webview_bg;
 
 use clipboard_watcher::ClipboardWatcher;
 use db::{ClipItem, Collection, DbState, DbStats, Snippet};
@@ -215,9 +216,7 @@ fn queue_paste_next(
 
         // Windows stay warm: always hide, never close, so the next open is instant.
         if window.label() == "overlay" {
-            if let Some(win) = app_handle.get_webview_window("overlay") {
-                win.hide().ok();
-            }
+            hotkey::hide_overlay_window(&app_handle);
         } else {
             window.hide().ok();
         }
@@ -299,10 +298,7 @@ fn paste_clip(
         // so the OS can smoothly transition foreground focus to the target window.
         // Windows stay warm: always hide, never close (instant next open).
         if window.label() == "overlay" {
-            if let Some(win) = app_handle.get_webview_window("overlay") {
-                let hide_res = win.hide();
-                paste::log_diag(&format!("[PASTE_CLIP] overlay win.hide() returned {:?}", hide_res));
-            }
+            hotkey::hide_overlay_window(&app_handle);
         } else {
             let hide_res = window.hide();
             paste::log_diag(&format!("[PASTE_CLIP] main win.hide() returned {:?}", hide_res));
@@ -634,14 +630,14 @@ fn set_overlay_preview(
                 (pos_x, pos_y, w_phys as i32, h_phys as i32)
             };
 
-            // Animate the shell resize (~150ms ease-out) instead of snapping.
+            // Animate the shell resize smoothly ease-out in lockstep with the CSS preview transition.
             // A generation counter aborts stale animations when Tab is spammed;
             // the final exact frame guarantees the settled rect is correct.
             static ANIM_GEN: std::sync::atomic::AtomicU32 =
                 std::sync::atomic::AtomicU32::new(0);
             let gen = ANIM_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            let total_ms: u64 = 150;
-            let steps: u32 = 9;
+            let total_ms: u64 = 280;
+            let steps: u32 = 14;
             std::thread::spawn(move || {
                 let h = HWND(h_raw as *mut _);
                 for i in 1..=steps {
@@ -1055,11 +1051,15 @@ fn paste_snippet_text(
         window.label()
     ));
     // Windows stay warm: always hide, never close (instant next open).
-    let hide_res = window.hide();
-    paste::log_diag(&format!(
-        "[PASTE_SNIPPET] window.hide() returned {:?}",
-        hide_res
-    ));
+    if window.label() == "overlay" {
+        hotkey::hide_overlay_window(&app_handle);
+    } else {
+        let hide_res = window.hide();
+        paste::log_diag(&format!(
+            "[PASTE_SNIPPET] window.hide() returned {:?}",
+            hide_res
+        ));
+    }
     let res = paste::paste_text_into_target(&pre, post.as_deref())?;
     expansion::show_placement_pill(&app_handle, Some("text has been placed successfully"));
     Ok(res)
@@ -1067,14 +1067,36 @@ fn paste_snippet_text(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Force the WebView2 loader's default background to fully transparent
+    // BEFORE any webview environment is created: the first present of a
+    // freshly (re)allocated surface is then transparent instead of white —
+    // the root cause of the white flash on overlay open/resize.
+    #[cfg(target_os = "windows")]
+    {
+        std::env::set_var("WEBVIEW2_DEFAULT_BACKGROUND_COLOR", "0");
+    }
+
     tauri::Builder::default()
+        .plugin(
+            // Inline micro-plugin: fires at EVERY webview creation (config
+            // windows + safety-net recreates), forcing the WebView2 controller
+            // surface transparent at creation — belt-and-braces on top of the
+            // WEBVIEW2_DEFAULT_BACKGROUND_COLOR=0 env var set above.
+            tauri::plugin::Builder::<tauri::Wry>::new("carbon-webview-transparent")
+                .on_webview_ready(|webview| {
+                    crate::webview_bg::set_webview_transparent_background(&webview);
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Second launch (e.g., via Start menu search) should focus the
             // existing instance instead of spawning a duplicate background
             // process and tray icon. Handle both hidden (warm) and visible
             // states.
             if let Some(win) = app.get_webview_window("main") {
-                let _ = win.unminimize();
+                if win.is_minimized().unwrap_or(false) {
+                    let _ = win.unminimize();
+                }
                 let _ = win.show();
                 let _ = win.set_focus();
             } else if let Some(win) = app.get_webview_window("overlay") {
@@ -1185,7 +1207,11 @@ pub fn run() {
                     window.label()
                 ));
                 api.prevent_close();
-                window.hide().ok();
+                if window.label() == "overlay" {
+                    hotkey::hide_overlay_window(&window.app_handle());
+                } else {
+                    window.hide().ok();
+                }
             }
             WindowEvent::Focused(focused) => {
                 paste::log_diag(&format!(
@@ -1196,7 +1222,7 @@ pub fn run() {
                 ));
                 if !*focused && window.label() == "overlay" {
                     // Skip if hide_overlay_window is already running (re-entrancy guard)
-                    if !hotkey::is_overlay_hiding() && window.is_visible().unwrap_or(false) {
+                    if !hotkey::is_overlay_hiding() && hotkey::is_overlay_visible() {
                         paste::log_diag("[WINDOW_EVENT] Overlay lost focus while visible. Calling hide_overlay_window...");
                         hotkey::hide_overlay_window(&window.app_handle());
                     }
