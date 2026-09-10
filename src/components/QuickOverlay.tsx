@@ -242,6 +242,16 @@ export const QuickOverlay: React.FC = () => {
     }
   };
 
+  // Sends the preview size native, deduped: rapid Tab spam otherwise issues
+  // a native resize per keystroke (each reallocates the surface → jank and
+  // flash storms). REVERT NOTE (resize-storm fix): to revert, delete this
+  // helper and call invoke('set_overlay_preview', ...) directly again.
+  const sendPreviewSize = (enabled: boolean) => {
+    if (lastSentPreviewRef.current === enabled) return;
+    lastSentPreviewRef.current = enabled;
+    invoke('set_overlay_preview', { enabled }).catch(console.error);
+  };
+
   // F3 Single-live-layout: instantly finalize current phase (clear timers, settle state to target)
   const finalizeTransition = useCallback((targetState?: boolean) => {
     if (previewTimerRef.current) {
@@ -257,13 +267,13 @@ export const QuickOverlay: React.FC = () => {
       watchdogTimerRef.current = null;
     }
     document.documentElement.classList.remove('wm-resizing');
-    document.documentElement.classList.remove('wm-hidden'); // REVERT: preview-open flash fix (snap-mask cleanup on interrupt)
+    previewPaneRef.current?.classList.remove('snap-veil'); // REVERT: preview flash rework (veil cleanup on interrupt)
 
     const resolvedTarget = typeof targetState === 'boolean' ? targetState : targetPreviewOpenRef.current;
     previewOpenRef.current = resolvedTarget;
     targetPreviewOpenRef.current = resolvedTarget;
     setPreviewOpen(resolvedTarget);
-    invoke('set_overlay_preview', { enabled: resolvedTarget }).catch(console.error);
+    sendPreviewSize(resolvedTarget);
 
     previewPhaseRef.current = 'idle';
     setPreviewPhase('idle');
@@ -734,6 +744,11 @@ export const QuickOverlay: React.FC = () => {
   const lastHideAtRef = useRef(performance.now());
   // First Tab snap needs a longer present window (see below).
   const previewSnappedOnceRef = useRef(false);
+  // Direct handle to the preview pane element for the snap veil.
+  const previewPaneRef = useRef<HTMLDivElement | null>(null);
+  // Last preview size sent native: skips redundant SetWindowPos storms when
+  // Tab is spammed (each native resize reallocates the DWM surface).
+  const lastSentPreviewRef = useRef<boolean | null>(null);
 
   const requestHide = (gen?: number | null) => {
     // Tell Rust this generation is handled: its 250ms fallback only fires if
@@ -1188,23 +1203,19 @@ export const QuickOverlay: React.FC = () => {
       // Phase 2: SNAP (0ms animated SetWindowPos + layout snap behind opacity 0)
       previewPhaseRef.current = 'snap';
       setPreviewPhase('snap');
-      // F2 SNAP MASK: add html.wm-resizing during SetWindowPos + 2 rAF ticks.
-      // REVERT NOTE (preview-open flash fix): the native snap reallocates the
-      // DWM/WebView2 surface and its first presents come out white, then dark,
-      // before content repaints — the white/black microsecond flash. Masking
-      // the full surface (wm-hidden, snapped on with no-anim) across the snap
-      // window hides those frames; it lifts where content-in starts below (and
-      // in finalizeTransition for interruptions). To revert: delete the three
-      // mask lines here, the unmask line at content-in start, and the unmask
-      // line in finalizeTransition.
+      // F2 SNAP VEIL: veil ONLY the preview pane across the snap window.
+      // REVERT NOTE (preview flash rework): an earlier revision masked the
+      // FULL surface (html.wm-hidden), but that blacked out the whole card on
+      // every toggle and could stick on rapid spam. The veil below covers just
+      // the fresh pixels while list/card stay visible. To revert: delete the
+      // veil add/remove lines here, at content-in start, and in
+      // finalizeTransition (covering falls back to content fades only).
       document.documentElement.classList.add('wm-resizing');
-      document.documentElement.classList.add('wm-hidden', 'no-anim');
-      void document.documentElement.offsetWidth; // flush: mask must apply this frame
-      document.documentElement.classList.remove('no-anim');
+      previewPaneRef.current?.classList.add('snap-veil');
 
       previewOpenRef.current = next;
       setPreviewOpen(next);
-      invoke('set_overlay_preview', { enabled: next }).catch(console.error);
+      sendPreviewSize(next);
 
       // Wait rAF ticks for DWM presentation of new size before content-in.
       // REVERT NOTE (first-snap white flash fix): the preview subtree stays
@@ -1224,9 +1235,9 @@ export const QuickOverlay: React.FC = () => {
             return;
           }
           // Phase 3: CONTENT-IN (160ms cubic-bezier; no translation)
-          // Remove html.wm-resizing at the same tick content-in starts
-    document.documentElement.classList.remove('wm-resizing');
-          document.documentElement.classList.remove('wm-hidden'); // REVERT: preview-open flash fix (snap-mask lift)
+          // Lift the pane veil as content fades back in (veil fades via CSS).
+          document.documentElement.classList.remove('wm-resizing');
+          previewPaneRef.current?.classList.remove('snap-veil'); // REVERT: preview flash rework (veil lift)
           previewPhaseRef.current = 'in';
           setPreviewPhase('in');
 
@@ -2027,7 +2038,7 @@ export const QuickOverlay: React.FC = () => {
               ))
             )}
           </div>
-          <div className={`overlay-preview ${!previewOpen ? 'collapsed' : ''}`}>
+          <div ref={previewPaneRef} className={`overlay-preview ${!previewOpen ? 'collapsed' : ''}`}>
             {tab === 'snippets' ? (
               snSelected ? (
                 <>

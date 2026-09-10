@@ -2464,6 +2464,19 @@ section:last-child {
   pointer-events: none;
 }
 
+/* REVERT NOTE (preview snap veil): pane-local cover for the snap window so
+   fresh pixels settle invisibly while list/card stay visible. Veil snaps on
+   (transition:none) and fades off with content-in. To revert: delete this
+   rule and the snap-veil toggles in togglePreview/finalizeTransition. */
+.overlay-preview {
+  transition: opacity 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.overlay-preview.snap-veil {
+  opacity: 0 !important;
+  transition: none !important;
+  pointer-events: none !important;
+}
+
 .overlay-preview-head {
   display: flex;
   align-items: center;
