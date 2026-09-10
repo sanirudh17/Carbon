@@ -1765,13 +1765,26 @@ impl DbState {
         })
     }
 
+    /// Entries that retention / clear-history must never delete: favorites
+    /// (`is_pinned = 1`) and anything stored in a locked collection
+    /// (`collections.pin_hash IS NOT NULL`). Items in open collections are
+    /// ordinary history — open collections are just grouping — so they stay
+    /// evictable like everything else.
+    fn evictable_filter() -> &'static str {
+        "is_pinned = 0 AND id NOT IN (SELECT clip_id FROM clip_collections \
+         JOIN collections ON collections.id = clip_collections.collection_id \
+         WHERE collections.pin_hash IS NOT NULL)"
+    }
+
     pub fn clear_unpinned(&self) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let filter = Self::evictable_filter();
 
-        // Collect image paths of unpinned entries so we can delete orphaned PNGs from media dir.
+        // Collect image paths of evictable entries so we can delete orphaned PNGs from media dir.
+        // Favorites and locked-collection items are never cleared.
         let image_paths: Vec<String> = {
             let mut stmt = conn
-                .prepare("SELECT image_path FROM entries WHERE is_pinned = 0 AND image_path IS NOT NULL")
+                .prepare(&format!("SELECT image_path FROM entries WHERE {filter} AND image_path IS NOT NULL"))
                 .map_err(|e| e.to_string())?;
             let rows = stmt
                 .query_map([], |row| row.get::<_, String>(0))
@@ -1783,7 +1796,7 @@ impl DbState {
             let _ = fs::remove_file(p);
         }
 
-        conn.execute("DELETE FROM entries WHERE is_pinned = 0", [])
+        conn.execute(&format!("DELETE FROM entries WHERE {filter}"), [])
             .map_err(|e| e.to_string())?;
 
         Ok(())
@@ -1792,12 +1805,14 @@ impl DbState {
     pub fn trim_history(&self, retention_days: u32, max_entries: u32) -> Result<(), String> {
         let _ = self.cleanup_expired_entries();
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        // Favorites and locked-collection items are exempt from every trim path.
+        let filter = Self::evictable_filter();
 
         // 1. Delete entries older than retention_days if retention_days > 0
         if retention_days > 0 {
             let cutoff = format!("-{} days", retention_days);
             if let Ok(mut stmt) = conn.prepare(
-                "SELECT image_path FROM entries WHERE is_pinned = 0 AND created_at < datetime('now', 'localtime', ?1)",
+                &format!("SELECT image_path FROM entries WHERE {filter} AND created_at < datetime('now', 'localtime', ?1)"),
             ) {
                 if let Ok(rows) = stmt.query_map(params![cutoff], |row| row.get::<_, Option<String>>(0)) {
                     for path in rows.flatten().flatten() {
@@ -1807,20 +1822,21 @@ impl DbState {
             }
 
             conn.execute(
-                "DELETE FROM entries WHERE is_pinned = 0 AND created_at < datetime('now', 'localtime', ?1)",
+                &format!("DELETE FROM entries WHERE {filter} AND created_at < datetime('now', 'localtime', ?1)"),
                 params![cutoff],
             )
             .map_err(|e| e.to_string())?;
         }
 
-        // 2. Enforce max_entries count limit (keep youngest non-pinned)
+        // 2. Enforce max_entries count limit (keep youngest evictable entries;
+        // favorites and locked-collection items don't count toward the cap)
         if max_entries > 0 {
             if let Ok(mut stmt) = conn.prepare(
-                "SELECT image_path FROM entries WHERE is_pinned = 0 AND id NOT IN (
+                &format!("SELECT image_path FROM entries WHERE {filter} AND id NOT IN (
                     SELECT id FROM (
-                        SELECT id FROM entries WHERE is_pinned = 0 ORDER BY created_at DESC LIMIT ?1
+                        SELECT id FROM entries WHERE {filter} ORDER BY created_at DESC LIMIT ?1
                     )
-                )",
+                )"),
             ) {
                 if let Ok(rows) = stmt.query_map(params![max_entries], |row| row.get::<_, Option<String>>(0)) {
                     for path in rows.flatten().flatten() {
@@ -1830,11 +1846,11 @@ impl DbState {
             }
 
             conn.execute(
-                "DELETE FROM entries WHERE is_pinned = 0 AND id NOT IN (
+                &format!("DELETE FROM entries WHERE {filter} AND id NOT IN (
                     SELECT id FROM (
-                        SELECT id FROM entries WHERE is_pinned = 0 ORDER BY created_at DESC LIMIT ?1
+                        SELECT id FROM entries WHERE {filter} ORDER BY created_at DESC LIMIT ?1
                     )
-                )",
+                )"),
                 params![max_entries],
             )
             .map_err(|e| e.to_string())?;
@@ -1975,6 +1991,104 @@ mod tests {
         assert!(!dummy_img_path.exists());
 
         // Clean up
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_retention_and_clear_keep_locked_and_pinned() {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("carbon_retain_test_{}", ts));
+        let db_path = temp_dir.join("test.db");
+        let db = DbState::new(db_path).unwrap();
+
+        let mk_item = |id: &str, pinned: bool| ClipItem {
+            id: id.to_string(),
+            content_type: "text".to_string(),
+            title: id.to_string(),
+            text_content: Some(id.to_string()),
+            rtf_content: None,
+            html_content: None,
+            image_path: None,
+            image_width: None,
+            image_height: None,
+            file_paths: None,
+            is_video: false,
+            file_size: 1,
+            is_pinned: pinned,
+            source_app: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+            qr_content: None,
+            is_sensitive: false,
+            expires_at: None,
+            ocr_text: None,
+        };
+
+        // Locked collection + open collection, one old clip in each, plus a
+        // plain old clip and an old favorite.
+        let locked = db.create_collection("vault".to_string(), None, None).unwrap();
+        db.set_collection_pin(&locked.id, "1234").unwrap();
+        // Collection ids derive from the clock, so separate the two creates.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let open = db.create_collection("group".to_string(), None, None).unwrap();
+
+        for (id, pinned) in [("plain-old", false), ("fav-old", true), ("locked-old", false), ("open-old", false)] {
+            let mut item = mk_item(id, pinned);
+            db.insert_entry(&mut item).unwrap();
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE entries SET created_at = '2020-01-01 00:00:00' WHERE id = ?1",
+                params![id],
+            ).unwrap();
+            drop(conn);
+        }
+        db.add_clip_to_collection("locked-old", &locked.id).unwrap();
+        db.add_clip_to_collection("open-old", &open.id).unwrap();
+
+        // Main queries hide locked-collection items, so collect them via the
+        // locked collection itself.
+        let all_ids = || {
+            let mut ids: Vec<String> = db.get_all_entries(None, None, false, None).unwrap()
+                .iter().map(|i| i.id.clone()).collect();
+            ids.extend(db.get_all_entries(None, None, false, Some(&locked.id)).unwrap()
+                .iter().map(|i| i.id.clone()));
+            ids
+        };
+
+        // Retention expiry: favorites + locked survive, open + plain are deleted.
+        db.trim_history(30, 0).unwrap();
+        let ids = all_ids();
+        assert!(ids.contains(&"fav-old".to_string()), "favorite must survive retention");
+        assert!(ids.contains(&"locked-old".to_string()), "locked-collection item must survive retention");
+        assert!(!ids.contains(&"plain-old".to_string()), "plain old item must expire");
+        assert!(!ids.contains(&"open-old".to_string()), "open-collection item expires like normal history");
+
+        // Clear history: same exemptions.
+        for id in ["plain-new", "locked-new"] {
+            let mut item = mk_item(id, false);
+            db.insert_entry(&mut item).unwrap();
+        }
+        db.add_clip_to_collection("locked-new", &locked.id).unwrap();
+        db.clear_unpinned().unwrap();
+        let ids = all_ids();
+        assert!(!ids.contains(&"plain-new".to_string()), "clear must delete plain items");
+        assert!(ids.contains(&"locked-new".to_string()), "clear must keep locked-collection items");
+        assert!(ids.contains(&"fav-old".to_string()), "clear must keep favorites");
+
+        // Max-entries cap: locked items don't count and are never trimmed.
+        for i in 0..4 {
+            let mut item = mk_item(&format!("bulk-{i}"), false);
+            db.insert_entry(&mut item).unwrap();
+        }
+        db.trim_history(0, 2).unwrap();
+        let ids = all_ids();
+        assert!(ids.contains(&"locked-old".to_string()));
+        assert!(ids.contains(&"locked-new".to_string()));
+        assert!(ids.contains(&"fav-old".to_string()));
+
         let _ = fs::remove_dir_all(temp_dir);
     }
 

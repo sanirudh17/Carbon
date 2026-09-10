@@ -512,7 +512,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     try {
       await invoke('clear_history');
       fetchStats();
-      showToast('success', 'Cleared all unpinned clipboard items.');
+      showToast('success', 'Cleared history. Favorites and locked-collection items were kept.');
     } catch (err) {
       console.error('Failed to clear history:', err);
       showToast('error', 'Failed to clear history.', 6000);
@@ -1154,7 +1154,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="set-row">
             <div className="set-label">
               Retention
-              <div className="set-hint">Entries older than this are deleted (0 = keep forever)</div>
+              <div className="set-hint">Entries older than this are deleted (0 = keep forever). Favorites and locked-collection items are always kept.</div>
             </div>
             <div className="set-control">
               <input
@@ -1175,7 +1175,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="set-row">
             <div className="set-label">
               Max entries
-              <div className="set-hint">Oldest non-pinned entries are trimmed beyond this</div>
+              <div className="set-hint">Oldest entries beyond this are trimmed — favorites and locked-collection items are always kept and don't count toward the limit</div>
             </div>
             <div className="set-control">
               <input
@@ -1228,7 +1228,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="set-row">
             <div className="set-label">
               Clear history
-              <div className="set-hint">Deletes all non-pinned entries</div>
+              <div className="set-hint">Deletes everything except favorites and locked-collection items</div>
             </div>
             <div className="set-control">
               <button className="btn danger" onClick={() => setShowClearConfirm(true)}>
@@ -1536,7 +1536,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
             </div>
             <div className="modal-body">
               <p className="modal-desc">
-                This permanently deletes <b>all unpinned clipboard items</b> from this machine. Pinned items and snippets are kept.
+                This permanently deletes your clipboard history from this machine. Favorites and locked-collection items are kept, as are snippets.
               </p>
               <p className="modal-desc" style={{ color: 'var(--danger)', fontWeight: 500 }}>
                 This action cannot be undone.

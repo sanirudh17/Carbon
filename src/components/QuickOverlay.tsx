@@ -6,6 +6,7 @@ import { ClipItem, HotkeyStatus, AppSettings, Collection, Snippet } from '../typ
 import { ClipPreview, ClipMetaStrip, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
 import { getActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
 import { matchesHotkeyCombo } from '../utils/hotkeys';
+import { setClipDragData } from '../utils/clipDrag';
 import { collectionColorFor, normalizeCollectionColor } from '../utils/collections';
 import {
   filterSnippets,
@@ -28,6 +29,7 @@ import {
   DeleteIcon,
   FilterIcon,
   StarIcon,
+  DragHandleIcon,
   snippetIconFor,
   getTypeIcon,
   getTypeColor,
@@ -43,6 +45,11 @@ declare global {
     __carbonSetSnippets?: (data: Snippet[]) => void;
     __carbonInitialSnippets?: Snippet[];
   }
+}
+
+const emptyDragImg = typeof Image !== 'undefined' ? new Image() : null;
+if (emptyDragImg) {
+  emptyDragImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 }
 
 interface DateGroup {
@@ -90,20 +97,29 @@ const OverlayRow = memo(function OverlayRow({
   item,
   index,
   isSelected,
+  isDragging,
   queueIdx,
   onSelect,
+  onDragStart,
+  onDragEnd,
 }: {
   item: ClipItem;
   index: number;
   isSelected: boolean;
+  isDragging: boolean;
   queueIdx: number;
   onSelect: (idx: number) => void;
+  onDragStart: (item: ClipItem, e: React.DragEvent) => void;
+  onDragEnd: () => void;
 }) {
   const tint = getTypeColor(item.content_type);
   return (
     <div
       id={`overlay-row-${index}`}
-      className={`row ${isSelected ? 'selected' : ''} ${queueIdx >= 0 ? 'in-queue' : ''}`}
+      draggable={true}
+      onDragStart={(e) => onDragStart(item, e)}
+      onDragEnd={onDragEnd}
+      className={`row ${isSelected ? 'selected' : ''} ${isDragging ? 'is-dragging' : ''} ${queueIdx >= 0 ? 'in-queue' : ''}`}
       onClick={() => onSelect(index)}
     >
       <div
@@ -141,6 +157,9 @@ const OverlayRow = memo(function OverlayRow({
       </div>
 
       <div className="row-right">
+        <div className="drag-handle" title="Drag and drop clip">
+          <DragHandleIcon />
+        </div>
         <div className="row-meta">
           <span className="row-time">{formatTimeAgo(item.created_at)}</span>
         </div>
@@ -166,6 +185,7 @@ export const QuickOverlay: React.FC = () => {
   const [items, setItems] = useState<ClipItem[]>(() => (typeof window !== 'undefined' && window.__carbonInitialData) || []);
   const [initialLoaded, setInitialLoaded] = useState(() => Boolean(typeof window !== 'undefined' && window.__carbonInitialData && window.__carbonInitialData.length > 0));
   const [pasteQueue, setPasteQueue] = useState<ClipItem[]>([]);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [addToColModalOpen, setAddToColModalOpen] = useState(false);
   const [newColName, setNewColName] = useState('');
@@ -641,6 +661,34 @@ export const QuickOverlay: React.FC = () => {
   const handleSelectRow = useCallback((idx: number) => {
     setSelectedIndex(idx);
     focusSearchInput();
+  }, []);
+
+  // Drag-out: exact mirror of the main window — same payload, same empty
+  // drag image, same dragging highlight. Sensitive clips only expose their
+  // masked label, never the secret.
+  const handleOverlayDragStart = useCallback((item: ClipItem, e: React.DragEvent) => {
+    if (item.is_sensitive) {
+      e.dataTransfer.effectAllowed = 'copy';
+      try {
+        e.dataTransfer.setData('text/plain', 'Sensitive Clip');
+      } catch {}
+      return;
+    }
+    setDraggingId(item.id);
+    window.__carbonDraggingClipIds = [item.id];
+
+    if (e.dataTransfer && emptyDragImg && e.dataTransfer.setDragImage) {
+      try {
+        e.dataTransfer.setDragImage(emptyDragImg, 0, 0);
+      } catch {}
+    }
+
+    setClipDragData(e, item);
+  }, []);
+
+  const handleOverlayDragEnd = useCallback(() => {
+    setDraggingId(null);
+    window.__carbonDraggingClipIds = null;
   }, []);
 
   // ── Settings-driven behavior ───────────────────────────────────────
@@ -1846,8 +1894,11 @@ export const QuickOverlay: React.FC = () => {
                           item={item}
                           index={currentIdx}
                           isSelected={isSelected}
+                          isDragging={draggingId === item.id}
                           queueIdx={queueIdx}
                           onSelect={handleSelectRow}
+                          onDragStart={handleOverlayDragStart}
+                          onDragEnd={handleOverlayDragEnd}
                         />
                       );
                   })}
@@ -1989,7 +2040,15 @@ export const QuickOverlay: React.FC = () => {
                     </div>
                     <div className="overlay-preview-content">
                       {selectedItem.content_type === 'image' || selectedItem.content_type === 'file' ? (
-                        <ClipPreview item={selectedItem} />
+                        <div
+                          draggable
+                          title="Drag to drop into any app"
+                          style={{ display: 'contents' }}
+                          onDragStart={(e) => handleOverlayDragStart(selectedItem, e)}
+                          onDragEnd={handleOverlayDragEnd}
+                        >
+                          <ClipPreview item={selectedItem} />
+                        </div>
                       ) : hasRenderedVersion && renderMode ? (
                         <div className="preview-render">
                           <ClipPreview item={selectedItem} forceRaw={false} />
