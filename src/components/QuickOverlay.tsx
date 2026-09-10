@@ -1185,8 +1185,19 @@ export const QuickOverlay: React.FC = () => {
       // Phase 2: SNAP (0ms animated SetWindowPos + layout snap behind opacity 0)
       previewPhaseRef.current = 'snap';
       setPreviewPhase('snap');
-      // F2 SNAP MASK: add html.wm-resizing during SetWindowPos + 2 rAF ticks
+      // F2 SNAP MASK: add html.wm-resizing during SetWindowPos + 2 rAF ticks.
+      // REVERT NOTE (preview-open flash fix): the native snap reallocates the
+      // DWM/WebView2 surface and its first presents come out white, then dark,
+      // before content repaints — the white/black microsecond flash. Masking
+      // the full surface (wm-hidden, snapped on with no-anim) across the snap
+      // window hides those frames; it lifts where content-in starts below (and
+      // in finalizeTransition for interruptions). To revert: delete the three
+      // mask lines here, the unmask line at content-in start, and the unmask
+      // line in finalizeTransition.
       document.documentElement.classList.add('wm-resizing');
+      document.documentElement.classList.add('wm-hidden', 'no-anim');
+      void document.documentElement.offsetWidth; // flush: mask must apply this frame
+      document.documentElement.classList.remove('no-anim');
 
       previewOpenRef.current = next;
       setPreviewOpen(next);
@@ -1197,7 +1208,9 @@ export const QuickOverlay: React.FC = () => {
         previewRafRef.current = requestAnimationFrame(() => {
           // Phase 3: CONTENT-IN (160ms cubic-bezier; no translation)
           // Remove html.wm-resizing at the same tick content-in starts
-          document.documentElement.classList.remove('wm-resizing');
+    document.documentElement.classList.remove('wm-resizing');
+    document.documentElement.classList.remove('wm-hidden'); // REVERT: preview-open flash fix (snap-mask cleanup on interrupt)
+          document.documentElement.classList.remove('wm-hidden'); // REVERT: preview-open flash fix (snap-mask lift)
           previewPhaseRef.current = 'in';
           setPreviewPhase('in');
 
