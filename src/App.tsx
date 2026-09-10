@@ -18,6 +18,7 @@ declare global {
   interface Window {
     __carbonSettings?: AppSettings;
     __carbonApplySettings?: (settings: Partial<AppSettings>) => void;
+    __carbonRequestEnlargedHide?: () => void;
   }
 }
 
@@ -45,6 +46,20 @@ export function App() {
       return 'dark';
     }
   });
+
+  // v9 F2: hidden warm windows may only reveal after React has committed a
+  // paintable tree. The window-specific choreography still waits two frames
+  // after native show(); this flag prevents a cold first reveal racing mount.
+  useEffect(() => {
+    const html = document.documentElement;
+    html.dataset.painted = '0';
+    let firstFrame = requestAnimationFrame(() => {
+      firstFrame = requestAnimationFrame(() => {
+        html.dataset.painted = '1';
+      });
+    });
+    return () => cancelAnimationFrame(firstFrame);
+  }, []);
 
   const applySettingsData = (settings: Partial<AppSettings>) => {
     if (!settings) return;
@@ -215,6 +230,98 @@ export function App() {
     document.documentElement.classList.remove('win-overlay', 'win-library');
     document.documentElement.classList.add(winClass);
   }, [windowLabel, activeTab]);
+
+  useEffect(() => {
+    if (windowLabel !== 'main') return;
+
+    const html = document.documentElement;
+    const fadeTarget = () =>
+      html.dataset.material === 'solid'
+        ? document.getElementById('root') ?? html
+        : html;
+    let showEpoch = 0;
+
+    const doHide = () => {
+      html.classList.add('wm-hiding', 'wm-hidden');
+      const target = fadeTarget();
+      let finished = false;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        target.removeEventListener('transitionend', onEnd);
+        html.classList.remove('wm-hiding');
+        invoke('hide_enlarged').catch(console.error);
+      };
+      const onEnd = (ev: TransitionEvent) => {
+        if (ev.target === target && ev.propertyName === 'opacity') finish();
+      };
+      target.addEventListener('transitionend', onEnd);
+      setTimeout(finish, 100);
+      if (html.dataset.material === 'glass') finish();
+    };
+
+    window.__carbonRequestEnlargedHide = doHide;
+
+    const revealAfterPaintGate = () => {
+      const epoch = ++showEpoch;
+      const started = performance.now();
+      let framesSinceShow = 0;
+      const wait = () => requestAnimationFrame(() => {
+        if (epoch !== showEpoch) return;
+        framesSinceShow += 1;
+        if ((html.dataset.painted === '1' && framesSinceShow >= 2) || performance.now() - started >= 500) {
+          // Painted: release the native DWM cloak gate first so the first
+          // composited frame is real content, then lift the fade mask.
+          invoke('enlarged_painted').catch(() => {});
+          html.classList.remove('wm-hidden');
+          return;
+        }
+        wait();
+      });
+      wait();
+    };
+
+    // Show choreography: wait for the cold-start paint gate and two frames
+    // presented after show before removing the material-specific fade mask.
+    const unlistenOpened = listen('enlarged-opened', () => {
+      html.classList.remove('wm-hiding');
+      if (html.dataset.material === 'glass') {
+        invoke('enlarged_painted').catch(() => {});
+        html.classList.remove('wm-hidden');
+        return;
+      }
+      if (!html.classList.contains('wm-hidden')) {
+        html.classList.add('wm-hidden', 'no-anim');
+        void html.offsetWidth;
+        html.classList.remove('no-anim');
+      }
+      revealAfterPaintGate();
+    });
+
+    // Hide choreography: 90ms fade on html before calling hide_enlarged
+    const unlistenHideReq = listen<number>('enlarged-hide-requested', (e) => {
+      if (typeof e.payload === 'number') {
+        invoke('enlarged_hide_ack', { gen: e.payload }).catch(() => {});
+      }
+      doHide();
+    });
+
+    // If initial mount and window is visible, lift wm-hidden after 2 rAF ticks
+    getCurrentWindow()
+      .isVisible()
+      .then((vis) => {
+        if (vis) {
+          revealAfterPaintGate();
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      window.__carbonRequestEnlargedHide = undefined;
+      unlistenOpened.then((fn) => fn());
+      unlistenHideReq.then((fn) => fn());
+    };
+  }, [windowLabel]);
 
   const toggleTheme = async () => {
     const nextTheme = theme === 'dark' ? 'light' : 'dark';

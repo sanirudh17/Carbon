@@ -1238,7 +1238,11 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     if (matchesHotkeyCombo(e, hotkeys.enlarged || 'Ctrl+Alt+X')) {
       e.preventDefault();
       e.stopPropagation();
-      invoke('hide_enlarged').catch(console.error);
+      if (window.__carbonRequestEnlargedHide) {
+        window.__carbonRequestEnlargedHide();
+      } else {
+        invoke('hide_enlarged').catch(console.error);
+      }
       return;
     }
     if (matchesHotkeyCombo(e, hotkeys.overlay || 'Ctrl+Shift+Z')) {
@@ -1468,7 +1472,11 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
         return;
       }
       setPasteMenuOpen(false);
-      invoke('hide_enlarged').catch(console.error);
+      if (window.__carbonRequestEnlargedHide) {
+        window.__carbonRequestEnlargedHide();
+      } else {
+        invoke('hide_enlarged').catch(console.error);
+      }
       return;
     }
 

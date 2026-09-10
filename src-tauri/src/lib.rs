@@ -452,11 +452,16 @@ fn save_settings(
     let mut current = state.settings.get();
     state.db.trim_history(current.retention_days, current.max_entries).ok();
 
-    // If window_material or theme changed, refresh OS blur material on all windows
-    if old_material != current.window_material || old_theme != current.theme {
+    // Material still owns DWM acrylic. Theme changes never touch DWM material,
+    // but Solid re-matches WebView2's cheap controller background immediately.
+    if old_material != current.window_material {
         let mat = vibrancy::WindowMaterial::from_str(&current.window_material);
         vibrancy::apply_to_all_windows(&app, mat, &current.theme);
         let _ = app.emit("window-material-changed", mat.as_str());
+    } else if old_theme != current.theme
+        && vibrancy::WindowMaterial::from_str(&current.window_material) == vibrancy::WindowMaterial::Solid
+    {
+        vibrancy::set_default_background_for_all(&app, vibrancy::WindowMaterial::Solid, &current.theme);
     }
 
     // Swappable hotkeys (Glint-style): on save, clear everything and
@@ -489,13 +494,13 @@ fn set_window_material(
     app: AppHandle,
 ) -> Result<String, String> {
     let mat = vibrancy::WindowMaterial::from_str(&material);
-    let theme = {
+    {
         let mut s = state.settings.get();
         s.window_material = mat.as_str().to_string();
         state.settings.update(s.clone())?;
         let _ = app.emit("settings-updated", &s);
-        s.theme
-    };
+    }
+    let theme = app.state::<AppState>().settings.get().theme;
     vibrancy::apply_to_all_windows(&app, mat, &theme);
     let _ = app.emit("window-material-changed", mat.as_str());
     Ok(mat.as_str().to_string())
@@ -506,13 +511,13 @@ fn clear_window_material(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
-    let theme = {
+    {
         let mut s = state.settings.get();
         s.window_material = "solid".to_string();
         state.settings.update(s.clone())?;
         let _ = app.emit("settings-updated", &s);
-        s.theme
-    };
+    }
+    let theme = app.state::<AppState>().settings.get().theme;
     vibrancy::apply_to_all_windows(&app, vibrancy::WindowMaterial::Solid, &theme);
     let _ = app.emit("window-material-changed", "solid");
     Ok(())
@@ -624,86 +629,38 @@ fn set_overlay_preview(
     settings.preview_enabled = enabled;
     state.settings.update(settings.clone())?;
 
+    // Content is already faded by QuickOverlay before this command runs. One
+    // centered snap restores the compact 680x440 overlay without animating the
+    // native surface or exposing its repaint frame.
     let scale = window.scale_factor().unwrap_or(1.0);
     let (w_log, h_log) = if enabled { (1020, 560) } else { (680, 440) };
     let (w_phys, h_phys) = (
         (w_log as f64 * scale).round() as u32,
         (h_log as f64 * scale).round() as u32,
     );
-
-    // Anchor around the window's CURRENT center so toggling the preview never
-    // teleports the overlay (previously this used the cursor position, which
-    // made the window jump if the mouse had moved since it was summoned).
-    let mut pos_x: i32;
-    let mut pos_y: i32;
     if let (Ok(old_pos), Ok(old_size)) = (window.outer_position(), window.outer_size()) {
-        let cx = old_pos.x + old_size.width as i32 / 2;
-        let cy = old_pos.y + old_size.height as i32 / 2;
-        pos_x = cx - w_phys as i32 / 2;
-        pos_y = cy - h_phys as i32 / 2;
-        // Clamp into the current monitor so the resized window stays on-screen
-        if let Ok(Some(monitor)) = window.current_monitor() {
-            let m_pos = monitor.position();
-            let m_size = monitor.size();
-            let max_x = m_pos.x + m_size.width as i32 - w_phys as i32;
-            let max_y = m_pos.y + m_size.height as i32 - h_phys as i32;
-            pos_x = pos_x.clamp(m_pos.x, max_x.max(m_pos.x));
-            pos_y = pos_y.clamp(m_pos.y, max_y.max(m_pos.y));
-        }
-    } else {
-        let (cx, cy) = paste::get_cursor_position();
-        let (pos_x_l, pos_y_l) = hotkey::calculate_overlay_position(cx, cy, w_log, h_log, scale);
-        pos_x = pos_x_l;
-        pos_y = pos_y_l;
-    }
-
-    #[cfg(windows)]
-    {
-        use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{
-            SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
-        };
-        if let Ok(hwnd) = window.hwnd() {
-            let h_raw: isize = hwnd.0 as isize;
-
-            // Instant snap (was a 150ms/9-step animation): every SetWindowPos
-            // reallocates the WebView2 composition surface, so animating
-            // starved the renderer and flashed a white surface for ~0.5s on
-            // every Tab toggle. One SetWindowPos = one recomposition, no
-            // flash. Tab spam is harmless: each toggle just snaps to its own
-            // final rect.
-            unsafe {
-                let h = HWND(h_raw as *mut _);
-                let _ = SetWindowPos(
-                    h,
-                    None,
-                    pos_x,
-                    pos_y,
-                    w_phys as i32,
-                    h_phys as i32,
-                    SWP_NOACTIVATE | SWP_NOZORDER,
-                );
+        let pos_x = old_pos.x + old_size.width as i32 / 2 - w_phys as i32 / 2;
+        let pos_y = old_pos.y + old_size.height as i32 / 2 - h_phys as i32 / 2;
+        #[cfg(windows)]
+        {
+            use windows::Win32::Foundation::HWND;
+            use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
+            if let Ok(hwnd) = window.hwnd() {
+                unsafe {
+                    let _ = SetWindowPos(
+                        HWND(hwnd.0 as *mut _), None, pos_x, pos_y,
+                        w_phys as i32, h_phys as i32, SWP_NOACTIVATE | SWP_NOZORDER,
+                    );
+                }
             }
-            crate::vibrancy::set_round_corners(&window);
-            let mat = crate::vibrancy::WindowMaterial::from_str(&settings.window_material);
-            crate::vibrancy::apply_window_material(&window, mat, &settings.theme);
         }
-    }
-    #[cfg(not(windows))]
-    {
-        window
-            .set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                width: w_phys,
-                height: h_phys,
-            }))
-            .map_err(|e| e.to_string())?;
-
-        window
-            .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                x: pos_x,
-                y: pos_y,
-            }))
-            .map_err(|e| e.to_string())?;
+        #[cfg(not(windows))]
+        {
+            window.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: w_phys, height: h_phys }))
+                .map_err(|e| e.to_string())?;
+            window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }))
+                .map_err(|e| e.to_string())?;
+        }
     }
     let _ = app_handle.emit("preview-toggled", enabled);
     Ok(())
@@ -723,13 +680,48 @@ fn overlay_hide_ack(gen: u64) {
 }
 
 #[tauri::command]
+fn overlay_phase_ack(phase: String) {
+    match phase.as_str() {
+        "shown" => hotkey::set_overlay_phase(hotkey::OverlayPhase::Shown),
+        "showing" => hotkey::set_overlay_phase(hotkey::OverlayPhase::Showing),
+        "hiding" => hotkey::set_overlay_phase(hotkey::OverlayPhase::Hiding),
+        "hidden" => hotkey::set_overlay_phase(hotkey::OverlayPhase::Hidden),
+        _ => {}
+    }
+}
+
+#[tauri::command]
 fn hide_overlay(app_handle: AppHandle) -> Result<(), String> {
+    // The renderer may have already acknowledged its fade/atomic Glass hide
+    // before this command arrives. Native hide is the terminal authority and
+    // must never be rejected based on a stale phase snapshot.
     hotkey::hide_overlay_window(&app_handle);
     Ok(())
 }
 
+/// Renderer confirms the overlay presented its first painted frame after
+/// show → lift the DWM cloak gate (white-flash fix). Safe to call when
+/// already hidden/uncloaked: the generation check makes it a no-op.
+#[tauri::command]
+fn overlay_painted(app_handle: AppHandle) {
+    hotkey::note_overlay_painted(&app_handle);
+}
+
+/// Renderer confirms the main window presented its first painted frame
+/// after show → lift the DWM cloak gate (white-flash fix).
+#[tauri::command]
+fn enlarged_painted(app_handle: AppHandle) {
+    hotkey::note_enlarged_painted(&app_handle);
+}
+
+#[tauri::command]
+fn enlarged_hide_ack(gen: u64) {
+    hotkey::note_enlarged_hide_ack(gen);
+}
+
 #[tauri::command]
 fn hide_enlarged(window: WebviewWindow) -> Result<(), String> {
+    let _ = window.eval("document.documentElement.classList.add('wm-hidden')");
     paste::restore_target_window();
     // Windows stay warm: always hide, never close (instant next open).
     window.hide().map_err(|e| e.to_string())?;
@@ -1092,12 +1084,16 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(
             // Inline micro-plugin: fires at EVERY webview creation (config
-            // windows + safety-net recreates), forcing the WebView2 controller
-            // surface transparent at creation — belt-and-braces on top of the
-            // WEBVIEW2_DEFAULT_BACKGROUND_COLOR=0 env var set above.
+            // windows + safety-net recreates). This is transparent first;
+            // setup/prewarm immediately replaces it with Solid's opaque theme
+            // color when that material is active, before any hidden window is shown.
             tauri::plugin::Builder::<tauri::Wry>::new("carbon-webview-transparent")
                 .on_webview_ready(|webview| {
-                    crate::vibrancy::set_webview_transparent_background(&webview);
+                    crate::vibrancy::set_webview_default_background(
+                        &webview,
+                        crate::vibrancy::WindowMaterial::Acrylic,
+                        "dark",
+                    );
                 })
                 .build(),
         )
@@ -1110,9 +1106,14 @@ pub fn run() {
                 let _ = win.unminimize();
                 let _ = win.show();
                 let _ = win.set_focus();
+                // Route through the same reveal choreography as the hotkey
+                // path so the frontend lifts its wm-hidden mask (otherwise a
+                // second-launch focus leaves a stuck blank window).
+                let _ = app.emit("enlarged-opened", ());
             } else if let Some(win) = app.get_webview_window("overlay") {
                 let _ = win.show();
                 let _ = win.set_focus();
+                let _ = app.emit("overlay-opened", ());
             }
         }))
         .plugin(tauri_plugin_opener::init())
@@ -1268,8 +1269,12 @@ pub fn run() {
                 if !*focused && window.label() == "overlay" {
                     // Skip if hide_overlay_window is already running (re-entrancy guard)
                     if !hotkey::is_overlay_hiding() && window.is_visible().unwrap_or(false) {
-                        paste::log_diag("[WINDOW_EVENT] Overlay lost focus while visible. Calling hide_overlay_window...");
-                        hotkey::hide_overlay_window(&window.app_handle());
+                        if hotkey::get_overlay_phase() == hotkey::OverlayPhase::Showing {
+                            paste::log_diag("[WINDOW_EVENT] Overlay lost focus while Showing — ignoring transient blur during show.");
+                        } else {
+                            paste::log_diag("[WINDOW_EVENT] Overlay lost focus while visible. Calling hide_overlay_window...");
+                            hotkey::hide_overlay_window(&window.app_handle());
+                        }
                     }
                 } else if *focused && window.label() == "overlay" {
                     // Push fresh data on focus, but off the focus critical path
@@ -1328,6 +1333,10 @@ pub fn run() {
             get_stats,
             hide_overlay,
             overlay_hide_ack,
+            overlay_phase_ack,
+            overlay_painted,
+            enlarged_hide_ack,
+            enlarged_painted,
             hide_enlarged,
             toggle_overlay,
             toggle_enlarged,

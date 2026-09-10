@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="wm-hidden" data-painted="0">
   <head>
     <!-- Pre-bundle paint guard (must precede any bundle CSS): WebView2's
          default surface is white until the first painted frame. Margin-less,
@@ -10,6 +10,10 @@
       body {
         margin: 0;
         background: transparent;
+      }
+      html.wm-hidden #root {
+        opacity: 0 !important;
+        pointer-events: none !important;
       }
     </style>
     <meta charset="UTF-8" />
@@ -43,7 +47,7 @@
   </head>
 
   <body>
-    <div id="root"></div>
+    <div id="root" class="wm-fade-target"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

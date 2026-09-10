@@ -32,8 +32,8 @@
       {
         "label": "overlay",
         "title": "Carbon Quick Paste",
-        "width": 1020,
-        "height": 560,
+        "width": 680,
+        "height": 440,
         "resizable": false,
         "decorations": false,
         "shadow": true,
@@ -61,7 +61,8 @@
         "focus": false,
         "transparent": true,
         "backgroundThrottling": "disabled",
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-renderer-backgrounding"
       },
       {
         "label": "argprompt",
@@ -78,7 +79,8 @@
         "focus": false,
         "transparent": true,
         "backgroundThrottling": "disabled",
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-renderer-backgrounding"
       }
     ],
     "security": {
