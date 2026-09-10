@@ -851,6 +851,8 @@ export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ 
               padding: '14px 16px',
               borderRadius: '8px',
               border: '1px solid #e5e7eb',
+              overflow: 'hidden',
+              backgroundClip: 'padding-box',
             }}
           >
             {richHtml}

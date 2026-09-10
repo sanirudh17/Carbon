@@ -1,15 +1,19 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="wm-hidden" data-painted="0">
   <head>
     <!-- Pre-bundle paint guard (must precede any bundle CSS): WebView2's
          default surface is white until the first painted frame. Margin-less,
          transparent html/body means even a cold-load first frame composites
-         transparent — never white. -->
+         the transparent controller surface — never white. -->
     <style>
       html,
       body {
         margin: 0;
         background: transparent;
+      }
+      html.wm-hidden #root {
+        opacity: 0 !important;
+        pointer-events: none !important;
       }
     </style>
     <meta charset="UTF-8" />
@@ -23,13 +27,27 @@
           if (accent) document.documentElement.style.setProperty('--accent-base', accent);
           var theme = localStorage.getItem('carbon_theme');
           if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+          var rawMat = localStorage.getItem('carbon_window_material') || 'acrylic';
+          var material = rawMat === 'acrylic' ? 'glass' : rawMat;
+          document.documentElement.setAttribute('data-material', material);
+
+          var label = (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.metadata && window.__TAURI_INTERNALS__.metadata.currentWindow && window.__TAURI_INTERNALS__.metadata.currentWindow.label);
+          var winClass = label === 'overlay' ? 'win-overlay' : 'win-library';
+          document.documentElement.classList.add(winClass);
+          if (document.body) {
+            document.body.classList.add(winClass);
+          } else {
+            document.addEventListener('DOMContentLoaded', function() {
+              if (document.body) document.body.classList.add(winClass);
+            });
+          }
         } catch(e) {}
       })();
     </script>
   </head>
 
   <body>
-    <div id="root"></div>
+    <div id="root" class="wm-fade-target"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

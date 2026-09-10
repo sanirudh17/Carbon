@@ -54,11 +54,12 @@ quircs = "0.10.3"
 url = "2.5"
 sha2 = "0.10"
 hex = "0.4"
+window-vibrancy = "0.8.0"
 
 # Direct handle on the WebView2 COM API: force the controller's
 # DefaultBackgroundColor to fully transparent at creation (white-flash fix,
-# see webview_bg.rs). Kept in lockstep with the webview2-com version wry
-# already pulls in (Cargo.lock: 0.38.x) so no second copy is compiled.
+# see vibrancy.rs + webview_bg.rs). Kept in lockstep with the webview2-com
+# version wry already pulls in (Cargo.lock: 0.38.x) so no second copy is compiled.
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "0.38"
 # Same version family webview2-com-sys 0.38 uses (0.61) so the

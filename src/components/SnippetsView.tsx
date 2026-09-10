@@ -550,24 +550,26 @@ export const SnippetsView: React.FC<{
                   ))}
                 </div>
               )}
+            </div>
 
-              <div className="meta-strip">
-                <div className="meta-row">
-                  <span className="meta-label">Label</span>
-                  <span className="meta-value">{selected.name}</span>
-                </div>
-                <div className="meta-row">
-                  <span className="meta-label">Content Type</span>
-                  <span className="meta-value">Plain Text</span>
-                </div>
-                <div className="meta-row">
-                  <span className="meta-label">Times Copied</span>
-                  <span className="meta-value">{selected.use_count.toLocaleString()}</span>
-                </div>
-                <div className="meta-row">
-                  <span className="meta-label">Last Copied</span>
-                  <span className="meta-value">{formatSnippetLastUsed(selected.last_used_at)}</span>
-                </div>
+            {/* Pinned above the footer like the captures Information strip:
+                big content box fills, facts sit at the bottom. */}
+            <div className="meta-strip">
+              <div className="meta-row">
+                <span className="meta-label">Label</span>
+                <span className="meta-value">{selected.name}</span>
+              </div>
+              <div className="meta-row">
+                <span className="meta-label">Content Type</span>
+                <span className="meta-value">Plain Text</span>
+              </div>
+              <div className="meta-row">
+                <span className="meta-label">Times Copied</span>
+                <span className="meta-value">{selected.use_count.toLocaleString()}</span>
+              </div>
+              <div className="meta-row">
+                <span className="meta-label">Last Copied</span>
+                <span className="meta-value">{formatSnippetLastUsed(selected.last_used_at)}</span>
               </div>
             </div>
 

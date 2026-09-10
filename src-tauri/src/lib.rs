@@ -9,6 +9,7 @@ mod sensitive;
 mod settings;
 mod shortcuts;
 mod titles;
+mod vibrancy;
 mod webview_bg;
 
 use clipboard_watcher::ClipboardWatcher;
@@ -437,15 +438,27 @@ fn save_settings(
         }
     }
     let old_expansion = state.settings.get().snippet_expansion_enabled;
-    let old_hotkeys = {
+    let (old_hotkeys, old_material, old_theme) = {
         let s = state.settings.get();
-        (s.quick_hotkey, s.enlarged_hotkey)
+        ((s.quick_hotkey, s.enlarged_hotkey), s.window_material, s.theme)
     };
     // Persist the user's choice first, then swap the global shortcuts.
     state.settings.update(new_settings)?;
 
     let mut current = state.settings.get();
     state.db.trim_history(current.retention_days, current.max_entries).ok();
+
+    // Material still owns DWM acrylic. Theme changes never touch DWM material,
+    // but Solid re-matches WebView2's cheap controller background immediately.
+    if old_material != current.window_material {
+        let mat = vibrancy::WindowMaterial::from_str(&current.window_material);
+        vibrancy::apply_to_all_windows(&app, mat, &current.theme);
+        let _ = app.emit("window-material-changed", mat.as_str());
+    } else if old_theme != current.theme
+        && vibrancy::WindowMaterial::from_str(&current.window_material) == vibrancy::WindowMaterial::Solid
+    {
+        vibrancy::set_default_background_for_all(&app, vibrancy::WindowMaterial::Solid, &current.theme);
+    }
 
     // Swappable hotkeys (Glint-style): on save, clear everything and
     // re-apply strictly. If Windows rejects a combo, roll back to the
@@ -467,6 +480,42 @@ fn save_settings(
     let _ = app.emit("settings-updated", &current);
     let _ = app.emit("expansion-status-changed", expansion::get_expansion_status());
     let _ = app.emit("clipboard-updated", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn set_window_material(
+    material: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<String, String> {
+    let mat = vibrancy::WindowMaterial::from_str(&material);
+    {
+        let mut s = state.settings.get();
+        s.window_material = mat.as_str().to_string();
+        state.settings.update(s.clone())?;
+        let _ = app.emit("settings-updated", &s);
+    }
+    let theme = app.state::<AppState>().settings.get().theme;
+    vibrancy::apply_to_all_windows(&app, mat, &theme);
+    let _ = app.emit("window-material-changed", mat.as_str());
+    Ok(mat.as_str().to_string())
+}
+
+#[tauri::command]
+fn clear_window_material(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    {
+        let mut s = state.settings.get();
+        s.window_material = "solid".to_string();
+        state.settings.update(s.clone())?;
+        let _ = app.emit("settings-updated", &s);
+    }
+    let theme = app.state::<AppState>().settings.get().theme;
+    vibrancy::apply_to_all_windows(&app, vibrancy::WindowMaterial::Solid, &theme);
+    let _ = app.emit("window-material-changed", "solid");
     Ok(())
 }
 
@@ -574,18 +623,18 @@ fn set_overlay_preview(
 ) -> Result<(), String> {
     let mut settings = state.settings.get();
     settings.preview_enabled = enabled;
-    state.settings.update(settings)?;
+    state.settings.update(settings.clone())?;
 
+    // Content is already faded by QuickOverlay before this command runs. One
+    // centered snap restores the compact 680x440 overlay without animating the
+    // native surface or exposing its repaint frame.
     let scale = window.scale_factor().unwrap_or(1.0);
     let (w_log, h_log) = if enabled { (1020, 560) } else { (680, 440) };
     let (w_phys, h_phys) = (
         (w_log as f64 * scale).round() as u32,
         (h_log as f64 * scale).round() as u32,
     );
-
-    // Anchor around the window's CURRENT center so toggling the preview never
-    // teleports the overlay (previously this used the cursor position, which
-    // made the window jump if the mouse had moved since it was summoned).
+    if let (Ok(old_pos), Ok(old_size)) = (window.outer_position(), window.outer_size()) {
     let mut pos_x: i32;
     let mut pos_y: i32;
     if let (Ok(old_pos), Ok(old_size)) = (window.outer_position(), window.outer_size()) {
@@ -701,14 +750,57 @@ async fn get_stats(state: State<'_, AppState>) -> Result<DbStats, String> {
     state.db.get_stats()
 }
 
+/// Ack from the overlay webview: it received a hide-request generation and is
+/// running the fade-out choreography. Lets hotkey.rs's 250ms fallback tell
+/// "webview alive, fading" apart from "webview dead, hide natively now".
+#[tauri::command]
+fn overlay_hide_ack(gen: u64) {
+    hotkey::note_overlay_hide_ack(gen);
+}
+
+#[tauri::command]
+fn overlay_phase_ack(phase: String) {
+    match phase.as_str() {
+        "shown" => hotkey::set_overlay_phase(hotkey::OverlayPhase::Shown),
+        "showing" => hotkey::set_overlay_phase(hotkey::OverlayPhase::Showing),
+        "hiding" => hotkey::set_overlay_phase(hotkey::OverlayPhase::Hiding),
+        "hidden" => hotkey::set_overlay_phase(hotkey::OverlayPhase::Hidden),
+        _ => {}
+    }
+}
+
 #[tauri::command]
 fn hide_overlay(app_handle: AppHandle) -> Result<(), String> {
+    // The renderer may have already acknowledged its fade/atomic Glass hide
+    // before this command arrives. Native hide is the terminal authority and
+    // must never be rejected based on a stale phase snapshot.
     hotkey::hide_overlay_window(&app_handle);
     Ok(())
 }
 
+/// Renderer confirms the overlay presented its first painted frame after
+/// show → lift the DWM cloak gate (white-flash fix). Safe to call when
+/// already hidden/uncloaked: the generation check makes it a no-op.
+#[tauri::command]
+fn overlay_painted(app_handle: AppHandle) {
+    hotkey::note_overlay_painted(&app_handle);
+}
+
+/// Renderer confirms the main window presented its first painted frame
+/// after show → lift the DWM cloak gate (white-flash fix).
+#[tauri::command]
+fn enlarged_painted(app_handle: AppHandle) {
+    hotkey::note_enlarged_painted(&app_handle);
+}
+
+#[tauri::command]
+fn enlarged_hide_ack(gen: u64) {
+    hotkey::note_enlarged_hide_ack(gen);
+}
+
 #[tauri::command]
 fn hide_enlarged(window: WebviewWindow) -> Result<(), String> {
+    let _ = window.eval("document.documentElement.classList.add('wm-hidden')");
     paste::restore_target_window();
     // Windows stay warm: always hide, never close (instant next open).
     window.hide().map_err(|e| e.to_string())?;
@@ -1079,12 +1171,16 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(
             // Inline micro-plugin: fires at EVERY webview creation (config
-            // windows + safety-net recreates), forcing the WebView2 controller
-            // surface transparent at creation — belt-and-braces on top of the
-            // WEBVIEW2_DEFAULT_BACKGROUND_COLOR=0 env var set above.
+            // windows + safety-net recreates). This is transparent first;
+            // setup/prewarm immediately replaces it with Solid's opaque theme
+            // color when that material is active, before any hidden window is shown.
             tauri::plugin::Builder::<tauri::Wry>::new("carbon-webview-transparent")
                 .on_webview_ready(|webview| {
-                    crate::webview_bg::set_webview_transparent_background(&webview);
+                    crate::vibrancy::set_webview_default_background(
+                        &webview,
+                        crate::vibrancy::WindowMaterial::Acrylic,
+                        "dark",
+                    );
                 })
                 .build(),
         )
@@ -1099,9 +1195,14 @@ pub fn run() {
                 }
                 let _ = win.show();
                 let _ = win.set_focus();
+                // Route through the same reveal choreography as the hotkey
+                // path so the frontend lifts its wm-hidden mask (otherwise a
+                // second-launch focus leaves a stuck blank window).
+                let _ = app.emit("enlarged-opened", ());
             } else if let Some(win) = app.get_webview_window("overlay") {
                 let _ = win.show();
                 let _ = win.set_focus();
+                let _ = app.emit("overlay-opened", ());
             }
         }))
         .plugin(tauri_plugin_opener::init())
@@ -1109,6 +1210,32 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            // Singleton guard: never allow two carbon.exe to hold the DB +
+            // global hotkeys at once. The single-instance plugin notifies the
+            // first instance, but a second process still ran setup all the way
+            // to PREWARM while failing to register hotkeys (log 14:25:53).
+            // A named OS mutex exits duplicates before they touch DB/shortcuts.
+            #[cfg(target_os = "windows")]
+            {
+                unsafe {
+                    use windows::core::w;
+                    use windows::Win32::Foundation::{GetLastError, BOOL, ERROR_ALREADY_EXISTS};
+                    use windows::Win32::System::Threading::CreateMutexW;
+                    match CreateMutexW(None, BOOL(1), w!("com.carbon.clipboard.single-instance")) {
+                        Ok(handle) => {
+                            if GetLastError() == ERROR_ALREADY_EXISTS {
+                                eprintln!("[SINGLETON] Duplicate carbon.exe detected — exiting so the first instance keeps the hotkeys.");
+                                std::process::exit(0);
+                            }
+                            std::mem::forget(handle);
+                        }
+                        Err(e) => {
+                            eprintln!("[SINGLETON] CreateMutexW failed ({e:?}) — continuing without singleton guard.");
+                        }
+                    }
+                }
+            }
+
             let app_handle = app.handle().clone();
 
             let app_data_dir = app
@@ -1159,6 +1286,14 @@ pub fn run() {
             // destroyed) — no ShowWindow at startup, so no 0.5s flash. DB
             // warming is the critical path; it starts immediately like the
             // preview (dev) build.
+            // Apply OS-level window material / vibrancy blur-behind once at creation
+            {
+                let state = app.state::<AppState>();
+                let current_settings = state.settings.get();
+                let mat = vibrancy::WindowMaterial::from_str(&current_settings.window_material);
+                vibrancy::apply_to_all_windows(app.handle(), mat, &current_settings.theme);
+            }
+
             {
                 let handle = app_handle.clone();
                 std::thread::spawn(move || {
@@ -1179,16 +1314,20 @@ pub fn run() {
                 .menu(&tray_menu)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "show" => {
+                        crate::paste::log_diag("[TRAY] 'Open Carbon' clicked");
                         handle_enlarged_hotkey(app);
                     }
                     "overlay" => {
+                        crate::paste::log_diag("[TRAY] 'Quick Overlay' clicked");
                         handle_overlay_hotkey(app);
                     }
                     "pause" => {
+                        crate::paste::log_diag("[TRAY] 'Pause Capture' clicked");
                         let state = app.state::<AppState>();
                         state.watcher.toggle_pause();
                     }
                     "quit" => {
+                        crate::paste::log_diag("[TRAY] 'Quit Carbon' clicked");
                         std::process::exit(0);
                     }
                     _ => {}
@@ -1222,9 +1361,13 @@ pub fn run() {
                 ));
                 if !*focused && window.label() == "overlay" {
                     // Skip if hide_overlay_window is already running (re-entrancy guard)
-                    if !hotkey::is_overlay_hiding() && hotkey::is_overlay_visible() {
-                        paste::log_diag("[WINDOW_EVENT] Overlay lost focus while visible. Calling hide_overlay_window...");
-                        hotkey::hide_overlay_window(&window.app_handle());
+                    if !hotkey::is_overlay_hiding() && window.is_visible().unwrap_or(false) {
+                        if hotkey::get_overlay_phase() == hotkey::OverlayPhase::Showing {
+                            paste::log_diag("[WINDOW_EVENT] Overlay lost focus while Showing — ignoring transient blur during show.");
+                        } else {
+                            paste::log_diag("[WINDOW_EVENT] Overlay lost focus while visible. Calling hide_overlay_window...");
+                            hotkey::hide_overlay_window(&window.app_handle());
+                        }
                     }
                 } else if *focused && window.label() == "overlay" {
                     // Push fresh data on focus, but off the focus critical path
@@ -1282,6 +1425,11 @@ pub fn run() {
             set_overlay_default_tab,
             get_stats,
             hide_overlay,
+            overlay_hide_ack,
+            overlay_phase_ack,
+            overlay_painted,
+            enlarged_hide_ack,
+            enlarged_painted,
             hide_enlarged,
             toggle_overlay,
             toggle_enlarged,
@@ -1313,6 +1461,8 @@ pub fn run() {
             get_selected_text_snapshot,
             copy_snippet_text,
             paste_snippet_text,
+            set_window_material,
+            clear_window_material,
             log_client_event
         ])
         .run(tauri::generate_context!())

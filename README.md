@@ -51,8 +51,8 @@ Everything lives in a local SQLite database (`carbon_history.db`) with image fil
 
 **Overlay & Library**
 
-- **Quick overlay** (`Ctrl+Shift+Z`) — centered at the cursor, shows recent clips and snippets. Filter by type, queue multiple clips with `Ctrl+V` to advance, and paste with transforms (plain text, markdown, JSON, uppercase/lowercase/title, base64, URL encode/decode). Preview pane is toggleable.
-- **Full library** (`Ctrl+Alt+X`) — searchable, sortable view of all history with collections sidebar, stats, and snippet management.
+- **Quick overlay** (`Ctrl+Shift+Z`) — centered at the cursor, shows recent clips and snippets. Raycast 2.0 / Tinycast-style frosted-glass translucency with OS compositor blur-behind (Acrylic, Mica, Blur, or Solid). Filter by type, queue multiple clips with `Ctrl+V` to advance, and paste with transforms (plain text, markdown, JSON, uppercase/lowercase/title, base64, URL encode/decode). Preview pane is toggleable.
+- **Full library** (`Ctrl+Alt+X`) — searchable, sortable view of all history with translucent glass panels, collections sidebar, stats, and snippet management.
 
 **Snippets & Expansion**
 
@@ -71,10 +71,28 @@ Everything lives in a local SQLite database (`carbon_history.db`) with image fil
 - **Custom rules** — ordered find/replace (plain text or regex) applied on every capture.
 - **Sensitive detection** — optional local detection of credit cards (Luhn), API keys, JWTs, and private keys, with auto-expiry after 5 minutes.
 
-**Hotkeys & Theming**
+**Hotkeys, Theming & Glass Materials**
 
 - Two swappable global shortcuts with atomic `unregister_all`/`reapply` and strict rollback. `Ctrl+Alt` handled via `AltGraph` parity and a `WH_KEYBOARD_LL` hook so GPU software can't steal focus; conflicts show inline errors and toast pop-ups.
-- **Dark/light themes** with PNG badge at native resolution (1.2–1.3 MB dark/light) and 6 accent swatches + custom picker. All settings persist in `settings.json`.
+- **Frosted-glass translucency** — Native OS blur-behind powered by `window-vibrancy` with layered semi-transparent glass panels, 1px borders, subtle highlight insets, anti-banding noise grain, floating glass pills, and selective in-app popover blurs.
+- **Dark/light themes** with PNG badge at native resolution (1.2–1.3 MB dark/light), 6 accent swatches + custom picker, and 4 window materials (`Glass (Acrylic)`, `Mica`, `Blur`, `Solid`). All settings persist in `settings.json`.
+
+### Window Translucency & Materials (Frosted Glass)
+
+Carbon provides Raycast- and Tinycast-style OS compositor translucency for both the Quick Overlay (`Ctrl+Shift+Z`) and full Library (`Ctrl+Alt+X`) windows.
+
+| Material | Look & Behavior | Compatibility |
+|---|---|---|
+| **Glass (Acrylic)** *(Default)* | Frosted-glass blur-behind tinted to theme background with subtle anti-banding grain, top-highlight inset, and floating glass pills. | Windows 10 (build 1809+) & Windows 11 |
+| **Mica** | Subtle dynamic material that picks up the desktop wallpaper background tint. | Windows 11 (build 22000+) |
+| **Blur** | Traditional blur-behind translucency for older Windows desktop compositing. | Windows 10 / 11 |
+| **Solid** | Opaque dark or light theme background with zero OS compositor blur. | All platforms |
+
+**Resilient Fallbacks & Accessibility:**
+- **Automatic fallback chain**: If a chosen material (e.g. Mica or Acrylic) is unsupported on the user's Windows build, Carbon automatically falls back (`Acrylic` → `Blur` → `Solid`) without crashing or panicking.
+- **Accessibility aware**: If *"Turn off transparency"* is enabled in Windows Settings or the system requests reduced transparency (`prefers-reduced-transparency: reduce`), Carbon automatically defaults to solid opaque panels.
+- **DWM rounded corners & gutters**: Uses `DwmSetWindowAttribute(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND)` alongside transparent CSS margin gutters to guarantee crisp rounded corners and shadows without black rectangular clipping artifacts.
+- **Zero latency**: Vibrancy is applied once during window creation and theme updates; hidden windows stay warm in memory so hotkey invocation remains instant.
 
 ## How It Works
 
@@ -114,9 +132,9 @@ Everything between copying and pasting runs as a local pipeline. Each stage can 
 
 **Storage** — `Retention` (days, `0` = forever) · `Max entries` · `Image size limit` (`0` = unlimited, MB) · `Clear history` (deletes DB rows + orphan images + emits update) · `Export`/`Restore` backup (JSON with base64 images, snippets).
 
-**Appearance** — `Accent theme` (6 swatches + custom `<input type=color>`) · `Theme mode` (dark/light, `html[data-theme]`).
+**Appearance** — `Accent theme` (6 swatches + custom `<input type=color>`) · `Theme mode` (dark/light, `html[data-theme]`) · `Window material` (`Glass (Acrylic)`, `Mica`, `Blur`, `Solid`).
 
-Internals: `overlay_default_tab`, `preview_enabled`, `detect_sensitive_data`, `clip_merge_enabled`, `clip_merge_window_ms`, `strip_tracking_params`, `capture_rules`, `snippet_expansion_enabled`, `show_snippets` all in `AppSettings` (`settings.rs`).
+Internals: `window_material`, `overlay_default_tab`, `preview_enabled`, `detect_sensitive_data`, `clip_merge_enabled`, `clip_merge_window_ms`, `strip_tracking_params`, `capture_rules`, `snippet_expansion_enabled`, `show_snippets` all in `AppSettings` (`settings.rs`).
 
 ## Download & Install
 

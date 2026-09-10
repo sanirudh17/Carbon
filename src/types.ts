@@ -61,6 +61,7 @@ export interface AppSettings {
   capture_rules: CaptureRule[];
   snippet_expansion_enabled: boolean;
   show_snippets: boolean;
+  window_material?: 'acrylic' | 'solid';
   dismissedUpdateVersion?: string;
 }
 

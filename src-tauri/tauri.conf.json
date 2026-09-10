@@ -24,6 +24,7 @@
         "center": true,
         "visible": false,
         "focus": false,
+        "transparent": true,
         "backgroundThrottling": "disabled",
         "dragDropEnabled": false,
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-renderer-backgrounding"
@@ -35,6 +36,7 @@
         "height": 440,
         "resizable": false,
         "decorations": false,
+        "shadow": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "center": true,
@@ -59,7 +61,8 @@
         "focus": false,
         "transparent": true,
         "backgroundThrottling": "disabled",
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-renderer-backgrounding"
       },
       {
         "label": "argprompt",
@@ -76,7 +79,8 @@
         "focus": false,
         "transparent": true,
         "backgroundThrottling": "disabled",
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-renderer-backgrounding"
       }
     ],
     "security": {

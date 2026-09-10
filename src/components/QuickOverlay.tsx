@@ -150,17 +150,22 @@ const OverlayRow = memo(function OverlayRow({
 });
 
 export const QuickOverlay: React.FC = () => {
-  const [tab, setTab] = useState<'clips' | 'snippets'>('clips');
+  // Last-used tab wins: reopen where you left off (persisted per summon).
+  const [tab, setTab] = useState<'clips' | 'snippets'>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const last = localStorage.getItem('carbon_overlay_tab');
+        if (last === 'snippets' || last === 'clips') return last;
+      } catch {}
+    }
+    return 'clips';
+  });
   const tabRef = useRef(tab);
   tabRef.current = tab;
 
   const [items, setItems] = useState<ClipItem[]>(() => (typeof window !== 'undefined' && window.__carbonInitialData) || []);
   const [initialLoaded, setInitialLoaded] = useState(() => Boolean(typeof window !== 'undefined' && window.__carbonInitialData && window.__carbonInitialData.length > 0));
   const [pasteQueue, setPasteQueue] = useState<ClipItem[]>([]);
-  // Pending native-window resize for the preview toggle (see togglePreview).
-  // Declared BEFORE the show/hide choreography refs so overlay-opened can
-  // cancel a stale pending resize (Tab-then-hide-then-show race).
-  const previewResizeTimer = useRef<number | null>(null);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [addToColModalOpen, setAddToColModalOpen] = useState(false);
   const [newColName, setNewColName] = useState('');
@@ -187,8 +192,62 @@ export const QuickOverlay: React.FC = () => {
         if (cached !== null) return cached === 'true';
       } catch {}
     }
-    return false;
+    return true;
   });
+  const previewOpenRef = useRef(previewOpen);
+  previewOpenRef.current = previewOpen;
+  const targetPreviewOpenRef = useRef<boolean>(previewOpen);
+
+  // F3 Preview state machine: idle | out | snap | in
+  type PreviewPhase = 'idle' | 'out' | 'snap' | 'in';
+  const [previewPhase, setPreviewPhase] = useState<PreviewPhase>('idle');
+  const previewPhaseRef = useRef<PreviewPhase>('idle');
+  const previewTimerRef = useRef<number | null>(null);
+  const previewRafRef = useRef<number | null>(null);
+  const watchdogTimerRef = useRef<number | null>(null);
+
+  const getFadeTarget = () =>
+    document.documentElement.dataset.material === 'solid'
+      ? document.getElementById('root') ?? document.documentElement
+      : document.documentElement;
+
+  const assertSingleLiveLayout = () => {
+    if (!import.meta.env.DEV) return;
+    const layers = document.querySelectorAll('[data-carbon-layout-layer="overlay"]');
+    if (layers.length !== 1) {
+      console.error(`[overlay] expected one live layout layer; found ${layers.length}`);
+    }
+    if (document.documentElement.classList.contains('wm-resizing') && previewPhaseRef.current === 'idle') {
+      console.error('[overlay] wm-resizing leaked after preview transition');
+    }
+  };
+
+  // F3 Single-live-layout: instantly finalize current phase (clear timers, settle state to target)
+  const finalizeTransition = useCallback((targetState?: boolean) => {
+    if (previewTimerRef.current) {
+      window.clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+    if (previewRafRef.current) {
+      cancelAnimationFrame(previewRafRef.current);
+      previewRafRef.current = null;
+    }
+    if (watchdogTimerRef.current) {
+      window.clearTimeout(watchdogTimerRef.current);
+      watchdogTimerRef.current = null;
+    }
+    document.documentElement.classList.remove('wm-resizing');
+
+    const resolvedTarget = typeof targetState === 'boolean' ? targetState : targetPreviewOpenRef.current;
+    previewOpenRef.current = resolvedTarget;
+    targetPreviewOpenRef.current = resolvedTarget;
+    setPreviewOpen(resolvedTarget);
+    invoke('set_overlay_preview', { enabled: resolvedTarget }).catch(console.error);
+
+    previewPhaseRef.current = 'idle';
+    setPreviewPhase('idle');
+    requestAnimationFrame(assertSingleLiveLayout);
+  }, []);
   const [showSnippets, setShowSnippets] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       if (window.__carbonSettings && typeof window.__carbonSettings.show_snippets === 'boolean') {
@@ -205,6 +264,7 @@ export const QuickOverlay: React.FC = () => {
 
   // ── Snippets tab state ────────────────────────────────────────────
   const [snSnippets, setSnSnippets] = useState<Snippet[]>(() => (typeof window !== 'undefined' && window.__carbonInitialSnippets) || []);
+  const [snInitialLoaded, setSnInitialLoaded] = useState(() => Boolean(typeof window !== 'undefined' && window.__carbonInitialSnippets));
   const [snSearch, setSnSearch] = useState('');
   const [snTagFilter, setSnTagFilter] = useState('__all__');
   const [snSelectedId, setSnSelectedId] = useState<string | null>(null);
@@ -295,6 +355,8 @@ export const QuickOverlay: React.FC = () => {
       }
     } catch (err) {
       console.error('Failed to fetch snippets:', err);
+    } finally {
+      setSnInitialLoaded(true);
     }
   };
 
@@ -568,6 +630,8 @@ export const QuickOverlay: React.FC = () => {
     if (next === 'snippets' && !showSnippets) return;
     tabRef.current = next;
     setTab(next);
+    // Remember for the next summon: the overlay reopens where it was left.
+    try { localStorage.setItem('carbon_overlay_tab', next); } catch {}
     setSnActionOpen(false);
     setActionPanelOpen(false);
     focusSearchInput();
@@ -580,8 +644,10 @@ export const QuickOverlay: React.FC = () => {
   }, []);
 
   // ── Settings-driven behavior ───────────────────────────────────────
-  // The overlay opens with the user's chosen tab and preview state, and
-  // stays in sync live (settings-updated fires in every window).
+  // Preview visibility and snippet availability sync live (settings-updated
+  // fires in every window). The active TAB is never forced here: the overlay
+  // reopens on the last-used tab (see switchTab persistence) — the old
+  // "Overlay opens on" default has been removed.
   const applyOverlaySettings = useCallback((s: AppSettings) => {
     if (!s) return;
     if (typeof s.preview_enabled === 'boolean') {
@@ -597,10 +663,78 @@ export const QuickOverlay: React.FC = () => {
         return;
       }
     }
-    const next = s.overlay_default_tab === 'snippets' ? 'snippets' : 'clips';
-    tabRef.current = next;
-    setTab(next);
   }, []);
+
+  // ── Show/hide choreography (state machine: hidden|showing|shown|hiding) ──
+  // The overlay window is warm (hidden, never destroyed), so body-class state
+  // survives across shows. HIDE: fade #root out via body.is-hidden (70ms),
+  // then the native hide() runs on transitionend (80ms timeout fallback).
+  // SHOW: the window is shown while the mask is still on; two rAF ticks
+  // guarantee one presented painted frame before the mask lifts (100ms fade).
+  // Hide is idempotent: a re-press while fading does NOT cancel (the
+  // cancel path exists only so an actual show can abort an in-flight fade);
+  // the mask stays ON whenever the window is invisible, so a re-press or a
+  // stale timeout rAF can never remove it while hidden (no rebound reveal).
+  const overlayPhaseRef = useRef<'hidden' | 'showing' | 'shown' | 'hiding'>('hidden');
+  const pendingHideRef = useRef<{ cancel: () => void } | null>(null);
+  // Bumped on every overlay-opened; each show's rAF chain only lifts the mask
+  // for its own epoch, so overlapping shows under hotkey spam can't fight.
+  const showEpochRef = useRef(0);
+
+  const requestHide = (gen?: number | null) => {
+    // Tell Rust this generation is handled: its 250ms fallback only fires if
+    // the webview never acknowledged (e.g. a crashed renderer).
+    if (typeof gen === 'number') invoke('overlay_hide_ack', { gen }).catch(() => {});
+
+    // Already fading out: keep the fade (restart semantics would re-run the
+    // fade anyway). Crucially, never lift the mask while invisible.
+    if (pendingHideRef.current) return;
+
+    const html = document.documentElement;
+    const fadeTarget = getFadeTarget();
+    overlayPhaseRef.current = 'hiding';
+    invoke('overlay_phase_ack', { phase: 'hiding' }).catch(() => {});
+    html.classList.add('wm-hiding', 'wm-hidden');
+    let cancelled = false;
+    let finished = false;
+    const finish = () => {
+      if (cancelled || finished) return;
+      finished = true;
+      pendingHideRef.current = null;
+      overlayPhaseRef.current = 'hidden';
+      invoke('overlay_phase_ack', { phase: 'hidden' }).catch(() => {});
+      fadeTarget.removeEventListener('transitionend', onEnd);
+      html.classList.remove('wm-hiding');
+      // Blur/paste may have hidden the window mid-fade — only call the native
+      // hide (which restores focus to the target app) if we are still visible.
+      // The mask class stays ON while invisible; the show path lifts it.
+      getCurrentWindow()
+        .isVisible()
+        .then((vis) => {
+          if (vis) invoke('hide_overlay').catch(console.error);
+        })
+        .catch(() => invoke('hide_overlay').catch(console.error));
+    };
+    const onEnd = (e: TransitionEvent) => {
+      if (e.target === fadeTarget && e.propertyName === 'opacity') finish();
+    };
+    fadeTarget.addEventListener('transitionend', onEnd);
+    const timer = window.setTimeout(finish, 100); // 90ms fade + slack
+    pendingHideRef.current = {
+      // Only the show path calls cancel: abort the fade WITHOUT lifting the
+      // mask (the show handler lifts it itself after two presented frames).
+      cancel: () => {
+        if (cancelled || finished) return;
+        cancelled = true;
+        finished = true;
+        window.clearTimeout(timer);
+        fadeTarget.removeEventListener('transitionend', onEnd);
+        html.classList.remove('wm-hiding');
+        pendingHideRef.current = null;
+      },
+    };
+    if (html.dataset.material === 'glass') finish();
+  };
 
   useEffect(() => {
     logClient('QuickOverlay mounted.');
@@ -622,6 +756,7 @@ export const QuickOverlay: React.FC = () => {
     window.__carbonSetSnippets = (data: Snippet[]) => {
       if (Array.isArray(data)) {
         setSnSnippets(data);
+        setSnInitialLoaded(true);
         setSnSelectedId((prev) => {
           if (data.length === 0) return null;
           return prev && data.some((s) => s.id === prev) ? prev : data[0].id;
@@ -670,6 +805,7 @@ export const QuickOverlay: React.FC = () => {
       if (Array.isArray(e.payload)) {
         const list = e.payload;
         setSnSnippets(list);
+        setSnInitialLoaded(true);
         setSnSelectedId((prev) => {
           if (list.length === 0) return null;
           return prev && list.some((s) => s.id === prev) ? prev : list[0].id;
@@ -679,7 +815,57 @@ export const QuickOverlay: React.FC = () => {
 
     const unlistenOpened = safeListen('overlay-opened', () => {
       logClient('Received overlay-opened event.');
-      if (previewResizeTimer.current) window.clearTimeout(previewResizeTimer.current);
+      // ── Show choreography (F1) ──
+      // Cancel any in-flight fade-hide (a toggle re-press mid-fade), keep the
+      // wm-hidden mask on, wait TWO presented frames (guarantees one painted
+      // present after show()), then lift the mask -> 100ms fade-in. The rAF
+      // chain is guarded by a show epoch: a stale chain from an earlier show
+      // (hotkey spam) can never lift a NEWER show's mask — each lift only
+      // applies to its own epoch, so a quick hide after the double rAF can't
+      // be undone by leftover callbacks (no rebound reveal).
+      const showEpoch = (showEpochRef.current += 1);
+      if (pendingHideRef.current) pendingHideRef.current.cancel();
+      overlayPhaseRef.current = 'showing';
+      invoke('overlay_phase_ack', { phase: 'showing' }).catch(() => {});
+      finalizeTransition(previewOpenRef.current);
+
+      const html = document.documentElement;
+      html.classList.remove('wm-hiding');
+      if (html.dataset.material === 'glass') {
+        // First painted frame is on screen: tell native to lift the DWM
+        // cloak gate, then unmask. DWM never composites this window before
+        // the ack, so no white intermediate frame can appear (glass mode).
+        invoke('overlay_painted').catch(() => {});
+        html.classList.remove('wm-hidden');
+        overlayPhaseRef.current = 'shown';
+        invoke('overlay_phase_ack', { phase: 'shown' }).catch(() => {});
+      } else {
+      if (!html.classList.contains('wm-hidden')) {
+        // Last hide was native (paste/blur paths): snap the mask on with no
+        // transition — nothing may animate while the window was invisible.
+        html.classList.add('wm-hidden', 'no-anim');
+        void html.offsetWidth; // flush styles into this frame
+        html.classList.remove('no-anim');
+      }
+      const gateStarted = performance.now();
+      let framesSinceShow = 0;
+      const releaseWhenPainted = () => requestAnimationFrame(() => {
+        if (showEpoch !== showEpochRef.current || overlayPhaseRef.current !== 'showing') return;
+        framesSinceShow += 1;
+        const painted = html.dataset.painted === '1';
+        if ((painted && framesSinceShow >= 2) || performance.now() - gateStarted >= 500) {
+          // Painted: release the native DWM cloak gate first so the first
+          // composited frame is real content, then unmask for the fade-in.
+          invoke('overlay_painted').catch(() => {});
+          html.classList.remove('wm-hidden');
+          overlayPhaseRef.current = 'shown';
+          invoke('overlay_phase_ack', { phase: 'shown' }).catch(() => {});
+          return;
+        }
+        releaseWhenPainted();
+      });
+      releaseWhenPainted();
+      }
       setSearch('');
       setActionPanelOpen(false);
       setActionIndex(0);
@@ -689,18 +875,34 @@ export const QuickOverlay: React.FC = () => {
       loadTargetApp();
       fetchItems();
       fetchSnippets();
-      // Always open on the user's chosen default tab (Behavior -> "Overlay opens on")
-      // so the overlay reliably shows the expected first tab on every summon.
+      // Re-sync live settings (preview/snippets flags) without touching the
+      // tab — the overlay reopens on the last-used tab.
       invoke<AppSettings>('get_settings')
         .then((s) => {
-          if (s && typeof s.overlay_default_tab === 'string') {
-            applyOverlaySettings(s);
-          }
+          if (s) applyOverlaySettings(s);
           focusSearchInput();
         })
         .catch(() => {
           focusSearchInput();
         });
+    });
+
+    const unlistenCancelHide = safeListen('overlay-cancel-hide', () => {
+      logClient('Received overlay-cancel-hide event.');
+      if (pendingHideRef.current) {
+        pendingHideRef.current.cancel();
+        pendingHideRef.current = null;
+      }
+      overlayPhaseRef.current = 'shown';
+      const html = document.documentElement;
+      invoke('overlay_painted').catch(() => {});
+      html.classList.remove('wm-hiding', 'wm-hidden');
+      invoke('overlay_phase_ack', { phase: 'shown' }).catch(() => {});
+    });
+
+    const unlistenHideReq = safeListen<number>('overlay-hide-requested', (e) => {
+      logClient(`Received overlay-hide-requested (gen=${e.payload}).`);
+      requestHide(e.payload);
     });
 
     const unlistenSettings = safeListen<AppSettings>('settings-updated', (e) => {
@@ -774,6 +976,8 @@ export const QuickOverlay: React.FC = () => {
       unlistenData.then((fn) => fn());
       unlistenSnData.then((fn) => fn());
       unlistenOpened.then((fn) => fn());
+      unlistenCancelHide.then((fn) => fn());
+      unlistenHideReq.then((fn) => fn());
       unlistenSettings.then((fn) => fn());
       unlistenCycle.then((fn) => fn());
       unlistenStatus.then((fn) => fn());
@@ -853,19 +1057,85 @@ export const QuickOverlay: React.FC = () => {
     }
   };
 
-  const togglePreview = () => {
-    setPreviewOpen((prev) => {
-      const next = !prev;
-      if (previewResizeTimer.current) window.clearTimeout(previewResizeTimer.current);
-      previewResizeTimer.current = window.setTimeout(
-        () => {
-          invoke('set_overlay_preview', { enabled: next }).catch(console.error);
-        },
-        next ? 0 : 280
-      );
-      return next;
-    });
-  };
+  // F2 & F3 PREVIEW TOGGLE PROTOCOL (State machine: idle | out | snap | in):
+  // Step 1: CONTENT-OUT (90ms linear fade to opacity 0)
+  // Step 2: SNAP (add html.wm-resizing + 0ms animated SetWindowPos + layout snap behind opacity 0, wait 2 rAF ticks)
+  // Step 3: CONTENT-IN (remove html.wm-resizing + 160ms opacity settle; preview stays spatially locked)
+  // Interruption: if toggled during ANY in-flight phase, instantly finalize previous target state, then start fresh transition.
+  // Watchdog: force-finalize if in-flight >380ms.
+  // Reduced motion: instant snap without fade.
+  const togglePreview = useCallback(() => {
+    const isReduced =
+      typeof window !== 'undefined' &&
+      window.matchMedia &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    if (isReduced) {
+      const next = !previewOpenRef.current;
+      previewOpenRef.current = next;
+      targetPreviewOpenRef.current = next;
+      setPreviewOpen(next);
+      invoke('set_overlay_preview', { enabled: next }).catch(console.error);
+      return;
+    }
+
+    // F3 Single-live-layout rule:
+    // If Tab is pressed during ANY phase of an in-flight transition:
+    // 1. Instantly finalize the current phase (clear timers, settle state to target).
+    // 2. Immediately begin the fresh transition from that settled state.
+    if (previewPhaseRef.current !== 'idle') {
+      finalizeTransition();
+    }
+
+    const currentSettled = previewOpenRef.current;
+    const next = !currentSettled;
+    targetPreviewOpenRef.current = next;
+
+    // Watchdog timer: if any phase takes >380ms without completing, force-finalize to target state.
+    if (watchdogTimerRef.current) window.clearTimeout(watchdogTimerRef.current);
+    watchdogTimerRef.current = window.setTimeout(() => {
+      console.warn('[overlay] Preview transition watchdog triggered (>380ms)');
+      finalizeTransition(next);
+    }, 380);
+
+    // Phase 1: CONTENT-OUT (90ms linear fade to opacity 0)
+    previewPhaseRef.current = 'out';
+    setPreviewPhase('out');
+
+    previewTimerRef.current = window.setTimeout(() => {
+      // Phase 2: SNAP (0ms animated SetWindowPos + layout snap behind opacity 0)
+      previewPhaseRef.current = 'snap';
+      setPreviewPhase('snap');
+      // F2 SNAP MASK: add html.wm-resizing during SetWindowPos + 2 rAF ticks
+      document.documentElement.classList.add('wm-resizing');
+
+      previewOpenRef.current = next;
+      setPreviewOpen(next);
+      invoke('set_overlay_preview', { enabled: next }).catch(console.error);
+
+      // Wait 2 rAF ticks for DWM presentation of new size
+      previewRafRef.current = requestAnimationFrame(() => {
+        previewRafRef.current = requestAnimationFrame(() => {
+          // Phase 3: CONTENT-IN (160ms cubic-bezier; no translation)
+          // Remove html.wm-resizing at the same tick content-in starts
+          document.documentElement.classList.remove('wm-resizing');
+          previewPhaseRef.current = 'in';
+          setPreviewPhase('in');
+
+          previewTimerRef.current = window.setTimeout(() => {
+            previewPhaseRef.current = 'idle';
+            setPreviewPhase('idle');
+            if (watchdogTimerRef.current) {
+              window.clearTimeout(watchdogTimerRef.current);
+              watchdogTimerRef.current = null;
+            }
+            previewTimerRef.current = null;
+            requestAnimationFrame(assertSingleLiveLayout);
+          }, 180);
+        });
+      });
+    }, 90);
+  }, [finalizeTransition]);
 
   // The highlighted clip of the VISIBLE (possibly app-filtered) list — every
   // paste/queue/preview action must operate on this, not the unfiltered array.
@@ -1025,7 +1295,7 @@ export const QuickOverlay: React.FC = () => {
     // Global hotkey toggles (Ctrl+Shift+Z hides overlay, Ctrl+Alt+X toggles enlarged)
     if (matchesHotkeyCombo(e, hotkeyStatus?.overlay || 'Ctrl+Shift+Z')) {
       e.preventDefault();
-      invoke('hide_overlay').catch(console.error);
+      requestHide();
       return;
     }
     if (matchesHotkeyCombo(e, hotkeyStatus?.enlarged || 'Ctrl+Alt+X')) {
@@ -1037,7 +1307,7 @@ export const QuickOverlay: React.FC = () => {
     // Escape always hides overlay
     if (e.key === 'Escape') {
       e.preventDefault();
-      invoke('hide_overlay').catch(console.error);
+      requestHide();
       return;
     }
 
@@ -1144,8 +1414,8 @@ export const QuickOverlay: React.FC = () => {
     if (matchesHotkeyCombo(e, hotkeyStatus?.overlay || 'Ctrl+Shift+Z')) {
       e.preventDefault();
       e.stopPropagation();
-      logClient('Overlay toggle hotkey pressed inside overlay webview, invoking hide_overlay');
-      invoke('hide_overlay').catch(console.error);
+      logClient('Overlay toggle hotkey pressed inside overlay webview, running hide choreography');
+      requestHide();
       return;
     }
     if (matchesHotkeyCombo(e, hotkeyStatus?.enlarged || 'Ctrl+Alt+X')) {
@@ -1243,8 +1513,8 @@ export const QuickOverlay: React.FC = () => {
     // Escape always hides overlay
     if (e.key === 'Escape') {
       e.preventDefault();
-      logClient('Escape pressed, invoking hide_overlay');
-      invoke('hide_overlay').catch(console.error);
+      logClient('Escape pressed, running hide choreography');
+      requestHide();
       return;
     }
 
@@ -1391,6 +1661,17 @@ export const QuickOverlay: React.FC = () => {
       }}
     >
       <div className={`overlay ${!previewOpen ? 'no-preview' : ''} ${tab === 'snippets' ? 'sn-tab' : ''}`}>
+        <div
+          id="content"
+          className={`overlay-content ${
+            previewPhase === 'out'
+              ? 'content-fading-out'
+              : previewPhase === 'in'
+              ? 'content-fading-in'
+              : ''
+          }`}
+          data-carbon-layout-layer="overlay"
+        >
         {/* Top Search Bar — no tab switcher header: reopening restores the
             view you left (clips or snippets, preview open or closed). The
             placeholder announces the active tab; Left/Right in an empty
@@ -1536,7 +1817,16 @@ export const QuickOverlay: React.FC = () => {
                     </div>
                   )}
                 </div>
-              ) : null
+              ) : (
+                <div className="ov-loading" aria-label="Loading clips">
+                  <div className="sk" />
+                  <div className="sk" />
+                  <div className="sk" />
+                  <div className="sk" />
+                  <div className="sk" />
+                  <div className="sk" />
+                </div>
+              )
             ) : (
               (() => {
                 const groups = groupItemsByDate(displayItems);
@@ -1569,10 +1859,19 @@ export const QuickOverlay: React.FC = () => {
           {/* Snippets list (always mounted; hidden when the Clips tab is active) */}
           <div className={`overlay-list sn-overlay-list ${tab === 'clips' ? 'inactive-tab' : ''}`}>
             {snSnippets.length === 0 ? (
-              <div className="empty">
-                <div className="big">No snippets yet</div>
-                <div className="sub">Create snippets from the full window, then recall them here.</div>
-              </div>
+              snInitialLoaded ? (
+                <div className="empty">
+                  <div className="big">No snippets yet</div>
+                  <div className="sub">Create snippets from the full window, then recall them here.</div>
+                </div>
+              ) : (
+                <div className="ov-loading" aria-label="Loading snippets">
+                  <div className="sk" />
+                  <div className="sk" />
+                  <div className="sk" />
+                  <div className="sk" />
+                </div>
+              )
             ) : snFiltered.length === 0 ? (
               <div className="empty">
                 <div className="big">No snippets found</div>
@@ -1756,12 +2055,13 @@ export const QuickOverlay: React.FC = () => {
             </span>
           </div>
           <div className="bar-right">
-            <span className="hint" onClick={() => invoke('hide_overlay').catch(console.error)}>
+            <span className="hint" onClick={() => requestHide()}>
               <span className="key">Esc</span>
               <b>Close</b>
             </span>
           </div>
         </div>
+      </div>
 
         {/* Action Panel Modal (Ctrl+K) */}
         {actionPanelOpen && selectedItem && (
