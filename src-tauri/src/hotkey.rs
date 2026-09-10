@@ -57,8 +57,12 @@ fn set_window_cloaked(window: &tauri::WebviewWindow, cloaked: bool) {
     }
     // Single choke point for the logical-visibility flag: every cloak and
     // every painted-ack/fallback uncloak flows through here, so
-    // is_overlay_visible() can never go stale.
-    OVERLAY_CLOAKED.store(cloaked, Ordering::SeqCst);
+    // is_overlay_visible() can never go stale. The flag tracks the OVERLAY
+    // only — main-window (un)cloaks must not touch it, or every main show
+    // would fake an "overlay open" and break the enlarged toggle.
+    if window.label() == "overlay" {
+        OVERLAY_CLOAKED.store(cloaked, Ordering::SeqCst);
+    }
     crate::paste::log_diag(&format!(
         "[DWM_CLOAK] window='{}' cloaked={}",
         window.label(),
@@ -69,7 +73,9 @@ fn set_window_cloaked(window: &tauri::WebviewWindow, cloaked: bool) {
 #[cfg(not(target_os = "windows"))]
 fn set_window_cloaked(window: &tauri::WebviewWindow, cloaked: bool) {
     let _ = window;
-    OVERLAY_CLOAKED.store(cloaked, Ordering::SeqCst);
+    if window.label() == "overlay" {
+        OVERLAY_CLOAKED.store(cloaked, Ordering::SeqCst);
+    }
 }
 
 /// Show generation per surface: a painted-ack or fallback uncloak only
@@ -80,6 +86,11 @@ static ENLARGED_SHOW_GEN: AtomicU64 = AtomicU64::new(0);
 
 fn uncloak_overlay_if_current(app: &AppHandle, gen: u64) {
     if OVERLAY_SHOW_GEN.load(Ordering::SeqCst) != gen {
+        return;
+    }
+    // A stale uncloak (e.g. the show's fallback firing after a quick hide)
+    // must never revive the visibility flag on a hidden window.
+    if get_overlay_phase() != OverlayPhase::Showing && get_overlay_phase() != OverlayPhase::Shown {
         return;
     }
     if let Some(win) = app.get_webview_window("overlay") {
@@ -97,6 +108,10 @@ fn uncloak_enlarged_if_current(app: &AppHandle, gen: u64) {
         return;
     }
     if let Some(win) = app.get_webview_window("main") {
+        // Skip a stale uncloak once the window is natively hidden again.
+        if !win.is_visible().unwrap_or(false) {
+            return;
+        }
         #[cfg(target_os = "windows")]
         unsafe {
             use windows::Win32::Graphics::Dwm::DwmFlush;
@@ -469,7 +484,11 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
             return;
         }
     };
-    let is_visible = overlay_win.is_visible().unwrap_or(false);
+    // NB: prewarm leaves the overlay WS_VISIBLE-but-DWM-cloaked (warm
+    // swapchain, invisible on screen), so tao is_visible() alone is TRUE from
+    // startup. The toggle must ALSO require uncloaked, or the very first
+    // press takes the hide path and nothing ever appears on screen.
+    let is_visible = overlay_win.is_visible().unwrap_or(false) && is_overlay_visible();
     let phase = get_overlay_phase();
     crate::paste::log_diag(&format!(
         "[HOTKEY] Overlay state: phase={:?}, is_visible={}",

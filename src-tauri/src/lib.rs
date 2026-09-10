@@ -637,19 +637,8 @@ fn set_overlay_preview(
     let mut pos_x: i32;
     let mut pos_y: i32;
     if let (Ok(old_pos), Ok(old_size)) = (window.outer_position(), window.outer_size()) {
-        let cx = old_pos.x + old_size.width as i32 / 2;
-        let cy = old_pos.y + old_size.height as i32 / 2;
-        pos_x = cx - w_phys as i32 / 2;
-        pos_y = cy - h_phys as i32 / 2;
-        // Clamp into the current monitor so the resized window stays on-screen
-        if let Ok(Some(monitor)) = window.current_monitor() {
-            let m_pos = monitor.position();
-            let m_size = monitor.size();
-            let max_x = m_pos.x + m_size.width as i32 - w_phys as i32;
-            let max_y = m_pos.y + m_size.height as i32 - h_phys as i32;
-            pos_x = pos_x.clamp(m_pos.x, max_x.max(m_pos.x));
-            pos_y = pos_y.clamp(m_pos.y, max_y.max(m_pos.y));
-        }
+        pos_x = old_pos.x + old_size.width as i32 / 2 - w_phys as i32 / 2;
+        pos_y = old_pos.y + old_size.height as i32 / 2 - h_phys as i32 / 2;
     } else {
         let (cx, cy) = paste::get_cursor_position();
         let (pos_x_l, pos_y_l) = hotkey::calculate_overlay_position(cx, cy, w_log, h_log, scale);
@@ -657,71 +646,20 @@ fn set_overlay_preview(
         pos_y = pos_y_l;
     }
 
+    // Instant centered snap behind the renderer's fade mask (glass behavior):
+    // animating the native surface reallocates the composition surface every
+    // frame and reads as slow, swimmy Tab switching.
     #[cfg(windows)]
     {
         use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{
-            SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
-        };
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
         if let Ok(hwnd) = window.hwnd() {
-            let h_raw: isize = hwnd.0 as isize;
-            let (fx, fy, fw, fh) = if let (Ok(old_pos), Ok(old_size)) =
-                (window.outer_position(), window.outer_size())
-            {
-                (
-                    old_pos.x,
-                    old_pos.y,
-                    old_size.width as i32,
-                    old_size.height as i32,
-                )
-            } else {
-                (pos_x, pos_y, w_phys as i32, h_phys as i32)
-            };
-
-            // Animate the shell resize smoothly ease-out in lockstep with the CSS preview transition.
-            // A generation counter aborts stale animations when Tab is spammed;
-            // the final exact frame guarantees the settled rect is correct.
-            static ANIM_GEN: std::sync::atomic::AtomicU32 =
-                std::sync::atomic::AtomicU32::new(0);
-            let gen = ANIM_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            let total_ms: u64 = 280;
-            let steps: u32 = 14;
-            std::thread::spawn(move || {
-                let h = HWND(h_raw as *mut _);
-                for i in 1..=steps {
-                    std::thread::sleep(std::time::Duration::from_millis(total_ms / steps as u64));
-                    if ANIM_GEN.load(std::sync::atomic::Ordering::Relaxed) != gen {
-                        return;
-                    }
-                    let t = i as f32 / steps as f32;
-                    let e = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t); // ease-out cubic
-                    let lerp = |a: i32, b: i32| a + ((b - a) as f32 * e).round() as i32;
-                    unsafe {
-                        let _ = SetWindowPos(
-                            h,
-                            None,
-                            lerp(fx, pos_x),
-                            lerp(fy, pos_y),
-                            lerp(fw, w_phys as i32),
-                            lerp(fh, h_phys as i32),
-                            SWP_NOACTIVATE | SWP_NOZORDER,
-                        );
-                    }
-                }
-                if ANIM_GEN.load(std::sync::atomic::Ordering::Relaxed) == gen {
-                    unsafe {
-                        let _ = SetWindowPos(
-                            h,
-                            None,
-                            pos_x,
-                            pos_y,
-                            w_phys as i32,
-                            h_phys as i32,
-                            SWP_NOACTIVATE | SWP_NOZORDER,
-                        );
-                    }
-                }
-            });
+            unsafe {
+                let _ = SetWindowPos(
+                    HWND(hwnd.0 as *mut _), None, pos_x, pos_y,
+                    w_phys as i32, h_phys as i32, SWP_NOACTIVATE | SWP_NOZORDER,
+                );
+            }
         }
     }
     #[cfg(not(windows))]
