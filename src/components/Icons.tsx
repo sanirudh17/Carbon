@@ -227,17 +227,8 @@ export function getTypeIcon(kind: ContentType) {
   }
 }
 
-export function getTypeColor(kind: ContentType): string {
-  switch (kind) {
-    case 'code': return 'var(--tint-code)';
-    case 'rich_text': return 'var(--tint-rich)';
-    case 'image': return 'var(--tint-image)';
-    case 'file': return 'var(--tint-files)';
-    case 'link': return 'var(--tint-link)';
-    case 'email': return 'var(--tint-email)';
-    case 'color': return 'var(--tint-color)';
-    default: return 'var(--tint-text)';
-  }
+export function getTypeColor(_kind?: ContentType): string {
+  return 'currentColor';
 }
 
 export function getTypeLabel(kind: ContentType): string {

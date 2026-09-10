@@ -23,15 +23,21 @@
   --tooltip-text: #F4F4F6;
   --nav-hover-bg: #21252D;
   --nav-hover-text: #D9DDE5;
+  /* Monochrome Icon & Tile Tokens (ADDENDUM v10.2) */
+  --tile-bg: rgba(255, 255, 255, 0.06);
+  --tile-size: 36px;
+  --tile-radius: 10px;
+  --glyph-alpha: 0.72;
+  --glyph-size: 20px;
   --tint-alpha: 12%;
-  --tint-text: #B6C2CF;
-  --tint-code: #7E96F8;
-  --tint-rich: #F59E0B;
-  --tint-image: #EC4899;
-  --tint-files: #5B9DFF;
-  --tint-link: #29D3EC;
-  --tint-email: #38C7CA;
-  --tint-color: #93A8FA;
+  --tint-text: currentColor;
+  --tint-code: currentColor;
+  --tint-rich: currentColor;
+  --tint-image: currentColor;
+  --tint-files: currentColor;
+  --tint-link: currentColor;
+  --tint-email: currentColor;
+  --tint-color: currentColor;
   --danger: #F87171;
   /* Snippet placeholder token colors (inline syntax highlighting) */
   --sn-tok: #34D399;
@@ -126,15 +132,21 @@ html.win-library body {
   --tooltip-text: #0F172A;
   --nav-hover-bg: #DFE5EE;
   --nav-hover-text: #1B2432;
+  /* Monochrome Icon & Tile Tokens (ADDENDUM v10.2) */
+  --tile-bg: rgba(0, 0, 0, 0.05);
+  --tile-size: 36px;
+  --tile-radius: 10px;
+  --glyph-alpha: 0.66;
+  --glyph-size: 20px;
   --tint-alpha: 12%;
-  --tint-text: #26334A;
-  --tint-code: #3D5BD9;
-  --tint-rich: #D97706;
-  --tint-image: #DB2777;
-  --tint-files: #2563EB;
-  --tint-link: #0E7490;
-  --tint-email: #116E71;
-  --tint-color: #4A69E8;
+  --tint-text: currentColor;
+  --tint-code: currentColor;
+  --tint-rich: currentColor;
+  --tint-image: currentColor;
+  --tint-files: currentColor;
+  --tint-link: currentColor;
+  --tint-email: currentColor;
+  --tint-color: currentColor;
   --danger: #DC2626;
   /* Snippet placeholder token colors (inline syntax highlighting) */
   --sn-tok: #059669;
@@ -921,14 +933,24 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
 }
 
 .type-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+  width: var(--tile-size, 36px);
+  height: var(--tile-size, 36px);
+  border-radius: var(--tile-radius, 10px);
   display: grid;
   place-items: center;
   flex-shrink: 0;
   overflow: hidden;
   background-clip: padding-box;
+  background: var(--tile-bg) !important;
+  color: currentColor !important;
+}
+
+.type-icon svg,
+.type-icon .icon {
+  width: var(--glyph-size, 20px);
+  height: var(--glyph-size, 20px);
+  opacity: var(--glyph-alpha, 0.72);
+  color: currentColor;
 }
 
 .type-icon img {
@@ -1239,7 +1261,14 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   display: grid;
   place-items: center;
   border-radius: 7px;
+  color: currentColor !important;
   transition: background 60ms ease;
+}
+
+.side-ic svg,
+.side-ic .icon {
+  opacity: var(--glyph-alpha, 0.72);
+  color: currentColor;
 }
 
 .side-item:hover {

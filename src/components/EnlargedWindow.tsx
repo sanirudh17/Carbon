@@ -1561,7 +1561,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
           onClick={() => handleSelectFilter('text')}
           title="Text"
         >
-          <span className="side-ic" style={{ color: 'var(--tint-text)' }}>
+          <span className="side-ic">
             <TextIcon />
           </span>
           <span className="hide-when-collapsed">Text</span>
@@ -1573,7 +1573,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
           onClick={() => handleSelectFilter('code')}
           title="Code"
         >
-          <span className="side-ic" style={{ color: 'var(--tint-code)' }}>
+          <span className="side-ic">
             <CodeIcon />
           </span>
           <span className="hide-when-collapsed">Code</span>
@@ -1585,7 +1585,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
           onClick={() => handleSelectFilter('rich_text')}
           title="Rich text"
         >
-          <span className="side-ic" style={{ color: 'var(--tint-rich)' }}>
+          <span className="side-ic">
             <RichTextIcon />
           </span>
           <span className="hide-when-collapsed">Rich text</span>
@@ -1597,7 +1597,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
           onClick={() => handleSelectFilter('image')}
           title="Images"
         >
-          <span className="side-ic" style={{ color: 'var(--tint-image)' }}>
+          <span className="side-ic">
             <ImageIcon />
           </span>
           <span className="hide-when-collapsed">Images</span>
@@ -1609,7 +1609,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
           onClick={() => handleSelectFilter('file')}
           title="Files"
         >
-          <span className="side-ic" style={{ color: 'var(--tint-files)' }}>
+          <span className="side-ic">
             <FilesIcon />
           </span>
           <span className="hide-when-collapsed">Files</span>
@@ -1621,7 +1621,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
           onClick={() => handleSelectFilter('link')}
           title="Links"
         >
-          <span className="side-ic" style={{ color: 'var(--tint-link)' }}>
+          <span className="side-ic">
             <LinksIcon />
           </span>
           <span className="hide-when-collapsed">Links</span>
@@ -1633,7 +1633,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
           onClick={() => handleSelectFilter('email')}
           title="Email"
         >
-          <span className="side-ic" style={{ color: 'var(--tint-email)' }}>
+          <span className="side-ic">
             <EmailIcon />
           </span>
           <span className="hide-when-collapsed">Email</span>
@@ -1645,7 +1645,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
           onClick={() => handleSelectFilter('color')}
           title="Colors"
         >
-          <span className="side-ic" style={{ color: 'var(--tint-color)' }}>
+          <span className="side-ic">
             <ColorsIcon />
           </span>
           <span className="hide-when-collapsed">Colors</span>
