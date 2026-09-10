@@ -634,7 +634,6 @@ fn set_overlay_preview(
         (w_log as f64 * scale).round() as u32,
         (h_log as f64 * scale).round() as u32,
     );
-    if let (Ok(old_pos), Ok(old_size)) = (window.outer_position(), window.outer_size()) {
     let mut pos_x: i32;
     let mut pos_y: i32;
     if let (Ok(old_pos), Ok(old_size)) = (window.outer_position(), window.outer_size()) {

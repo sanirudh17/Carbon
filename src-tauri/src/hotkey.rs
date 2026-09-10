@@ -369,6 +369,7 @@ pub fn prewarm_windows(app: &AppHandle) {
         }
 
         // Warm DB cache and push snapshot directly into WebViews while hidden
+        if let Ok(json) = serde_json::to_string(&settings) {
             for label in ["overlay", "main", "pill", "argprompt"] {
                 if let Some(win) = app.get_webview_window(label) {
                     let _ = win.eval(&format!(
@@ -726,7 +727,7 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
         let _ = main_win.unminimize();
         let show_res = main_win.show();
         let focus_res = main_win.set_focus();
-        crate::paste::log_diag(&format!("[HOTKEY] main_win.show() -> {:?}, set_focus() -> {:?}", show_res, focus_res}));
+        crate::paste::log_diag(&format!("[HOTKEY] main_win.show() -> {:?}, set_focus() -> {:?}", show_res, focus_res));
         // Windows sometimes refuses the first SetForegroundWindow while the
         // window is still materializing. One gentle retry after it settles
         // keeps Enter-to-paste reliable when the user keys in immediately.
