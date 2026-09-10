@@ -2392,6 +2392,9 @@ section:last-child {
   width: 40.5%;
   min-width: 0;
   contain: layout;
+  /* REVERT NOTE (smooth preview grow): animates with the pane so Tab feels
+     like a drawer, not a jump. To revert: delete this transition line. */
+  transition: width 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .overlay.no-preview .overlay-list {
@@ -2409,11 +2412,9 @@ section:last-child {
   min-height: 0;
 }
 
-/* Preview pane animates WIDTH only (expand 170ms cream / collapse 130ms
-   exit). It is a flex child with a hard width — the flex:1 list absorbs the
-   change — and overflow stays hidden permanently: scrolling lives on
-/* F4 PREVIEW SNAP: No CSS width animations. Pane width snaps instantly
-   behind the 60ms opacity: 0 mask so DWM never composites stale raster sizes. */
+/* F4 PREVIEW GROW: pane + list widths ease over 180ms under the snap veil;
+   the veil lifts as content fades in, so the eye sees a smooth finish rather
+   than a jump. See snap-veil rule below. */
 .overlay-preview {
   flex: 0 0 auto;
   width: 0;
@@ -2466,14 +2467,16 @@ section:last-child {
 
 /* REVERT NOTE (preview snap veil): pane-local cover for the snap window so
    fresh pixels settle invisibly while list/card stay visible. Veil snaps on
-   (transition:none) and fades off with content-in. To revert: delete this
-   rule and the snap-veil toggles in togglePreview/finalizeTransition. */
+   (opacity instant) and fades off with content-in; the width grow keeps
+   animating underneath. To revert: delete this rule and the snap-veil
+   toggles in togglePreview/finalizeTransition. */
 .overlay-preview {
-  transition: opacity 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 160ms cubic-bezier(0.16, 1, 0.3, 1), width 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 .overlay-preview.snap-veil {
   opacity: 0 !important;
-  transition: none !important;
+  transition-property: opacity !important;
+  transition-duration: 0ms !important;
   pointer-events: none !important;
 }
 

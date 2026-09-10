@@ -800,6 +800,27 @@ fn request_webview_enlarged_hide(app: &AppHandle) {
             }
         }
     });
+    // REVERT NOTE (slow-close fix): fast twin of the 250ms fallback below —
+    // same rationale as the overlay one (bounds close latency when renderer
+    // timers starve). To revert: delete this spawn block.
+    let app3 = app.clone();
+    thread::spawn(move || {
+        thread::sleep(std::time::Duration::from_millis(150));
+        if ENLARGED_HIDE_GEN.load(Ordering::SeqCst) == gen
+            && ENLARGED_HIDE_ACK.load(Ordering::SeqCst) < gen
+        {
+            if let Some(win) = app3.get_webview_window("main") {
+                if win.is_visible().unwrap_or(false) {
+                    crate::paste::log_diag(
+                        "[HOTKEY] Main webview hide-request slow — fast native hide fallback.",
+                    );
+                    restore_target_window();
+                    let _ = win.eval("document.documentElement.classList.add('wm-hidden')");
+                    let _ = win.hide();
+                }
+            }
+        }
+    });
 }
 
 /// Records that the overlay webview acknowledged a hide-request generation.
@@ -831,6 +852,29 @@ fn request_webview_overlay_hide(app: &AppHandle) {
                         "[HOTKEY] Webview hide-request unacknowledged — native hide fallback.",
                     );
                     hide_overlay_window(&app2);
+                }
+            }
+        }
+    });
+    // REVERT NOTE (slow-close fix): fast twin of the 250ms fallback below.
+    // The webview fade needs JS timers (~100ms when healthy); when the
+    // renderer is choked on an open-storm re-render those timers starve and
+    // close feels ~1s. This 150ms backstop (same ack/phase guards) bounds the
+    // worst case while never firing on a healthy fade. To revert: delete this
+    // spawn block (the 250ms fallback still covers dead renderers).
+    let app3 = app.clone();
+    thread::spawn(move || {
+        thread::sleep(std::time::Duration::from_millis(150));
+        if OVERLAY_HIDE_GEN.load(Ordering::SeqCst) == gen
+            && OVERLAY_HIDE_ACK.load(Ordering::SeqCst) < gen
+            && get_overlay_phase() == OverlayPhase::Hiding
+        {
+            if let Some(win) = app3.get_webview_window("overlay") {
+                if win.is_visible().unwrap_or(false) {
+                    crate::paste::log_diag(
+                        "[HOTKEY] Webview hide-request slow — fast native hide fallback.",
+                    );
+                    hide_overlay_window(&app3);
                 }
             }
         }

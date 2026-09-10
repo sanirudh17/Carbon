@@ -268,6 +268,7 @@ export const QuickOverlay: React.FC = () => {
     }
     document.documentElement.classList.remove('wm-resizing');
     previewPaneRef.current?.classList.remove('snap-veil'); // REVERT: preview flash rework (veil cleanup on interrupt)
+    lastSnapAtRef.current = performance.now(); // interrupted snap still settles caches
 
     const resolvedTarget = typeof targetState === 'boolean' ? targetState : targetPreviewOpenRef.current;
     previewOpenRef.current = resolvedTarget;
@@ -742,8 +743,9 @@ export const QuickOverlay: React.FC = () => {
   // Last time a hide fully completed (finish()). The open path compares it
   // against now to detect cold opens after a long idle (see COLD_IDLE_MS).
   const lastHideAtRef = useRef(performance.now());
-  // First Tab snap needs a longer present window (see below).
-  const previewSnappedOnceRef = useRef(false);
+  // Last snap completion (content-in or interrupt settle). Snaps after a
+  // long idle need the cold present window again (see below).
+  const lastSnapAtRef = useRef(0);
   // Direct handle to the preview pane element for the snap veil.
   const previewPaneRef = useRef<HTMLDivElement | null>(null);
   // Last preview size sent native: skips redundant SetWindowPos storms when
@@ -1218,14 +1220,15 @@ export const QuickOverlay: React.FC = () => {
       sendPreviewSize(next);
 
       // Wait rAF ticks for DWM presentation of new size before content-in.
-      // REVERT NOTE (first-snap white flash fix): the preview subtree stays
-      // mounted while collapsed, so its first paint at real size happens here
-      // — cold style/layout/paint (and image decode) miss the normal 2-tick
-      // window and leak a white frame. The very first snap therefore waits 4
-      // ticks (~64ms, still under the fade); later snaps keep 2. To revert:
-      // replace needTicks with a constant 2 and delete previewSnappedOnceRef.
-      const needTicks = previewSnappedOnceRef.current ? 2 : 4;
-      previewSnappedOnceRef.current = true;
+      // REVERT NOTE (cold-snap white flash fix): after a long idle the
+      // GPU/paint caches are cold again, so a warm 2-tick window leaks a
+      // white frame exactly like the very first snap did. Snaps within
+      // COLD_SNAP_MS of the previous one keep 2 ticks; colder snaps wait 6
+      // (~100ms, still under the watchdog). To revert: replace needTicks
+      // with a constant 2 and delete lastSnapAtRef.
+      const COLD_SNAP_MS = 60000;
+      const isColdSnap = performance.now() - lastSnapAtRef.current > COLD_SNAP_MS;
+      const needTicks = isColdSnap ? 6 : 2;
       let snapTicks = 0;
       const waitSnapTicks = () => {
         previewRafRef.current = requestAnimationFrame(() => {
@@ -1238,6 +1241,7 @@ export const QuickOverlay: React.FC = () => {
           // Lift the pane veil as content fades back in (veil fades via CSS).
           document.documentElement.classList.remove('wm-resizing');
           previewPaneRef.current?.classList.remove('snap-veil'); // REVERT: preview flash rework (veil lift)
+          lastSnapAtRef.current = performance.now();
           previewPhaseRef.current = 'in';
           setPreviewPhase('in');
 
