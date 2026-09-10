@@ -514,12 +514,17 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
 
     // Re-open guard for the double-fire race: while the overlay has focus and
     // the user presses Ctrl+Shift+Z to dismiss it, BOTH the webview's own
-    // keydown handler (invoke("hide_overlay")) AND the registered global
+    // keydown handler (requestHide -> hide_overlay) AND the registered global
     // shortcut fire for the SAME keystroke. Whichever lands second sees the
     // cloak flag already reset and would RE-OPEN the overlay the user just
     // closed — which manifests as "I press the shortcut to remove it and
-    // nothing happens". 300ms is far below any deliberate re-summon, but far
-    // above the interleaving of those two events.
+    // nothing happens".
+    // REVERT NOTE (missed-tap fix): this was 300ms, which demonstrably ate
+    // deliberate re-taps ("Open suppressed (150-267ms after hide)" in the dev
+    // log). Same-keystroke pairs interleave within ~tens of ms, so 120ms keeps
+    // the race covered while letting normal multi-presses through. To revert:
+    // change 120 back to 300 below. To disable the guard entirely, make the
+    // condition `false` (same-keystroke double-fires will reopen the overlay).
     let since_hide = {
         let last = LAST_HIDE_MS.load(Ordering::SeqCst);
         if last > 0 {
@@ -528,7 +533,7 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
             u64::max_value()
         }
     };
-    if since_hide < 300 {
+    if since_hide < 120 {
         crate::paste::log_diag(&format!(
             "[HOTKEY] Open suppressed ({}ms after hide) — double-fire guard.",
             since_hide

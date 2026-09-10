@@ -728,6 +728,9 @@ export const QuickOverlay: React.FC = () => {
   // Bumped on every overlay-opened; each show's rAF chain only lifts the mask
   // for its own epoch, so overlapping shows under hotkey spam can't fight.
   const showEpochRef = useRef(0);
+  // Last time a hide fully completed (finish()). The open path compares it
+  // against now to detect cold opens after a long idle (see COLD_IDLE_MS).
+  const lastHideAtRef = useRef(performance.now());
 
   const requestHide = (gen?: number | null) => {
     // Tell Rust this generation is handled: its 250ms fallback only fires if
@@ -739,7 +742,22 @@ export const QuickOverlay: React.FC = () => {
     if (pendingHideRef.current) return;
 
     const html = document.documentElement;
-    const fadeTarget = getFadeTarget();
+    const isGlassClose = html.dataset.material === 'glass';
+    // In glass the fade target is #root (it owns the opacity rule); the
+    // stylesheet forces `transition: none` there, so without the inline
+    // override below the mask would snap instead of fading.
+    const fadeTarget = isGlassClose
+      ? (document.getElementById('root') ?? document.documentElement)
+      : getFadeTarget();
+    // REVERT NOTE (close-blink fix): this override plus the REMOVED
+    // synchronous glass finish() at the end of requestHide make glass closes
+    // fade 80ms (like solid), softening the hard-cut DWM teardown blink on
+    // every close. To revert: delete this setProperty block AND the
+    // removeProperty lines in finish/cancel below, and restore
+    // `if (html.dataset.material === 'glass') finish();` at the end.
+    if (isGlassClose) {
+      fadeTarget.style.setProperty('transition', 'opacity 80ms linear', 'important');
+    }
     overlayPhaseRef.current = 'hiding';
     invoke('overlay_phase_ack', { phase: 'hiding' }).catch(() => {});
     html.classList.add('wm-hiding', 'wm-hidden');
@@ -749,6 +767,8 @@ export const QuickOverlay: React.FC = () => {
       if (cancelled || finished) return;
       finished = true;
       pendingHideRef.current = null;
+      fadeTarget.style.removeProperty('transition'); // REVERT: glass close-fade cleanup (see above)
+      lastHideAtRef.current = performance.now();
       overlayPhaseRef.current = 'hidden';
       invoke('overlay_phase_ack', { phase: 'hidden' }).catch(() => {});
       fadeTarget.removeEventListener('transitionend', onEnd);
@@ -777,11 +797,11 @@ export const QuickOverlay: React.FC = () => {
         finished = true;
         window.clearTimeout(timer);
         fadeTarget.removeEventListener('transitionend', onEnd);
+        fadeTarget.style.removeProperty('transition'); // REVERT: glass close-fade cleanup (see above)
         html.classList.remove('wm-hiding');
         pendingHideRef.current = null;
       },
     };
-    if (html.dataset.material === 'glass') finish();
   };
 
   useEffect(() => {
@@ -879,7 +899,15 @@ export const QuickOverlay: React.FC = () => {
 
       const html = document.documentElement;
       html.classList.remove('wm-hiding');
-      if (html.dataset.material === 'glass') {
+      // REVERT NOTE (cold-open flash fix): after a long idle the renderer's
+      // swapchain is cold and an immediate painted-ack can uncloak a white
+      // frame — the flash seen only on the first open after a while. Warm
+      // opens (idle <= COLD_IDLE_MS) keep the instant ack; cold opens wait
+      // for presented frames like solid. To revert: set COLD_IDLE_MS to
+      // Infinity (instant ack always) or 0 (gated ack always).
+      const COLD_IDLE_MS = 45000;
+      const idleMs = performance.now() - lastHideAtRef.current;
+      if (html.dataset.material === 'glass' && idleMs <= COLD_IDLE_MS) {
         // First painted frame is on screen: tell native to lift the DWM
         // cloak gate, then unmask. DWM never composites this window before
         // the ack, so no white intermediate frame can appear (glass mode).
@@ -888,6 +916,9 @@ export const QuickOverlay: React.FC = () => {
         overlayPhaseRef.current = 'shown';
         invoke('overlay_phase_ack', { phase: 'shown' }).catch(() => {});
       } else {
+      // Cold glass waits an extra frame with a longer cap; solid is unchanged.
+      const needFrames = html.dataset.material === 'glass' ? 3 : 2;
+      const gateCapMs = html.dataset.material === 'glass' ? 800 : 500;
       if (!html.classList.contains('wm-hidden')) {
         // Last hide was native (paste/blur paths): snap the mask on with no
         // transition — nothing may animate while the window was invisible.
@@ -901,7 +932,7 @@ export const QuickOverlay: React.FC = () => {
         if (showEpoch !== showEpochRef.current || overlayPhaseRef.current !== 'showing') return;
         framesSinceShow += 1;
         const painted = html.dataset.painted === '1';
-        if ((painted && framesSinceShow >= 2) || performance.now() - gateStarted >= 500) {
+        if ((painted && framesSinceShow >= needFrames) || performance.now() - gateStarted >= gateCapMs) {
           // Painted: release the native DWM cloak gate first so the first
           // composited frame is real content, then unmask for the fade-in.
           invoke('overlay_painted').catch(() => {});
