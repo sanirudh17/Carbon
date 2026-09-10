@@ -338,6 +338,11 @@ html[data-material="glass"].wm-hidden #root.wm-fade-target {
   transition: none !important;
 }
 
+html.wm-hiding #root.wm-fade-target {
+  opacity: 0 !important;
+  transition: opacity 90ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
 html.no-anim,
 html.no-anim *,
 html.no-anim body,
@@ -347,10 +352,12 @@ html.no-anim #root {
 }
 
 /* ── F2 SNAP MASK ──
-   During window size snap, drop tint to raw acrylic so repaint-gap frames
-   show pure desktop blur instead of presenting a tint slab. */
-/* Preview changes never resize a live native window, so wm-resizing is kept
-   intentionally inert for compatibility with an interrupted older event. */
+   During cold window size snap, hold mask so repaint-gap frames never flicker. */
+html.wm-resizing,
+html.wm-resizing * {
+  animation: none !important;
+  transition: none !important;
+}
 
 #root {
   width: 100%;
@@ -464,8 +471,10 @@ html.wm-hidden .overlay-content {
 
 html.wm-hiding #content,
 html.wm-hiding .overlay-content {
-  transform: scale(1) !important;
-  transition: opacity 90ms linear !important;
+  opacity: 0 !important;
+  transform: scale(0.985) !important;
+  transition: opacity 90ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 90ms cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
 
 #content.content-fading-out,
@@ -2392,9 +2401,6 @@ section:last-child {
   width: 40.5%;
   min-width: 0;
   contain: layout;
-  /* REVERT NOTE (smooth preview grow): animates with the pane so Tab feels
-     like a drawer, not a jump. To revert: delete this transition line. */
-  transition: width 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .overlay.no-preview .overlay-list {
@@ -2412,9 +2418,8 @@ section:last-child {
   min-height: 0;
 }
 
-/* F4 PREVIEW GROW: pane + list widths ease over 180ms under the snap veil;
-   the veil lifts as content fades in, so the eye sees a smooth finish rather
-   than a jump. See snap-veil rule below. */
+/* F4 PREVIEW DRAWER: preview pane smoothly fades and slides into place;
+   when collapsed, width is 0 and list fills the compact window with zero reflow glitch. */
 .overlay-preview {
   flex: 0 0 auto;
   width: 0;
@@ -2425,10 +2430,16 @@ section:last-child {
   background: var(--glass-preview);
   border-left: none;
   overflow: hidden;
+  opacity: 0;
+  transform: translateX(6px);
+  transition: opacity 120ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .overlay-preview:not(.collapsed) {
   width: 59.5%;
+  opacity: 1;
+  transform: translateX(0);
 }
 
 /* Divider hairline */
@@ -2451,6 +2462,7 @@ section:last-child {
 
 .overlay-preview > * {
   opacity: 0;
+  transition: opacity 100ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .overlay-preview:not(.collapsed) > * {
@@ -2462,21 +2474,20 @@ section:last-child {
    collapsed pane always lands at width 0. */
 .overlay-preview.collapsed {
   width: 0 !important;
+  opacity: 0 !important;
+  transform: translateX(6px) !important;
   pointer-events: none;
 }
 
-/* REVERT NOTE (preview snap veil): pane-local cover for the snap window so
-   fresh pixels settle invisibly while list/card stay visible. Veil snaps on
-   (opacity instant) and fades off with content-in; the width grow keeps
-   animating underneath. To revert: delete this rule and the snap-veil
-   toggles in togglePreview/finalizeTransition. */
-.overlay-preview {
-  transition: opacity 160ms cubic-bezier(0.16, 1, 0.3, 1), width 180ms cubic-bezier(0.16, 1, 0.3, 1);
+.overlay-preview.preview-out {
+  opacity: 0 !important;
+  transform: translateX(6px) !important;
+  transition: opacity 70ms linear, transform 70ms linear !important;
 }
+
 .overlay-preview.snap-veil {
   opacity: 0 !important;
-  transition-property: opacity !important;
-  transition-duration: 0ms !important;
+  transition: none !important;
   pointer-events: none !important;
 }
 

@@ -226,21 +226,61 @@ export const QuickOverlay: React.FC = () => {
   const previewRafRef = useRef<number | null>(null);
   const watchdogTimerRef = useRef<number | null>(null);
 
-  const getFadeTarget = () =>
-    document.documentElement.dataset.material === 'solid'
-      ? document.getElementById('root') ?? document.documentElement
-      : document.documentElement;
+  // F1 Single-Surface Guarantee & State Machine Transition Log
+  interface TransitionRecord {
+    time: number;
+    fromPhase: PreviewPhase;
+    toPhase: PreviewPhase;
+    previewOpen: boolean;
+    targetOpen: boolean;
+    trigger: string;
+  }
+  const transitionLogRef = useRef<TransitionRecord[]>([]);
 
-  const assertSingleLiveLayout = () => {
+  const recordTransition = useCallback((fromPhase: PreviewPhase, toPhase: PreviewPhase, trigger: string) => {
+    if (!import.meta.env.DEV) return;
+    const log = transitionLogRef.current;
+    if (log.length >= 20) log.shift();
+    log.push({
+      time: Math.round(performance.now()),
+      fromPhase,
+      toPhase,
+      previewOpen: previewOpenRef.current,
+      targetOpen: targetPreviewOpenRef.current,
+      trigger,
+    });
+  }, []);
+
+  const assertSingleLiveLayout = useCallback(() => {
     if (!import.meta.env.DEV) return;
     const layers = document.querySelectorAll('[data-carbon-layout-layer="overlay"]');
+    let hasViolation = false;
     if (layers.length !== 1) {
-      console.error(`[overlay] expected one live layout layer; found ${layers.length}`);
+      console.error(`[overlay] VIOLATION: expected exactly 1 live layout surface mounted, found ${layers.length}`);
+      hasViolation = true;
     }
     if (document.documentElement.classList.contains('wm-resizing') && previewPhaseRef.current === 'idle') {
-      console.error('[overlay] wm-resizing leaked after preview transition');
+      console.error('[overlay] VIOLATION: wm-resizing leaked after preview transition (state is idle)');
+      hasViolation = true;
     }
-  };
+    if (previewPaneRef.current?.classList.contains('snap-veil') && previewPhaseRef.current === 'idle') {
+      console.error('[overlay] VIOLATION: snap-veil leaked after preview transition (state is idle)');
+      hasViolation = true;
+    }
+    if (previewPaneRef.current?.classList.contains('preview-out') && previewPhaseRef.current === 'idle') {
+      console.error('[overlay] VIOLATION: preview-out leaked after preview transition (state is idle)');
+      hasViolation = true;
+    }
+    const content = document.getElementById('content');
+    if ((content?.classList.contains('content-fading-out') || content?.classList.contains('content-fading-in')) && previewPhaseRef.current === 'idle') {
+      console.error('[overlay] VIOLATION: content-fading-* leaked after preview transition (state is idle)');
+      hasViolation = true;
+    }
+    if (hasViolation) {
+      console.error('[overlay] State machine transition log (last 20 entries):');
+      console.table(transitionLogRef.current);
+    }
+  }, []);
 
   // Sends the preview size native, deduped: rapid Tab spam otherwise issues
   // a native resize per keystroke (each reallocates the surface → jank and
@@ -252,7 +292,7 @@ export const QuickOverlay: React.FC = () => {
     invoke('set_overlay_preview', { enabled }).catch(console.error);
   };
 
-  // F3 Single-live-layout: instantly finalize current phase (clear timers, settle state to target)
+  // F1 & F3 Single-live-layout: force-finalize current phase (clear timers, strip classes, settle state to target)
   const finalizeTransition = useCallback((targetState?: boolean) => {
     if (previewTimerRef.current) {
       window.clearTimeout(previewTimerRef.current);
@@ -267,9 +307,16 @@ export const QuickOverlay: React.FC = () => {
       watchdogTimerRef.current = null;
     }
     document.documentElement.classList.remove('wm-resizing');
-    previewPaneRef.current?.classList.remove('snap-veil'); // REVERT: preview flash rework (veil cleanup on interrupt)
+    if (previewPaneRef.current) {
+      previewPaneRef.current.classList.remove('snap-veil', 'preview-out');
+    }
+    const contentEl = document.getElementById('content');
+    if (contentEl) {
+      contentEl.classList.remove('content-fading-out', 'content-fading-in');
+    }
     lastSnapAtRef.current = performance.now(); // interrupted snap still settles caches
 
+    const prevPhase = previewPhaseRef.current;
     const resolvedTarget = typeof targetState === 'boolean' ? targetState : targetPreviewOpenRef.current;
     previewOpenRef.current = resolvedTarget;
     targetPreviewOpenRef.current = resolvedTarget;
@@ -278,8 +325,9 @@ export const QuickOverlay: React.FC = () => {
 
     previewPhaseRef.current = 'idle';
     setPreviewPhase('idle');
+    recordTransition(prevPhase, 'idle', `finalizeTransition(target=${resolvedTarget})`);
     requestAnimationFrame(assertSingleLiveLayout);
-  }, []);
+  }, [assertSingleLiveLayout, recordTransition]);
   const [showSnippets, setShowSnippets] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       if (window.__carbonSettings && typeof window.__carbonSettings.show_snippets === 'boolean') {
@@ -753,71 +801,38 @@ export const QuickOverlay: React.FC = () => {
   const lastSentPreviewRef = useRef<boolean | null>(null);
 
   const requestHide = (gen?: number | null) => {
-    // Tell Rust this generation is handled: its 250ms fallback only fires if
-    // the webview never acknowledged (e.g. a crashed renderer).
+    // Tell Rust this generation is handled: fallback only fires if webview hangs
     if (typeof gen === 'number') invoke('overlay_hide_ack', { gen }).catch(() => {});
 
-    // Already fading out: keep the fade (restart semantics would re-run the
-    // fade anyway). Crucially, never lift the mask while invisible.
+    // Already fading out: keep current exit
     if (pendingHideRef.current) return;
 
-    const html = document.documentElement;
-    const isGlassClose = html.dataset.material === 'glass';
-    // In glass the fade target is #root (it owns the opacity rule); the
-    // stylesheet forces `transition: none` there, so without the inline
-    // override below the mask would snap instead of fading.
-    const fadeTarget = isGlassClose
-      ? (document.getElementById('root') ?? document.documentElement)
-      : getFadeTarget();
-    // REVERT NOTE (close-blink fix): this override plus the REMOVED
-    // synchronous glass finish() at the end of requestHide make glass closes
-    // fade 80ms (like solid), softening the hard-cut DWM teardown blink on
-    // every close. To revert: delete this setProperty block AND the
-    // removeProperty lines in finish/cancel below, and restore
-    // `if (html.dataset.material === 'glass') finish();` at the end.
-    if (isGlassClose) {
-      fadeTarget.style.setProperty('transition', 'opacity 80ms linear', 'important');
-    }
     overlayPhaseRef.current = 'hiding';
     invoke('overlay_phase_ack', { phase: 'hiding' }).catch(() => {});
+
+    const html = document.documentElement;
     html.classList.add('wm-hiding', 'wm-hidden');
+
     let cancelled = false;
     let finished = false;
     const finish = () => {
       if (cancelled || finished) return;
       finished = true;
       pendingHideRef.current = null;
-      fadeTarget.style.removeProperty('transition'); // REVERT: glass close-fade cleanup (see above)
       lastHideAtRef.current = performance.now();
       overlayPhaseRef.current = 'hidden';
       invoke('overlay_phase_ack', { phase: 'hidden' }).catch(() => {});
-      fadeTarget.removeEventListener('transitionend', onEnd);
       html.classList.remove('wm-hiding');
-      // Blur/paste may have hidden the window mid-fade — only call the native
-      // hide (which restores focus to the target app) if we are still visible.
-      // The mask class stays ON while invisible; the show path lifts it.
-      getCurrentWindow()
-        .isVisible()
-        .then((vis) => {
-          if (vis) invoke('hide_overlay').catch(console.error);
-        })
-        .catch(() => invoke('hide_overlay').catch(console.error));
+      invoke('hide_overlay').catch(console.error);
     };
-    const onEnd = (e: TransitionEvent) => {
-      if (e.target === fadeTarget && e.propertyName === 'opacity') finish();
-    };
-    fadeTarget.addEventListener('transitionend', onEnd);
-    const timer = window.setTimeout(finish, 100); // 90ms fade + slack
+
+    const timer = window.setTimeout(finish, 90);
     pendingHideRef.current = {
-      // Only the show path calls cancel: abort the fade WITHOUT lifting the
-      // mask (the show handler lifts it itself after two presented frames).
       cancel: () => {
         if (cancelled || finished) return;
         cancelled = true;
         finished = true;
         window.clearTimeout(timer);
-        fadeTarget.removeEventListener('transitionend', onEnd);
-        fadeTarget.style.removeProperty('transition'); // REVERT: glass close-fade cleanup (see above)
         html.classList.remove('wm-hiding');
         pendingHideRef.current = null;
       },
@@ -829,6 +844,15 @@ export const QuickOverlay: React.FC = () => {
     invoke<AppSettings>('get_settings')
       .then(applyOverlaySettings)
       .catch(() => {});
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document.documentElement.dataset.painted = '1';
+        if (previewOpenRef.current) {
+          document.documentElement.setAttribute('data-painted-expanded', '1');
+        }
+      });
+    });
 
     loadTargetApp();
     focusSearchInput();
@@ -903,68 +927,23 @@ export const QuickOverlay: React.FC = () => {
 
     const unlistenOpened = safeListen('overlay-opened', () => {
       logClient('Received overlay-opened event.');
-      // ── Show choreography (F1) ──
-      // Cancel any in-flight fade-hide (a toggle re-press mid-fade), keep the
-      // wm-hidden mask on, wait TWO presented frames (guarantees one painted
-      // present after show()), then lift the mask -> 100ms fade-in. The rAF
-      // chain is guarded by a show epoch: a stale chain from an earlier show
-      // (hotkey spam) can never lift a NEWER show's mask — each lift only
-      // applies to its own epoch, so a quick hide after the double rAF can't
-      // be undone by leftover callbacks (no rebound reveal).
-      const showEpoch = (showEpochRef.current += 1);
+      showEpochRef.current += 1;
       if (pendingHideRef.current) pendingHideRef.current.cancel();
       overlayPhaseRef.current = 'showing';
       invoke('overlay_phase_ack', { phase: 'showing' }).catch(() => {});
       finalizeTransition(previewOpenRef.current);
 
       const html = document.documentElement;
-      html.classList.remove('wm-hiding');
-      // REVERT NOTE (cold-open flash fix): after a long idle the renderer's
-      // swapchain is cold and an immediate painted-ack can uncloak a white
-      // frame — the flash seen only on the first open after a while. Warm
-      // opens (idle <= COLD_IDLE_MS) keep the instant ack; cold opens wait
-      // for presented frames like solid. To revert: set COLD_IDLE_MS to
-      // Infinity (instant ack always) or 0 (gated ack always).
-      const COLD_IDLE_MS = 45000;
-      const idleMs = performance.now() - lastHideAtRef.current;
-      if (html.dataset.material === 'glass' && idleMs <= COLD_IDLE_MS) {
-        // First painted frame is on screen: tell native to lift the DWM
-        // cloak gate, then unmask. DWM never composites this window before
-        // the ack, so no white intermediate frame can appear (glass mode).
-        invoke('overlay_painted').catch(() => {});
-        html.classList.remove('wm-hidden');
-        overlayPhaseRef.current = 'shown';
-        invoke('overlay_phase_ack', { phase: 'shown' }).catch(() => {});
-      } else {
-      // Cold glass waits an extra frame with a longer cap; solid is unchanged.
-      const needFrames = html.dataset.material === 'glass' ? 3 : 2;
-      const gateCapMs = html.dataset.material === 'glass' ? 800 : 500;
-      if (!html.classList.contains('wm-hidden')) {
-        // Last hide was native (paste/blur paths): snap the mask on with no
-        // transition — nothing may animate while the window was invisible.
-        html.classList.add('wm-hidden', 'no-anim');
-        void html.offsetWidth; // flush styles into this frame
-        html.classList.remove('no-anim');
-      }
-      const gateStarted = performance.now();
-      let framesSinceShow = 0;
-      const releaseWhenPainted = () => requestAnimationFrame(() => {
-        if (showEpoch !== showEpochRef.current || overlayPhaseRef.current !== 'showing') return;
-        framesSinceShow += 1;
-        const painted = html.dataset.painted === '1';
-        if ((painted && framesSinceShow >= needFrames) || performance.now() - gateStarted >= gateCapMs) {
-          // Painted: release the native DWM cloak gate first so the first
-          // composited frame is real content, then unmask for the fade-in.
-          invoke('overlay_painted').catch(() => {});
-          html.classList.remove('wm-hidden');
-          overlayPhaseRef.current = 'shown';
-          invoke('overlay_phase_ack', { phase: 'shown' }).catch(() => {});
-          return;
-        }
-        releaseWhenPainted();
-      });
-      releaseWhenPainted();
-      }
+      html.classList.remove('wm-hiding', 'wm-hidden');
+
+      // Release native DWM cloak gate immediately: warm transparent composition
+      // ensures zero white flash, and uncloaking immediately avoids rAF suspension.
+      invoke('overlay_painted').catch(() => {});
+      overlayPhaseRef.current = 'shown';
+      invoke('overlay_phase_ack', { phase: 'shown' }).catch(() => {});
+
+      lastHideAtRef.current = performance.now();
+
       setSearch('');
       setActionPanelOpen(false);
       setActionIndex(0);
@@ -1178,7 +1157,7 @@ export const QuickOverlay: React.FC = () => {
       return;
     }
 
-    // F3 Single-live-layout rule:
+    // F1 & F3 Single-live-layout rule:
     // If Tab is pressed during ANY phase of an in-flight transition:
     // 1. Instantly finalize the current phase (clear timers, settle state to target).
     // 2. Immediately begin the fresh transition from that settled state.
@@ -1190,76 +1169,124 @@ export const QuickOverlay: React.FC = () => {
     const next = !currentSettled;
     targetPreviewOpenRef.current = next;
 
-    // Watchdog timer: if any phase takes >380ms without completing, force-finalize to target state.
+    // F1.2 Watchdog timer (250ms): force-finalize if transition hangs without completing
     if (watchdogTimerRef.current) window.clearTimeout(watchdogTimerRef.current);
     watchdogTimerRef.current = window.setTimeout(() => {
-      console.warn('[overlay] Preview transition watchdog triggered (>380ms)');
+      if (import.meta.env.DEV) {
+        console.warn('[overlay] Preview transition watchdog triggered (>250ms)');
+      }
       finalizeTransition(next);
-    }, 380);
+    }, 250);
 
-    // Phase 1: CONTENT-OUT (90ms linear fade to opacity 0)
-    previewPhaseRef.current = 'out';
-    setPreviewPhase('out');
+    if (next) {
+      // ── OPENING PREVIEW (Tab-in) ──
+      // F2 First-Expand Cold Gate:
+      // Until data-painted-expanded="1" exists, cold expand runs with .wm-resizing
+      // mask held through the snap AND the first two rAFs post-resize; subsequent
+      // (warm) expands keep the fast path unchanged.
+      const html = document.documentElement;
+      const isColdExpand = html.getAttribute('data-painted-expanded') !== '1';
 
-    previewTimerRef.current = window.setTimeout(() => {
-      // Phase 2: SNAP (0ms animated SetWindowPos + layout snap behind opacity 0)
       previewPhaseRef.current = 'snap';
       setPreviewPhase('snap');
-      // F2 SNAP VEIL: veil ONLY the preview pane across the snap window.
-      // REVERT NOTE (preview flash rework): an earlier revision masked the
-      // FULL surface (html.wm-hidden), but that blacked out the whole card on
-      // every toggle and could stick on rapid spam. The veil below covers just
-      // the fresh pixels while list/card stay visible. To revert: delete the
-      // veil add/remove lines here, at content-in start, and in
-      // finalizeTransition (covering falls back to content fades only).
-      document.documentElement.classList.add('wm-resizing');
+      recordTransition('idle', 'snap', isColdExpand ? 'open-cold' : 'open-warm');
+
+      if (isColdExpand) {
+        html.classList.add('wm-resizing');
+      }
       previewPaneRef.current?.classList.add('snap-veil');
 
-      previewOpenRef.current = next;
-      setPreviewOpen(next);
-      sendPreviewSize(next);
+      previewOpenRef.current = true;
+      setPreviewOpen(true);
+      sendPreviewSize(true);
 
-      // Wait rAF ticks for DWM presentation of new size before content-in.
-      // REVERT NOTE (cold-snap white flash fix): after a long idle the
-      // GPU/paint caches are cold again, so a warm 2-tick window leaks a
-      // white frame exactly like the very first snap did. Snaps within
-      // COLD_SNAP_MS of the previous one keep 2 ticks; colder snaps wait 6
-      // (~100ms, still under the watchdog). To revert: replace needTicks
-      // with a constant 2 and delete lastSnapAtRef.
-      const COLD_SNAP_MS = 60000;
-      const isColdSnap = performance.now() - lastSnapAtRef.current > COLD_SNAP_MS;
-      const needTicks = isColdSnap ? 6 : 2;
-      let snapTicks = 0;
-      const waitSnapTicks = () => {
+      if (isColdExpand) {
+        let snapTicks = 0;
+        const waitColdSnapTicks = () => {
+          previewRafRef.current = requestAnimationFrame(() => {
+            snapTicks += 1;
+            if (snapTicks < 2) {
+              waitColdSnapTicks();
+              return;
+            }
+            // Double rAF completed: stamp gate attribute, release mask & veil
+            html.setAttribute('data-painted-expanded', '1');
+            html.classList.remove('wm-resizing');
+            previewPaneRef.current?.classList.remove('snap-veil');
+            lastSnapAtRef.current = performance.now();
+
+            const prevPhase = previewPhaseRef.current;
+            previewPhaseRef.current = 'in';
+            setPreviewPhase('in');
+            recordTransition(prevPhase, 'in', 'cold-content-in');
+
+            previewTimerRef.current = window.setTimeout(() => {
+              const curPhase = previewPhaseRef.current;
+              previewPhaseRef.current = 'idle';
+              setPreviewPhase('idle');
+              recordTransition(curPhase, 'idle', 'cold-settle');
+              if (watchdogTimerRef.current) {
+                window.clearTimeout(watchdogTimerRef.current);
+                watchdogTimerRef.current = null;
+              }
+              previewTimerRef.current = null;
+              requestAnimationFrame(assertSingleLiveLayout);
+            }, 130);
+          });
+        };
+        waitColdSnapTicks();
+      } else {
+        // Subsequent (warm) expands keep the fast path unchanged
         previewRafRef.current = requestAnimationFrame(() => {
-          snapTicks += 1;
-          if (snapTicks < needTicks) {
-            waitSnapTicks();
-            return;
-          }
-          // Phase 3: CONTENT-IN (160ms cubic-bezier; no translation)
-          // Lift the pane veil as content fades back in (veil fades via CSS).
-          document.documentElement.classList.remove('wm-resizing');
-          previewPaneRef.current?.classList.remove('snap-veil'); // REVERT: preview flash rework (veil lift)
+          previewPaneRef.current?.classList.remove('snap-veil');
           lastSnapAtRef.current = performance.now();
+
+          const prevPhase = previewPhaseRef.current;
           previewPhaseRef.current = 'in';
           setPreviewPhase('in');
+          recordTransition(prevPhase, 'in', 'warm-content-in');
 
           previewTimerRef.current = window.setTimeout(() => {
+            const curPhase = previewPhaseRef.current;
             previewPhaseRef.current = 'idle';
             setPreviewPhase('idle');
+            recordTransition(curPhase, 'idle', 'warm-settle');
             if (watchdogTimerRef.current) {
               window.clearTimeout(watchdogTimerRef.current);
               watchdogTimerRef.current = null;
             }
             previewTimerRef.current = null;
             requestAnimationFrame(assertSingleLiveLayout);
-          }, 180);
+          }, 130);
         });
-      };
-      waitSnapTicks();
-    }, 90);
-  }, [finalizeTransition]);
+      }
+    } else {
+      // ── CLOSING PREVIEW (Tab-out) ──
+      // Smooth 70ms fade-out of preview pane, then instant compact snap to 680x440.
+      // List fills 100% of compact window with NO right-to-left layout reflow.
+      const prevPhase = previewPhaseRef.current;
+      previewPhaseRef.current = 'out';
+      setPreviewPhase('out');
+      recordTransition(prevPhase, 'out', 'tab-close');
+
+      previewTimerRef.current = window.setTimeout(() => {
+        previewOpenRef.current = false;
+        setPreviewOpen(false);
+        sendPreviewSize(false);
+
+        const curPhase = previewPhaseRef.current;
+        previewPhaseRef.current = 'idle';
+        setPreviewPhase('idle');
+        recordTransition(curPhase, 'idle', 'close-settle');
+        if (watchdogTimerRef.current) {
+          window.clearTimeout(watchdogTimerRef.current);
+          watchdogTimerRef.current = null;
+        }
+        previewTimerRef.current = null;
+        requestAnimationFrame(assertSingleLiveLayout);
+      }, 70);
+    }
+  }, [finalizeTransition, assertSingleLiveLayout, recordTransition]);
 
   // The highlighted clip of the VISIBLE (possibly app-filtered) list — every
   // paste/queue/preview action must operate on this, not the unfiltered array.
@@ -2042,7 +2069,7 @@ export const QuickOverlay: React.FC = () => {
               ))
             )}
           </div>
-          <div ref={previewPaneRef} className={`overlay-preview ${!previewOpen ? 'collapsed' : ''}`}>
+          <div ref={previewPaneRef} className={`overlay-preview ${!previewOpen ? 'collapsed' : ''} ${previewPhase === 'out' ? 'preview-out' : ''}`}>
             {tab === 'snippets' ? (
               snSelected ? (
                 <>

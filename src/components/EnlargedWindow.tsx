@@ -202,6 +202,20 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   useEffect(() => {
     setEditingContent(selectedItem?.text_content || '');
   }, [selectedItem?.id, selectedItem?.text_content]);
+
+  // F2 Cold gate for library preview: stamp data-painted-expanded after first expand commit + double rAF
+  useEffect(() => {
+    if (!selectedItem) return;
+    const html = document.documentElement;
+    if (html.getAttribute('data-painted-expanded') !== '1') {
+      let r1 = requestAnimationFrame(() => {
+        r1 = requestAnimationFrame(() => {
+          html.setAttribute('data-painted-expanded', '1');
+        });
+      });
+      return () => cancelAnimationFrame(r1);
+    }
+  }, [selectedItem]);
   // A newly selected clip gets fresh (unfocused) scroll state
   useEffect(() => {
     setImgFocused(false);

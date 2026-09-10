@@ -649,6 +649,10 @@ fn set_overlay_preview(
     // Instant centered snap behind the renderer's fade mask (glass behavior):
     // animating the native surface reallocates the composition surface every
     // frame and reads as slow, swimmy Tab switching.
+    let mat = vibrancy::WindowMaterial::from_str(&settings.window_material);
+    vibrancy::set_window_default_background(&window, mat, &settings.theme);
+    crate::webview_bg::set_webview_transparent_background(window.as_ref());
+
     #[cfg(windows)]
     {
         use windows::Win32::Foundation::HWND;

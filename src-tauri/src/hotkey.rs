@@ -136,8 +136,14 @@ fn spawn_uncloak_fallback(app: AppHandle, overlay: bool, gen: u64, after_ms: u64
         thread::sleep(std::time::Duration::from_millis(after_ms));
         if overlay {
             uncloak_overlay_if_current(&app, gen);
+            if let Some(win) = app.get_webview_window("overlay") {
+                let _ = win.eval("document.documentElement.classList.remove('wm-hidden', 'wm-hiding')");
+            }
         } else {
             uncloak_enlarged_if_current(&app, gen);
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.eval("document.documentElement.classList.remove('wm-hidden', 'wm-hiding')");
+            }
         }
     });
 }
@@ -217,6 +223,7 @@ fn ensure_overlay_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
                 Ok(w) => {
                     crate::paste::log_diag("[HOTKEY] Recreated overlay from tauri.conf");
                     crate::vibrancy::init_window_vibrancy(&w, app);
+                    crate::webview_bg::set_webview_transparent_background(w.as_ref());
                     return Some(w);
                 }
                 Err(e) => crate::paste::log_diag(&format!(
@@ -249,6 +256,7 @@ fn ensure_overlay_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
         Ok(w) => {
             crate::paste::log_diag("[HOTKEY] Recreated overlay via manual builder");
             crate::vibrancy::init_window_vibrancy(&w, app);
+            crate::webview_bg::set_webview_transparent_background(w.as_ref());
             Some(w)
         }
         Err(e) => {
@@ -365,6 +373,8 @@ pub fn prewarm_windows(app: &AppHandle) {
             crate::vibrancy::set_round_corners(&win);
             let mat = crate::vibrancy::WindowMaterial::from_str(&settings.window_material);
             crate::vibrancy::apply_window_material(&win, mat);
+            crate::vibrancy::set_window_default_background(&win, mat, &settings.theme);
+            crate::webview_bg::set_webview_transparent_background(win.as_ref());
 
             // Cloak the overlay window and make it WS_VISIBLE without activating,
             // so WebView2 connects its swapchain and finishes its first paint
@@ -505,7 +515,10 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
         return;
     }
 
-    if phase == OverlayPhase::Shown || phase == OverlayPhase::Showing || is_visible {
+    let overlay_is_open = phase == OverlayPhase::Shown
+        || phase == OverlayPhase::Showing
+        || (is_visible && !OVERLAY_CLOAKED.load(Ordering::SeqCst));
+    if overlay_is_open {
         crate::paste::log_diag("[HOTKEY] Overlay is visible/showing. Requesting choreographed fade-hide via webview (toggle)...");
         set_overlay_phase(OverlayPhase::Hiding);
         request_webview_overlay_hide(app_handle);
@@ -663,7 +676,7 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     if overlay_win.is_minimized().unwrap_or(false) {
         let _ = overlay_win.unminimize();
     }
-    let _ = overlay_win.eval("if (document.documentElement.dataset.material === 'solid') document.documentElement.classList.add('wm-hidden'); else document.documentElement.classList.remove('wm-hidden', 'wm-hiding')");
+    let _ = overlay_win.eval("document.documentElement.classList.remove('wm-hidden', 'wm-hiding')");
     let focus_res = overlay_win.set_focus();
     crate::paste::log_diag(&format!(
         "[HOTKEY] overlay_win.set_focus() -> {:?}",
@@ -674,7 +687,7 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     // frame already has data — zero skeleton time like Pico's instant open.
     let _ = app_handle.emit("overlay-opened", ());
     // Backstop: a dead renderer must never leave the window stuck cloaked.
-    spawn_uncloak_fallback(app_handle.clone(), true, overlay_gen, 600);
+    spawn_uncloak_fallback(app_handle.clone(), true, overlay_gen, 200);
     let cached_opt = {
         let mut cache = OVERLAY_PREWARM_CACHE.lock().unwrap();
         if cache.is_none() {
@@ -784,35 +797,12 @@ fn request_webview_enlarged_hide(app: &AppHandle) {
     let _ = app.emit_to("main", "enlarged-hide-requested", gen);
     let app2 = app.clone();
     thread::spawn(move || {
-        thread::sleep(std::time::Duration::from_millis(250));
-        if ENLARGED_HIDE_GEN.load(Ordering::SeqCst) == gen
-            && ENLARGED_HIDE_ACK.load(Ordering::SeqCst) < gen
-        {
+        thread::sleep(std::time::Duration::from_millis(150));
+        if ENLARGED_HIDE_GEN.load(Ordering::SeqCst) == gen {
             if let Some(win) = app2.get_webview_window("main") {
                 if win.is_visible().unwrap_or(false) {
                     crate::paste::log_diag(
-                        "[HOTKEY] Main webview hide-request unacknowledged — native hide fallback.",
-                    );
-                    restore_target_window();
-                    let _ = win.eval("document.documentElement.classList.add('wm-hidden')");
-                    let _ = win.hide();
-                }
-            }
-        }
-    });
-    // REVERT NOTE (slow-close fix): fast twin of the 250ms fallback below —
-    // same rationale as the overlay one (bounds close latency when renderer
-    // timers starve). To revert: delete this spawn block.
-    let app3 = app.clone();
-    thread::spawn(move || {
-        thread::sleep(std::time::Duration::from_millis(150));
-        if ENLARGED_HIDE_GEN.load(Ordering::SeqCst) == gen
-            && ENLARGED_HIDE_ACK.load(Ordering::SeqCst) < gen
-        {
-            if let Some(win) = app3.get_webview_window("main") {
-                if win.is_visible().unwrap_or(false) {
-                    crate::paste::log_diag(
-                        "[HOTKEY] Main webview hide-request slow — fast native hide fallback.",
+                        "[HOTKEY] Main webview hide-request fallback — native hide.",
                     );
                     restore_target_window();
                     let _ = win.eval("document.documentElement.classList.add('wm-hidden')");
@@ -841,40 +831,16 @@ fn request_webview_overlay_hide(app: &AppHandle) {
     let _ = app.emit_to("overlay", "overlay-hide-requested", gen);
     let app2 = app.clone();
     thread::spawn(move || {
-        thread::sleep(std::time::Duration::from_millis(250));
+        thread::sleep(std::time::Duration::from_millis(150));
         if OVERLAY_HIDE_GEN.load(Ordering::SeqCst) == gen
-            && OVERLAY_HIDE_ACK.load(Ordering::SeqCst) < gen
             && get_overlay_phase() == OverlayPhase::Hiding
         {
             if let Some(win) = app2.get_webview_window("overlay") {
                 if win.is_visible().unwrap_or(false) {
                     crate::paste::log_diag(
-                        "[HOTKEY] Webview hide-request unacknowledged — native hide fallback.",
+                        "[HOTKEY] Webview hide fallback timing out — fast native hide fallback.",
                     );
                     hide_overlay_window(&app2);
-                }
-            }
-        }
-    });
-    // REVERT NOTE (slow-close fix): fast twin of the 250ms fallback below.
-    // The webview fade needs JS timers (~100ms when healthy); when the
-    // renderer is choked on an open-storm re-render those timers starve and
-    // close feels ~1s. This 150ms backstop (same ack/phase guards) bounds the
-    // worst case while never firing on a healthy fade. To revert: delete this
-    // spawn block (the 250ms fallback still covers dead renderers).
-    let app3 = app.clone();
-    thread::spawn(move || {
-        thread::sleep(std::time::Duration::from_millis(150));
-        if OVERLAY_HIDE_GEN.load(Ordering::SeqCst) == gen
-            && OVERLAY_HIDE_ACK.load(Ordering::SeqCst) < gen
-            && get_overlay_phase() == OverlayPhase::Hiding
-        {
-            if let Some(win) = app3.get_webview_window("overlay") {
-                if win.is_visible().unwrap_or(false) {
-                    crate::paste::log_diag(
-                        "[HOTKEY] Webview hide-request slow — fast native hide fallback.",
-                    );
-                    hide_overlay_window(&app3);
                 }
             }
         }
@@ -896,13 +862,6 @@ pub fn hide_overlay_window(app: &AppHandle) {
     crate::paste::log_diag("[HIDE_OVERLAY] hide_overlay_window entered. Cloaking window...");
 
     if let Some(win) = app.get_webview_window("overlay") {
-        // Always hide, never close: a live webview makes the next open instant
-        // and avoids the recreate race that showed an unrendered window.
-        // Tell the renderer to keep the wm-hidden mask ON even though content
-        // is already at opacity 0: with a warm (never destroyed) webview the
-        // compositor can otherwise resurrect the last unmasked frame between
-        // hides, which reads as a flash/rebound on the next show.
-        let _ = win.eval("document.documentElement.classList.add('wm-hidden')");
         let hide_res = win.hide();
         crate::paste::log_diag(&format!("[HIDE_OVERLAY] win.hide() returned {:?}", hide_res));
     } else {
