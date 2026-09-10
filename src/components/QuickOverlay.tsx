@@ -257,6 +257,7 @@ export const QuickOverlay: React.FC = () => {
       watchdogTimerRef.current = null;
     }
     document.documentElement.classList.remove('wm-resizing');
+    document.documentElement.classList.remove('wm-hidden'); // REVERT: preview-open flash fix (snap-mask cleanup on interrupt)
 
     const resolvedTarget = typeof targetState === 'boolean' ? targetState : targetPreviewOpenRef.current;
     previewOpenRef.current = resolvedTarget;
@@ -731,6 +732,8 @@ export const QuickOverlay: React.FC = () => {
   // Last time a hide fully completed (finish()). The open path compares it
   // against now to detect cold opens after a long idle (see COLD_IDLE_MS).
   const lastHideAtRef = useRef(performance.now());
+  // First Tab snap needs a longer present window (see below).
+  const previewSnappedOnceRef = useRef(false);
 
   const requestHide = (gen?: number | null) => {
     // Tell Rust this generation is handled: its 250ms fallback only fires if
@@ -1203,13 +1206,26 @@ export const QuickOverlay: React.FC = () => {
       setPreviewOpen(next);
       invoke('set_overlay_preview', { enabled: next }).catch(console.error);
 
-      // Wait 2 rAF ticks for DWM presentation of new size
-      previewRafRef.current = requestAnimationFrame(() => {
+      // Wait rAF ticks for DWM presentation of new size before content-in.
+      // REVERT NOTE (first-snap white flash fix): the preview subtree stays
+      // mounted while collapsed, so its first paint at real size happens here
+      // — cold style/layout/paint (and image decode) miss the normal 2-tick
+      // window and leak a white frame. The very first snap therefore waits 4
+      // ticks (~64ms, still under the fade); later snaps keep 2. To revert:
+      // replace needTicks with a constant 2 and delete previewSnappedOnceRef.
+      const needTicks = previewSnappedOnceRef.current ? 2 : 4;
+      previewSnappedOnceRef.current = true;
+      let snapTicks = 0;
+      const waitSnapTicks = () => {
         previewRafRef.current = requestAnimationFrame(() => {
+          snapTicks += 1;
+          if (snapTicks < needTicks) {
+            waitSnapTicks();
+            return;
+          }
           // Phase 3: CONTENT-IN (160ms cubic-bezier; no translation)
           // Remove html.wm-resizing at the same tick content-in starts
     document.documentElement.classList.remove('wm-resizing');
-    document.documentElement.classList.remove('wm-hidden'); // REVERT: preview-open flash fix (snap-mask cleanup on interrupt)
           document.documentElement.classList.remove('wm-hidden'); // REVERT: preview-open flash fix (snap-mask lift)
           previewPhaseRef.current = 'in';
           setPreviewPhase('in');
@@ -1225,7 +1241,8 @@ export const QuickOverlay: React.FC = () => {
             requestAnimationFrame(assertSingleLiveLayout);
           }, 180);
         });
-      });
+      };
+      waitSnapTicks();
     }, 90);
   }, [finalizeTransition]);
 
