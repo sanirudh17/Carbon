@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Snippet } from '../types';
 import {
@@ -249,19 +249,21 @@ export const SnippetsView: React.FC<{
     navAccumRef.current = 0;
     const list = filteredRef.current;
     if (list.length === 0) return;
-    const delta = Math.max(-2, Math.min(2, steps));
     setSelectedId((prev) => {
       const curIdx = prev ? list.findIndex((s) => s.id === prev) : -1;
       const base = curIdx === -1 ? 0 : curIdx;
-      const next = Math.max(0, Math.min(list.length - 1, base + delta));
-      return list[next].id;
+      const next = (base + steps) % list.length;
+      return list[next < 0 ? next + list.length : next].id;
     });
   }, []);
 
   // Auto-scroll the selected row into view (same feel as the clips list).
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (!selectedId) return;
-    document.getElementById(`snippet-row-${selectedId}`)?.scrollIntoView({ block: 'nearest' });
+    const raf = requestAnimationFrame(() => {
+      document.getElementById(`snippet-row-${selectedId}`)?.scrollIntoView({ block: 'nearest' });
+    });
+    return () => cancelAnimationFrame(raf);
   }, [selectedId]);
 
   // Any mouse click on a button drops keyboard focus from it, so a later

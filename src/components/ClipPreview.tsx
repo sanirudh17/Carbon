@@ -1,30 +1,18 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { ClipItem, ContentType } from '../types';
-import { getTypeColor, LockIcon, EyeIcon, EyeOffIcon, thumbnailCache } from './Icons';
+import { getTypeColor, LockIcon, EyeIcon, EyeOffIcon } from './Icons';
 
 const ImagePreview: React.FC<{ item: ClipItem }> = ({ item }) => {
-  const [src, setSrc] = useState<string>(() => {
-    if (item.image_path) {
-      return thumbnailCache.get(item.image_path) || '';
-    }
-    return '';
-  });
+  const [src, setSrc] = useState<string>(() => (item.image_path ? convertFileSrc(item.image_path) : ''));
 
   useEffect(() => {
     let active = true;
     if (item.image_path) {
-      const cached = thumbnailCache.get(item.image_path);
-      if (cached) {
-        setSrc(cached);
-        return;
-      }
+      setSrc(convertFileSrc(item.image_path));
       invoke<string>('get_image_data_url', { filePath: item.image_path })
         .then((url) => {
-          if (active && url) {
-            thumbnailCache.set(item.image_path!, url);
-            setSrc(url);
-          }
+          if (active && url) setSrc(url);
         })
         .catch(() => {});
     }
@@ -41,6 +29,13 @@ const ImagePreview: React.FC<{ item: ClipItem }> = ({ item }) => {
             src={src}
             alt="Clipboard image preview"
             draggable={false}
+            onError={() => {
+              if (item.image_path) {
+                invoke<string>('get_image_data_url', { filePath: item.image_path })
+                  .then((url) => url && setSrc(url))
+                  .catch(() => {});
+              }
+            }}
           />
         ) : (
           <div className="preview-media-placeholder">Loading image preview...</div>
