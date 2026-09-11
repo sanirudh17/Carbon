@@ -1,217 +1,352 @@
 import React from 'react';
+import {
+  Search,
+  Clock,
+  Type,
+  ScanText,
+  Code,
+  ChevronDown,
+  Filter,
+  CircleHelp,
+  FileText,
+  Image as LucideImage,
+  File as LucideFile,
+  Link as LucideLink,
+  Mail,
+  Palette,
+  Star,
+  Pin,
+  Copy,
+  Clipboard,
+  ClipboardPaste,
+  Trash2,
+  Settings,
+  ChevronRight,
+  ChevronLeft,
+  Check,
+  SunMoon,
+  Video,
+  Folder,
+  Lock,
+  Unlock,
+  Eye,
+  EyeOff,
+  Loader2,
+  ListOrdered,
+  GripVertical,
+  Plus,
+  Pencil,
+  MoreHorizontal,
+  Scissors,
+  Calendar,
+  AtSign,
+  Hash,
+  Zap,
+  Quote,
+  Key,
+  Sliders,
+  AlertTriangle,
+} from 'lucide-react';
 import { ContentType } from '../types';
 import carbonBadgeDarkPng from '../assets/carbon-badge-dark.png';
 import carbonBadgeLightPng from '../assets/carbon-badge-light.png';
 
-export const SearchIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-    <circle cx="11" cy="11" r="7" />
-    <path d="m20 20-3.5-3.5" />
-  </svg>
-);
-
-export const AllIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-    <circle cx="12" cy="12" r="8.5" />
-    <path d="M12 7.5V12l3 2" />
-  </svg>
-);
-
-export const TextIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-    <path d="M5 6.5V4.5h14v2" />
-    <path d="M12 4.5V19.5" />
-    <path d="M9 19.5h6" />
-  </svg>
-);
-
-export const OcrIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M3 7V5a2 2 0 0 1 2-2h2" />
-    <path d="M17 3h2a2 2 0 0 1 2 2v2" />
-    <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
-    <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
-    <path d="M7 8h10" />
-    <path d="M7 12h10" />
-    <path d="M7 16h6" />
-  </svg>
-);
-
-export const CodeIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-    <path d="m8 8-4 4 4 4" />
-    <path d="m16 8 4 4-4 4" />
-    <path d="m13 6-2 12" />
-  </svg>
-);
-
-export const ChevronDownIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="m6 9.5 6 5.5 6-5.5" />
-  </svg>
-);
-
-export const FilterIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M22 4H2l8 9.09V19l4 2v-7.91L22 4z" />
-  </svg>
-);
-
-export const HelpIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="8.5" />
-    <path d="M9.7 9.3a2.4 2.4 0 0 1 4.66.8c0 1.5-2.36 1.9-2.36 3.15" />
-    <path d="M12 16.6h.01" strokeWidth="2.2" />
-  </svg>
-);
-
-export const RichTextIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-    <path d="M4 5h16" />
-    <path d="M4 9h10" />
-    <path d="M4 13h7" />
-    <path d="M4 17h4" />
-    <path d="m15 13 2.5 2.5L22 11" />
-  </svg>
-);
-
-export const ImageIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-    <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
-    <circle cx="9" cy="10" r="1.6" />
-    <path d="m4.5 17.5 5-5 4 4 2.5-2.5 3.5 3.5" />
-  </svg>
-);
-
-export const FilesIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-    <path d="M14 4H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z" />
-    <path d="M14 4v5h5" />
-  </svg>
-);
-
-export const LinksIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-    <path d="M10 14a4.5 4.5 0 0 0 6.4.4l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.6 1.6" />
-    <path d="M14 10a4.5 4.5 0 0 0-6.4-.4l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.6-1.6" />
-  </svg>
-);
-
-export const EmailIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-    <rect x="3.5" y="5.5" width="17" height="13" rx="2.5" />
-    <path d="m4.5 7.5 7.5 5.5 7.5-5.5" />
-  </svg>
-);
-
-export const ColorsIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-    <path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.4 0 2-.8 2-1.7 0-1-.8-1.5-.8-2.4 0-1 .8-1.6 2.1-1.6h1.4A4.2 4.2 0 0 0 21 10.6c0-4-4-7.1-9-7.1Z" />
-    <circle cx="7.6" cy="10.5" r=".9" />
-    <circle cx="10.5" cy="7.2" r=".9" />
-    <circle cx="15" cy="7.4" r=".9" />
-  </svg>
-);
-
-export const StarIcon: React.FC<{ className?: string; filled?: boolean }> = ({ className = 'icon', filled = false }) => (
-  <svg className={className} viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-  </svg>
-);
-
-export const PinIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <StarIcon className={className} />
-);
-
-export const CopyIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-    <rect x="9" y="9" width="11" height="11" rx="2" />
-    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-  </svg>
-);
-
-export const HollowClipboardIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-    <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
-  </svg>
-);
-
-export const PasteIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-    <path d="M9 3h6a1 1 0 0 1 1 1v1H8V4a1 1 0 0 1 1-1Z" />
-    <path d="M8 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-3" />
-    <path d="m9.5 12.5 2 2 3.5-3.5" />
-  </svg>
-);
-
-export const DeleteIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-    <path d="M4 6.5h16" />
-    <path d="M9 6.5V4.8a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1.7" />
-    <path d="M6 6.5 6.8 19a2 2 0 0 0 2 1.9h6.4a2 2 0 0 0 2-1.9l.8-12.5" />
-    <path d="M10 10.5v6M14 10.5v6" />
-  </svg>
-);
-
-export const SettingsIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-    <circle cx="12" cy="12" r="3" />
-    <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5h.1a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1h.1a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" />
-  </svg>
-);
-
-export const ChevronRightIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M9.5 5 16 12l-6.5 7" />
-  </svg>
-);
-
-export const ChevronLeftIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M14.5 5.5 8 12l6.5 6.5" />
-  </svg>
-);
-
-export const CheckIcon: React.FC<{
+export interface IconProps {
   className?: string;
+  size?: number | string;
   width?: number | string;
   height?: number | string;
-  size?: number | string;
-}> = ({ className = 'icon', width, height, size = 13 }) => (
-  <svg
+  strokeWidth?: number | string;
+  style?: React.CSSProperties;
+}
+
+function resolveIconStyle(props: IconProps): React.CSSProperties | undefined {
+  const w = props.width ?? props.size;
+  const h = props.height ?? props.size;
+  if (w !== undefined || h !== undefined || props.style) {
+    return {
+      ...(w !== undefined ? { width: typeof w === 'number' ? `${w}px` : w } : {}),
+      ...(h !== undefined ? { height: typeof h === 'number' ? `${h}px` : h } : {}),
+      ...props.style,
+    };
+  }
+  return undefined;
+}
+
+export const SearchIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Search className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const AllIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Clock className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const TextIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Type className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const OcrIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <ScanText className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const CodeIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Code className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const ChevronDownIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 2.0, ...props }) => (
+  <ChevronDown className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const FilterIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Filter className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const HelpIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <CircleHelp className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const RichTextIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <FileText className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const ImageIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <LucideImage className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const FilesIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <LucideFile className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const LinksIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <LucideLink className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const EmailIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Mail className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const ColorsIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Palette className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const StarIcon: React.FC<IconProps & { filled?: boolean }> = ({
+  className = 'icon',
+  filled = false,
+  size,
+  strokeWidth = 1.8,
+  ...props
+}) => (
+  <Star
     className={className}
-    width={width ?? size}
-    height={height ?? size}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2.4"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <path d="m4.5 12.5 5 5 10-11" />
-  </svg>
+    fill={filled ? 'currentColor' : 'none'}
+    size={size}
+    strokeWidth={strokeWidth}
+    style={resolveIconStyle({ size, ...props })}
+  />
 );
 
-export const SunMoonIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="4.2" />
-    <path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5 5l1.7 1.7M17.3 17.3 19 19M19 5l-1.7 1.7M6.7 17.3 5 19" />
-  </svg>
+export const PinIcon: React.FC<IconProps & { filled?: boolean }> = ({
+  className = 'icon',
+  filled = false,
+  size,
+  strokeWidth = 1.8,
+  ...props
+}) => (
+  <Pin
+    className={className}
+    fill={filled ? 'currentColor' : 'none'}
+    size={size}
+    strokeWidth={strokeWidth}
+    style={resolveIconStyle({ size, ...props })}
+  />
 );
 
-export const VideoIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <polygon points="23 7 16 12 23 17 23 7" />
-    <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
-  </svg>
+export const CopyIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Copy className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
 );
 
-export const FolderIcon: React.FC<{ className?: string }> = ({ className = '' }) => (
-  <svg className={`icon ${className}`.trim()} width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-  </svg>
+export const HollowClipboardIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Clipboard className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const PasteIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <ClipboardPaste className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const DeleteIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Trash2 className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const SettingsIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Settings className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const ChevronRightIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <ChevronRight className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const ChevronLeftIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <ChevronLeft className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const CheckIcon: React.FC<IconProps> = ({
+  className = 'icon',
+  width,
+  height,
+  size = 13,
+  strokeWidth = 2.4,
+  ...props
+}) => (
+  <Check
+    className={className}
+    size={Number(width ?? height ?? size)}
+    strokeWidth={strokeWidth}
+    style={resolveIconStyle({ width, height, size, ...props })}
+  />
+);
+
+export const SunMoonIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <SunMoon className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const VideoIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Video className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const FolderIcon: React.FC<IconProps> = ({ className = '', size = 15, strokeWidth = 1.8, ...props }) => (
+  <Folder
+    className={`icon ${className}`.trim()}
+    size={size}
+    strokeWidth={strokeWidth}
+    style={resolveIconStyle({ size, ...props })}
+  />
+);
+
+export const LockIcon: React.FC<IconProps> = ({ className = '', size = 15, strokeWidth = 2.0, ...props }) => (
+  <Lock
+    className={`icon ${className}`.trim()}
+    size={size}
+    strokeWidth={strokeWidth}
+    style={resolveIconStyle({ size, ...props })}
+  />
+);
+
+export const UnlockIcon: React.FC<IconProps> = ({ className = '', size = 15, strokeWidth = 2.0, ...props }) => (
+  <Unlock
+    className={`icon ${className}`.trim()}
+    size={size}
+    strokeWidth={strokeWidth}
+    style={resolveIconStyle({ size, ...props })}
+  />
+);
+
+export const EyeIcon: React.FC<IconProps> = ({ className = '', size = 14, strokeWidth = 2.0, ...props }) => (
+  <Eye
+    className={className}
+    size={size}
+    strokeWidth={strokeWidth}
+    style={resolveIconStyle({ size, ...props })}
+  />
+);
+
+export const EyeOffIcon: React.FC<IconProps> = ({ className = '', size = 14, strokeWidth = 2.0, ...props }) => (
+  <EyeOff
+    className={className}
+    size={size}
+    strokeWidth={strokeWidth}
+    style={resolveIconStyle({ size, ...props })}
+  />
+);
+
+export const SpinnerIcon: React.FC<IconProps> = ({ className = 'spinner-icon', size = 14, strokeWidth = 2.5, ...props }) => (
+  <Loader2
+    className={className}
+    size={size}
+    strokeWidth={strokeWidth}
+    style={resolveIconStyle({ size, ...props })}
+  />
+);
+
+export const QueueIcon: React.FC<IconProps> = ({ className = 'icon', size = 14, strokeWidth = 2.0, ...props }) => (
+  <ListOrdered
+    className={className}
+    size={size}
+    strokeWidth={strokeWidth}
+    style={resolveIconStyle({ size, ...props })}
+  />
+);
+
+export const DragHandleIcon: React.FC<IconProps> = ({ className = 'drag-handle-icon', size = 14, strokeWidth = 2.0, ...props }) => (
+  <GripVertical
+    className={className}
+    size={size}
+    strokeWidth={strokeWidth}
+    style={resolveIconStyle({ size, ...props })}
+  />
+);
+
+export const PlusIcon: React.FC<IconProps> = ({
+  className = 'icon',
+  width,
+  height,
+  size = 13,
+  strokeWidth = 2.2,
+  ...props
+}) => (
+  <Plus
+    className={className}
+    size={Number(width ?? height ?? size)}
+    strokeWidth={strokeWidth}
+    style={resolveIconStyle({ width, height, size, ...props })}
+  />
+);
+
+export const EditIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 2.0, ...props }) => (
+  <Pencil className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const MoreIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 2.0, ...props }) => (
+  <MoreHorizontal className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const SnippetIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Scissors className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const CalendarIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Calendar className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const ClockIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Clock className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const AtIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <AtSign className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const HashtagIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Hash className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const BoltIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Zap className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const QuoteIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Quote className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const KeyIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Key className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const GearIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
+  <Sliders className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
+);
+
+export const AlertTriangleIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 2.0, ...props }) => (
+  <AlertTriangle className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
 );
 
 export function getTypeIcon(kind: ContentType) {
@@ -227,17 +362,8 @@ export function getTypeIcon(kind: ContentType) {
   }
 }
 
-export function getTypeColor(kind: ContentType): string {
-  switch (kind) {
-    case 'code': return 'var(--tint-code)';
-    case 'rich_text': return 'var(--tint-rich)';
-    case 'image': return 'var(--tint-image)';
-    case 'file': return 'var(--tint-files)';
-    case 'link': return 'var(--tint-link)';
-    case 'email': return 'var(--tint-email)';
-    case 'color': return 'var(--tint-color)';
-    default: return 'var(--tint-text)';
-  }
+export function getTypeColor(_kind?: ContentType): string {
+  return 'currentColor';
 }
 
 export function getTypeLabel(kind: ContentType): string {
@@ -253,165 +379,12 @@ export function getTypeLabel(kind: ContentType): string {
   }
 }
 
-export const LockIcon: React.FC<{ className?: string }> = ({ className = '' }) => (
-  <svg className={`icon ${className}`.trim()} width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-  </svg>
-);
-
-export const EyeIcon: React.FC = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-    <circle cx="12" cy="12" r="3"></circle>
-  </svg>
-);
-
-export const EyeOffIcon: React.FC = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-    <line x1="1" y1="1" x2="23" y2="23"></line>
-  </svg>
-);
-
-export const SpinnerIcon: React.FC<{ className?: string }> = ({ className = 'spinner-icon' }) => (
-  <svg className={className} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-  </svg>
-);
-
-export const QueueIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4 6h16M4 12h16M4 18h10" />
-    <polyline points="17 15 20 18 17 21" />
-  </svg>
-);
-
-export const DragHandleIcon: React.FC<{ className?: string }> = ({ className = 'drag-handle-icon' }) => (
-  <svg className={className} width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
-    <circle cx="2.5" cy="2.5" r="1.2" />
-    <circle cx="7.5" cy="2.5" r="1.2" />
-    <circle cx="2.5" cy="7" r="1.2" />
-    <circle cx="7.5" cy="7" r="1.2" />
-    <circle cx="2.5" cy="11.5" r="1.2" />
-    <circle cx="7.5" cy="11.5" r="1.2" />
-  </svg>
-);
-
-export const PlusIcon: React.FC<{ className?: string; width?: number | string; height?: number | string; size?: number | string }> = ({
-  className = 'icon',
-  width,
-  height,
-  size = 13,
-}) => (
-  <svg
-    className={className}
-    width={width ?? size}
-    height={height ?? size}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2.2"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <line x1="12" y1="5" x2="12" y2="19"></line>
-    <line x1="5" y1="12" x2="19" y2="12"></line>
-  </svg>
-);
-
-export const UnlockIcon: React.FC<{ className?: string }> = ({ className = '' }) => (
-  <svg className={`icon ${className}`.trim()} width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-    <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
-  </svg>
-);
-
-export const EditIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
-  </svg>
-);
-
-export const MoreIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"></circle>
-    <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"></circle>
-    <circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"></circle>
-  </svg>
-);
-
-export const SnippetIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    {/* Scissors — "snip"-pets; deliberately unrelated to the Code type glyph */}
-    <circle cx="6" cy="6" r="2.6" />
-    <circle cx="6" cy="18" r="2.6" />
-    <path d="M8.25 7.55 20 19.25" />
-    <path d="M20 4.75 8.25 16.45" />
-  </svg>
-);
-
-export const CalendarIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3.5" y="5" width="17" height="15.5" rx="2" />
-    <path d="M3.5 9.5h17M8 3v4M16 3v4" />
-    <path d="M8 13.5h3M13.5 13.5h2M8 17h3" />
-  </svg>
-);
-
-export const ClockIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="8.5" />
-    <path d="M12 7.5V12l3 2" />
-  </svg>
-);
-
-export const AtIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="4" />
-    <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" />
-  </svg>
-);
-
-export const HashtagIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M9 4 7 20M17 4l-2 16M5 9h15M4 15h15" />
-  </svg>
-);
-
-export const BoltIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M13 2.5 4.5 13.5H11l-1 8 8.5-11H12l1-8Z" />
-  </svg>
-);
-
-export const QuoteIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M9.5 6.5c-2.8 1-4.5 3.2-4.5 6v4h5v-6H7.2c.2-1.4 1-2.6 2.3-3.4l0-0.6ZM19.5 6.5c-2.8 1-4.5 3.2-4.5 6v4h5v-6h-2.8c.2-1.4 1-2.6 2.3-3.4l0-0.6Z" />
-  </svg>
-);
-
-export const KeyIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="8" cy="15.5" r="4.5" />
-    <path d="M11.3 12.2 20 3.5M15.5 8l2.8 2.8M18 5.5 20.5 8" />
-  </svg>
-);
-
-export const GearIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M5 7h14M5 17h14M5 12h9" />
-    <circle cx="17.5" cy="12" r="2" />
-  </svg>
-);
-
-
 /* ── Snippet icon registry (shared by SnippetsView + Quick Overlay) ── */
 
 export interface SnippetIconsEntry {
   key: string;
   label: string;
-  icon: React.FC<{ className?: string }>;
+  icon: React.FC<IconProps>;
 }
 
 export const SNIPPET_ICONS: SnippetIconsEntry[] = [
@@ -432,7 +405,7 @@ export const SNIPPET_ICONS: SnippetIconsEntry[] = [
   { key: 'star', label: 'Favorite', icon: StarIcon },
 ];
 
-export function snippetIconFor(key: string | null): React.FC<{ className?: string }> {
+export function snippetIconFor(key: string | null): React.FC<IconProps> {
   return SNIPPET_ICONS.find((i) => i.key === (key || 'snippet'))?.icon ?? SnippetIcon;
 }
 
@@ -442,7 +415,7 @@ export function snippetIconFor(key: string | null): React.FC<{ className?: strin
 // illustration's gradients and fine text lines would turn to noise. Stroke
 // uses currentColor so the mark inherits the active accent theme via the
 // .brand-mark CSS color (var(--accent)) instead of a hardcoded hex.
-export const CarbonMarkIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
+export const CarbonMarkIcon: React.FC<IconProps> = ({ className = 'icon' }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M15.5 4H17a2.5 2.5 0 0 1 2.5 2.5v12A2.5 2.5 0 0 1 17 21H7a2.5 2.5 0 0 1-2.5-2.5v-12A2.5 2.5 0 0 1 7 4h1.5" />
     <rect x="8.5" y="2" width="7" height="4.5" rx="1.4" />
@@ -454,7 +427,7 @@ export const CarbonMarkIcon: React.FC<{ className?: string }> = ({ className = '
 // via html[data-theme], so the icon swaps automatically when the user
 // switches theme — no React state needed. PNGs are the original Glint
 // exports (1.2–1.3 MB) at native resolution for crisp rendering.
-export const BrandBadgeIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
+export const BrandBadgeIcon: React.FC<IconProps> = ({ className = 'icon' }) => (
   <>
     <img
       src={carbonBadgeDarkPng}
@@ -473,12 +446,4 @@ export const BrandBadgeIcon: React.FC<{ className?: string }> = ({ className = '
       style={{ width: '100%', height: '100%', objectFit: 'contain', imageRendering: 'auto' }}
     />
   </>
-);
-
-export const AlertTriangleIcon: React.FC<{ className?: string }> = ({ className = 'icon' }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-    <line x1="12" y1="9" x2="12" y2="13" />
-    <line x1="12" y1="17" x2="12.01" y2="17" />
-  </svg>
 );

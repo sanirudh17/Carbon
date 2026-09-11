@@ -6,6 +6,7 @@ import { Settings } from './components/Settings';
 import { ExpansionPill } from './components/ExpansionPill';
 import { ArgPromptWindow } from './components/ArgPromptWindow';
 import { SunMoonIcon } from './components/Icons';
+import { IconLab } from './components/IconLab';
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -46,6 +47,29 @@ export function App() {
       return 'dark';
     }
   });
+
+  const [showIconLab, setShowIconLab] = useState(() => {
+    return import.meta.env.DEV && typeof window !== 'undefined' && window.location.hash === '#/icon-lab';
+  });
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const handleHashChange = () => {
+      setShowIconLab(window.location.hash === '#/icon-lab');
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.altKey && e.shiftKey && (e.key === 'I' || e.key === 'i')) {
+        e.preventDefault();
+        setShowIconLab((prev) => !prev);
+      }
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
 
   // v9 F2: hidden warm windows may only reveal after React has committed a
   // paintable tree. The window-specific choreography still waits two frames
@@ -338,6 +362,19 @@ export function App() {
       console.error(e);
     }
   };
+
+  if (showIconLab) {
+    return (
+      <IconLab
+        onClose={() => {
+          setShowIconLab(false);
+          if (window.location.hash === '#/icon-lab') {
+            history.replaceState(null, '', window.location.pathname);
+          }
+        }}
+      />
+    );
+  }
 
   // 1. Overlay Window View
   if (windowLabel === 'overlay') {

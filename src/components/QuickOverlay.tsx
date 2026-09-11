@@ -1879,7 +1879,7 @@ export const QuickOverlay: React.FC = () => {
                   value: 'pinned',
                   label: 'Favorites',
                   icon: (
-                    <span style={{ color: '#F59E0B', display: 'inline-flex' }}>
+                    <span style={{ display: 'inline-flex' }}>
                       <StarIcon />
                     </span>
                   ),
