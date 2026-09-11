@@ -4278,6 +4278,15 @@ section:last-child {
   margin-top: 2px;
 }
 
+.passcode-input::-ms-reveal,
+.passcode-input::-ms-clear,
+.pin-input::-ms-reveal,
+.pin-input::-ms-clear {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 .col-pin-actions {
   width: 100%;
   display: flex;
@@ -4298,44 +4307,43 @@ section:last-child {
   line-height: 1;
   padding: 0 14px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.12);
-  color: #ffffff;
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 4px 12px rgba(0, 0, 0, 0.25);
+  background: var(--accent);
+  color: var(--accent-fg, #ffffff);
+  border: 1px solid color-mix(in srgb, var(--accent-hover) 35%, transparent);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 30%, transparent),
+              inset 0 1px 0 rgba(255, 255, 255, 0.20);
   cursor: pointer;
   transition: all 140ms ease;
   box-sizing: border-box;
 }
 
 .col-pin-actions .btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.18);
-  border-color: rgba(255, 255, 255, 0.16);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 6px 16px rgba(0, 0, 0, 0.35);
+  background: var(--accent-hover);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 42%, transparent),
+              inset 0 1px 0 rgba(255, 255, 255, 0.25);
   transform: translateY(-0.5px);
 }
 
 .col-pin-actions .btn:active:not(:disabled) {
-  background: rgba(255, 255, 255, 0.22);
   transform: translateY(0);
 }
 
 .col-pin-actions .btn:disabled {
-  opacity: 0.38;
+  opacity: 0.40;
   cursor: not-allowed;
   box-shadow: none;
 }
 
 [data-theme="light"] .col-pin-actions .btn {
-  background: rgba(0, 0, 0, 0.85);
-  color: #ffffff;
-  border: 1px solid rgba(0, 0, 0, 0.90);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.20), 0 4px 12px rgba(0, 0, 0, 0.12);
+  background: var(--accent);
+  color: var(--accent-fg, #ffffff);
+  border: 1px solid color-mix(in srgb, var(--accent) 80%, black);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 25%, transparent),
+              inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
 [data-theme="light"] .col-pin-actions .btn:hover:not(:disabled) {
-  background: #000000;
-  border-color: #000000;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 6px 16px rgba(0, 0, 0, 0.18);
+  background: var(--accent-hover);
 }
 
 .col-locked-footer-links {
