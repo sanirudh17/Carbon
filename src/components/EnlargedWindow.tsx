@@ -1547,7 +1547,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
           onClick={() => handleSelectFilter('pinned')}
           title="Favorites"
         >
-          <span className="side-ic" style={{ color: '#F59E0B' }}>
+          <span className="side-ic">
             <StarIcon filled={selectedFilter === 'pinned'} />
           </span>
           <span className="hide-when-collapsed">Favorites</span>
@@ -1680,7 +1680,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
               }}
           title="Snippets"
         >
-          <span className="side-ic" style={{ color: 'var(--accent-text)' }}>
+          <span className="side-ic">
             <SnippetIcon />
           </span>
           <span className="hide-when-collapsed">Snippets</span>
