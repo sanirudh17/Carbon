@@ -2281,7 +2281,7 @@ export const QuickOverlay: React.FC = () => {
           <div className="modal-backdrop" onClick={() => setAddToColModalOpen(false)}>
             <div className="modal-card add-to-col-modal" onClick={(e) => e.stopPropagation()}>
               <div className="modal-header">
-                <span className="modal-head-icon" style={{ color: 'var(--accent)' }}>
+                <span className="modal-head-icon">
                   <FolderIcon />
                 </span>
                 <span className="modal-title">Add clip to Collection</span>

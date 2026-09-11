@@ -2543,7 +2543,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
         <div className="modal-backdrop" onClick={() => setVerifyChangePinModal(null)}>
           <div className="modal-card small-pin-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <span className="modal-head-icon" style={{ color: verifyChangePinModal.col.color || collectionColorFor(verifyChangePinModal.col.name) }}>
+              <span className="modal-head-icon">
                 <LockIcon />
               </span>
               <span className="modal-title">Verify Current Passcode</span>
@@ -2605,7 +2605,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
         <div className="modal-backdrop" onClick={() => setPinModal(null)}>
           <div className="modal-card pin-setup-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <span className="modal-head-icon" style={{ color: pinModal.col.color || collectionColorFor(pinModal.col.name) }}>
+              <span className="modal-head-icon">
                 <LockIcon />
               </span>
               <span className="modal-title">{pinModal.mode === 'change' ? 'Change Passcode' : 'Lock with Passcode'}</span>
@@ -2694,7 +2694,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
         <div className="modal-backdrop">
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <span className="modal-head-icon" style={{ color: '#F59E0B' }}>
+              <span className="modal-head-icon">
                 <LockIcon />
               </span>
               <span className="modal-title">
@@ -2753,7 +2753,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
         <div className="modal-backdrop" onClick={() => setResetPasscodeModal(null)}>
           <div className="modal-card pin-setup-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <span className="modal-head-icon" style={{ color: resetPasscodeModal.col.color || collectionColorFor(resetPasscodeModal.col.name) }}>
+              <span className="modal-head-icon">
                 <LockIcon />
               </span>
               <span className="modal-title">Reset Passcode &mdash; {resetPasscodeModal.col.name}</span>
