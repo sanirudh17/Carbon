@@ -2,10 +2,10 @@
 
 ## 1. Hierarchy & Token Rules
 - **Monochrome Policy**: All glyphs render in `currentColor`. No colored dots, no colored type badges.
-- **Tile Tokens**:
-  - **Dark theme**: background `rgba(255, 255, 255, 0.06)`, glyph alpha `0.72`
-  - **Light theme**: background `rgba(0, 0, 0, 0.05)`, glyph alpha `0.66`
-  - **Tile geometry**: `36px` tile, `10px` border-radius (`--tile-radius: 10px`)
+- **Tile Tokens (ADDENDUM v13 F2)**:
+  - **Dark theme**: background `rgba(255, 255, 255, 0.07)` (hover `0.10`, selected `0.09`), zero border, glyph alpha `0.72`
+  - **Light theme**: background `rgba(0, 0, 0, 0.06)` (hover `0.10`, selected `0.09`), zero border, glyph alpha `0.66`
+  - **Tile geometry**: `36px` tile, `10px` border-radius (`--tile-radius: 10px`), zero border in any state
   - **Glyph ratio**: `20px` in `36px` tile (~55-60% of tile box)
 - **Hierarchy by Stroke & Alpha**:
   - Primary UI / Navigation: `strokeWidth: 2` (or `2.25`), alpha `1.0`

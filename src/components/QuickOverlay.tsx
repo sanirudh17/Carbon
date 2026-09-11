@@ -112,7 +112,6 @@ const OverlayRow = memo(function OverlayRow({
   onDragStart: (item: ClipItem, e: React.DragEvent) => void;
   onDragEnd: () => void;
 }) {
-  const tint = getTypeColor(item.content_type);
   return (
     <div
       id={`overlay-row-${index}`}
@@ -122,13 +121,7 @@ const OverlayRow = memo(function OverlayRow({
       className={`row ${isSelected ? 'selected' : ''} ${isDragging ? 'is-dragging' : ''} ${queueIdx >= 0 ? 'in-queue' : ''}`}
       onClick={() => onSelect(index)}
     >
-      <div
-        className="type-icon"
-        style={{
-          background: `color-mix(in srgb, ${tint} var(--tint-alpha), transparent)`,
-          color: tint,
-        }}
-      >
+      <div className="type-icon">
         {getTypeIcon(item.content_type)}
       </div>
       <div className="row-body">
@@ -925,6 +918,37 @@ export const QuickOverlay: React.FC = () => {
       }
     });
 
+    let windowLoaded = document.readyState === 'complete';
+    if (!windowLoaded) {
+      window.addEventListener('load', () => { windowLoaded = true; }, { once: true });
+    }
+
+    const revealOverlayPaintGate = () => {
+      const epoch = ++showEpochRef.current;
+      const started = performance.now();
+      let framesSinceShow = 0;
+      let warned = false;
+      const wait = () => requestAnimationFrame(() => {
+        if (epoch !== showEpochRef.current) return;
+        framesSinceShow += 1;
+        const html = document.documentElement;
+        const isReady = windowLoaded || document.readyState === 'complete';
+        if (isReady && html.dataset.painted === '1' && framesSinceShow >= 2) {
+          invoke('overlay_painted').catch(() => {});
+          html.classList.remove('wm-hiding', 'wm-hidden');
+          overlayPhaseRef.current = 'shown';
+          invoke('overlay_phase_ack', { phase: 'shown' }).catch(() => {});
+          return;
+        }
+        if (import.meta.env.DEV && !warned && performance.now() - started > 3000) {
+          console.warn('[paint-gate] Overlay window gate stayed closed >3s (slow dependency optimization or cold-load delay detected).');
+          warned = true;
+        }
+        wait();
+      });
+      wait();
+    };
+
     const unlistenOpened = safeListen('overlay-opened', () => {
       logClient('Received overlay-opened event.');
       showEpochRef.current += 1;
@@ -934,13 +958,15 @@ export const QuickOverlay: React.FC = () => {
       finalizeTransition(previewOpenRef.current);
 
       const html = document.documentElement;
-      html.classList.remove('wm-hiding', 'wm-hidden');
-
-      // Release native DWM cloak gate immediately: warm transparent composition
-      // ensures zero white flash, and uncloaking immediately avoids rAF suspension.
-      invoke('overlay_painted').catch(() => {});
-      overlayPhaseRef.current = 'shown';
-      invoke('overlay_phase_ack', { phase: 'shown' }).catch(() => {});
+      const isReady = windowLoaded || document.readyState === 'complete';
+      if (isReady && html.dataset.painted === '1') {
+        html.classList.remove('wm-hiding', 'wm-hidden');
+        invoke('overlay_painted').catch(() => {});
+        overlayPhaseRef.current = 'shown';
+        invoke('overlay_phase_ack', { phase: 'shown' }).catch(() => {});
+      } else {
+        revealOverlayPaintGate();
+      }
 
       lastHideAtRef.current = performance.now();
 

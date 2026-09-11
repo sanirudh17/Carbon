@@ -23,8 +23,10 @@
   --tooltip-text: #F4F4F6;
   --nav-hover-bg: #21252D;
   --nav-hover-text: #D9DDE5;
-  /* Monochrome Icon & Tile Tokens (ADDENDUM v10.2) */
-  --tile-bg: rgba(255, 255, 255, 0.06);
+  /* Monochrome Icon & Tile Tokens (ADDENDUM v10.2 / v13) */
+  --tile-bg: rgba(255, 255, 255, 0.07);
+  --tile-bg-hover: rgba(255, 255, 255, 0.10);
+  --tile-bg-selected: rgba(255, 255, 255, 0.09);
   --tile-size: 36px;
   --tile-radius: 10px;
   --glyph-alpha: 0.72;
@@ -132,8 +134,10 @@ html.win-library body {
   --tooltip-text: #0F172A;
   --nav-hover-bg: #DFE5EE;
   --nav-hover-text: #1B2432;
-  /* Monochrome Icon & Tile Tokens (ADDENDUM v10.2) */
-  --tile-bg: rgba(0, 0, 0, 0.05);
+  /* Monochrome Icon & Tile Tokens (ADDENDUM v10.2 / v13) */
+  --tile-bg: rgba(0, 0, 0, 0.06);
+  --tile-bg-hover: rgba(0, 0, 0, 0.10);
+  --tile-bg-selected: rgba(0, 0, 0, 0.09);
   --tile-size: 36px;
   --tile-radius: 10px;
   --glyph-alpha: 0.66;
@@ -946,6 +950,22 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   background-clip: padding-box;
   background: var(--tile-bg) !important;
   color: currentColor !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  transition: background-color 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.row:hover .type-icon {
+  background: var(--tile-bg-hover) !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.row.selected .type-icon {
+  background: var(--tile-bg-selected) !important;
+  border: none !important;
+  box-shadow: none !important;
 }
 
 .type-icon svg,

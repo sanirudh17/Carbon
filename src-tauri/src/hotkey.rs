@@ -131,23 +131,6 @@ pub fn note_enlarged_painted(app: &AppHandle) {
     uncloak_enlarged_if_current(app, ENLARGED_SHOW_GEN.load(Ordering::SeqCst));
 }
 
-fn spawn_uncloak_fallback(app: AppHandle, overlay: bool, gen: u64, after_ms: u64) {
-    thread::spawn(move || {
-        thread::sleep(std::time::Duration::from_millis(after_ms));
-        if overlay {
-            uncloak_overlay_if_current(&app, gen);
-            if let Some(win) = app.get_webview_window("overlay") {
-                let _ = win.eval("document.documentElement.classList.remove('wm-hidden', 'wm-hiding')");
-            }
-        } else {
-            uncloak_enlarged_if_current(&app, gen);
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.eval("document.documentElement.classList.remove('wm-hidden', 'wm-hiding')");
-            }
-        }
-    });
-}
-
 pub static OVERLAY_CLOAKED: AtomicBool = AtomicBool::new(true);
 
 /// Epoch-milliseconds of the last overlay cloak, used to suppress the
@@ -626,7 +609,7 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     //    still cloaked, so the first uncloaked compositor cycle shows real
     //    content. The transparent controller background guarantees even a
     //    not-yet-painted region composites transparent — never white.
-    let overlay_gen = OVERLAY_SHOW_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    let _overlay_gen = OVERLAY_SHOW_GEN.fetch_add(1, Ordering::SeqCst) + 1;
     set_window_cloaked(&overlay_win, true);
 
     if let Ok(hwnd) = overlay_win.hwnd() {
@@ -676,7 +659,6 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     if overlay_win.is_minimized().unwrap_or(false) {
         let _ = overlay_win.unminimize();
     }
-    let _ = overlay_win.eval("document.documentElement.classList.remove('wm-hidden', 'wm-hiding')");
     let focus_res = overlay_win.set_focus();
     crate::paste::log_diag(&format!(
         "[HOTKEY] overlay_win.set_focus() -> {:?}",
@@ -686,8 +668,6 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     // If a prewarm snapshot exists, push it *with* the open so the first
     // frame already has data — zero skeleton time like Pico's instant open.
     let _ = app_handle.emit("overlay-opened", ());
-    // Backstop: a dead renderer must never leave the window stuck cloaked.
-    spawn_uncloak_fallback(app_handle.clone(), true, overlay_gen, 200);
     let cached_opt = {
         let mut cache = OVERLAY_PREWARM_CACHE.lock().unwrap();
         if cache.is_none() {
@@ -739,15 +719,14 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
     if overlay_was_visible {
         crate::paste::log_diag("[HOTKEY] Overlay was open — showing main instead of toggling.");
         save_target_window(app_handle);
-        let _ = main_win.eval("if (document.documentElement.dataset.material === 'solid') document.documentElement.classList.add('wm-hidden'); else document.documentElement.classList.remove('wm-hidden', 'wm-hiding')");
-        let enlarged_gen = ENLARGED_SHOW_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = main_win.eval("document.documentElement.classList.add('wm-hidden')");
+        let _enlarged_gen = ENLARGED_SHOW_GEN.fetch_add(1, Ordering::SeqCst) + 1;
         set_window_cloaked(&main_win, true);
         let _ = main_win.unminimize();
         let show_res = main_win.show();
         let focus_res = main_win.set_focus();
         crate::paste::log_diag(&format!("[HOTKEY] main_win.show() -> {:?}, set_focus() -> {:?}", show_res, focus_res));
         let _ = app_handle.emit("enlarged-opened", ());
-        spawn_uncloak_fallback(app_handle.clone(), false, enlarged_gen, 900);
         return;
     }
     let is_visible = main_win.is_visible().unwrap_or(false);
@@ -758,8 +737,8 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
     } else {
         save_target_window(app_handle);
         crate::paste::capture_selection_snapshot();
-        let _ = main_win.eval("if (document.documentElement.dataset.material === 'solid') document.documentElement.classList.add('wm-hidden'); else document.documentElement.classList.remove('wm-hidden', 'wm-hiding')");
-        let enlarged_gen = ENLARGED_SHOW_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = main_win.eval("document.documentElement.classList.add('wm-hidden')");
+        let _enlarged_gen = ENLARGED_SHOW_GEN.fetch_add(1, Ordering::SeqCst) + 1;
         set_window_cloaked(&main_win, true);
         let _ = main_win.unminimize();
         let show_res = main_win.show();
@@ -779,8 +758,6 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
             }
         });
         let _ = app_handle.emit("enlarged-opened", ());
-        // Backstop: a dead renderer must never leave the window stuck cloaked.
-        spawn_uncloak_fallback(app_handle.clone(), false, enlarged_gen, 900);
     }
 }
 

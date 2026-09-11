@@ -117,7 +117,6 @@ const EnlargedRow = memo(function EnlargedRow({
   onDragStart: (item: ClipItem, e: React.DragEvent) => void;
   onDragEnd: () => void;
 }) {
-  const tint = getTypeColor(item.content_type);
   return (
     <div
       id={`enlarged-row-${index}`}
@@ -127,13 +126,7 @@ const EnlargedRow = memo(function EnlargedRow({
       className={`row ${isSelected ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragging ? 'is-dragging' : ''} ${queueIdx >= 0 ? 'in-queue' : ''}`}
       onClick={(e) => onRowClick(item, index, e)}
     >
-      <div
-        className="type-icon"
-        style={{
-          background: `color-mix(in srgb, ${tint} var(--tint-alpha), transparent)`,
-          color: tint,
-        }}
-      >
+      <div className="type-icon">
         {getTypeIcon(item.content_type)}
       </div>
       <div className="row-body">

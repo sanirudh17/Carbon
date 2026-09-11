@@ -286,19 +286,30 @@ export function App() {
 
     window.__carbonRequestEnlargedHide = doHide;
 
+    let windowLoaded = document.readyState === 'complete';
+    if (!windowLoaded) {
+      window.addEventListener('load', () => { windowLoaded = true; }, { once: true });
+    }
+
     const revealAfterPaintGate = () => {
       const epoch = ++showEpoch;
       const started = performance.now();
       let framesSinceShow = 0;
+      let warned = false;
       const wait = () => requestAnimationFrame(() => {
         if (epoch !== showEpoch) return;
         framesSinceShow += 1;
-        if ((html.dataset.painted === '1' && framesSinceShow >= 2) || performance.now() - started >= 500) {
+        const isReady = windowLoaded || document.readyState === 'complete';
+        if (isReady && html.dataset.painted === '1' && framesSinceShow >= 2) {
           // Painted: release the native DWM cloak gate first so the first
           // composited frame is real content, then lift the fade mask.
           invoke('enlarged_painted').catch(() => {});
           html.classList.remove('wm-hidden');
           return;
+        }
+        if (import.meta.env.DEV && !warned && performance.now() - started > 3000) {
+          console.warn('[paint-gate] Main window gate stayed closed >3s (slow dependency optimization or cold-load delay detected).');
+          warned = true;
         }
         wait();
       });
@@ -309,9 +320,9 @@ export function App() {
     // presented after show before removing the material-specific fade mask.
     const unlistenOpened = listen('enlarged-opened', () => {
       html.classList.remove('wm-hiding');
-      if (html.dataset.material === 'glass') {
-        invoke('enlarged_painted').catch(() => {});
-        html.classList.remove('wm-hidden');
+      const isReady = windowLoaded || document.readyState === 'complete';
+      if (isReady && html.dataset.painted === '1' && html.dataset.material === 'glass') {
+        revealAfterPaintGate();
         return;
       }
       if (!html.classList.contains('wm-hidden')) {
