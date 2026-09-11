@@ -1051,12 +1051,15 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   color: currentColor;
 }
 
-.type-icon img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: inherit;
-  display: block;
+.type-icon img,
+.type-icon .clip-thumb-img {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  object-fit: cover !important;
+  border-radius: inherit !important;
+  display: block !important;
 }
 
 .row-body {
@@ -3324,12 +3327,15 @@ section:last-child {
   background-clip: padding-box;
 }
 
-.bulk-card-icon img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: inherit;
-  display: block;
+.bulk-card-icon img,
+.bulk-card-icon .clip-thumb-img {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  object-fit: cover !important;
+  border-radius: inherit !important;
+  display: block !important;
 }
 
 .bulk-card-icon.has-thumb::after {
@@ -4002,9 +4008,9 @@ section:last-child {
   flex: 1;
   height: 100%;
   padding: 24px;
-  background: radial-gradient(circle at 50% 40%, var(--glass-preview) 0%, transparent 80%);
-  backdrop-filter: var(--inapp-blur);
-  -webkit-backdrop-filter: var(--inapp-blur);
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 .col-locked-card {
@@ -4012,17 +4018,15 @@ section:last-child {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  background: var(--surface-float-bg);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border: var(--surface-float-border);
+  background: var(--glass-sidebar);
+  border: 1px solid var(--glass-hairline);
   border-radius: 14px;
   overflow: hidden;
   background-clip: padding-box;
   padding: 28px 24px;
   width: 100%;
   max-width: 300px;
-  box-shadow: var(--surface-float-shadow), var(--surface-float-highlight);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.22), var(--glass-highlight);
   animation: modalScaleIn 160ms var(--ease-out);
 }
 

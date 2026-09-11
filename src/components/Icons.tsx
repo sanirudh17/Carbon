@@ -47,7 +47,7 @@ import {
   Sliders,
   AlertTriangle,
 } from 'lucide-react';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { invoke } from '@tauri-apps/api/core';
 import { ClipItem, ContentType } from '../types';
 import carbonBadgeDarkPng from '../assets/carbon-badge-dark.png';
 import carbonBadgeLightPng from '../assets/carbon-badge-light.png';
@@ -363,31 +363,62 @@ export function getTypeIcon(kind: ContentType) {
   }
 }
 
+const thumbnailCache = new Map<string, string>();
+
 /**
  * Miniature clip tile icon (Tinycast / Raycast parity):
  * - If sensitive: shielded with LockIcon.
- * - If image with image_path: renders miniature image thumbnail with fallback.
+ * - If image with image_path: loads actual image data URL via Tauri IPC and renders miniature thumbnail.
  * - Otherwise: renders content-type glyph.
  */
 export const ClipTileIcon: React.FC<{ item: ClipItem; className?: string }> = ({ item, className }) => {
-  const [failed, setFailed] = useState(false);
+  const [thumb, setThumb] = useState<string | null>(() => {
+    if (item.content_type === 'image' && item.image_path && !item.is_sensitive) {
+      return thumbnailCache.get(item.image_path) || null;
+    }
+    return null;
+  });
 
   useEffect(() => {
-    setFailed(false);
-  }, [item.image_path, item.id]);
+    if (item.content_type !== 'image' || !item.image_path || item.is_sensitive) {
+      setThumb(null);
+      return;
+    }
+
+    const cached = thumbnailCache.get(item.image_path);
+    if (cached) {
+      setThumb(cached);
+      return;
+    }
+
+    let active = true;
+    invoke<string>('get_image_data_url', { filePath: item.image_path })
+      .then((dataUrl) => {
+        if (active && dataUrl) {
+          thumbnailCache.set(item.image_path!, dataUrl);
+          setThumb(dataUrl);
+        }
+      })
+      .catch((err) => {
+        console.warn('ClipTileIcon failed to load thumbnail:', err);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [item.image_path, item.id, item.content_type, item.is_sensitive]);
 
   if (item.is_sensitive) {
     return <LockIcon className={className} />;
   }
 
-  if (item.content_type === 'image' && item.image_path && !failed) {
+  if (item.content_type === 'image' && thumb) {
     return (
       <img
-        src={convertFileSrc(item.image_path)}
+        src={thumb}
         alt=""
-        loading="lazy"
         draggable={false}
-        onError={() => setFailed(true)}
+        className="clip-thumb-img"
       />
     );
   }
