@@ -363,7 +363,7 @@ export function getTypeIcon(kind: ContentType) {
   }
 }
 
-const thumbnailCache = new Map<string, string>();
+export const thumbnailCache = new Map<string, string>();
 
 /**
  * Miniature clip tile icon (Tinycast / Raycast parity):

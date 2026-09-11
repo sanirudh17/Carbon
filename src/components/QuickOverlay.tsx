@@ -527,12 +527,9 @@ export const QuickOverlay: React.FC = () => {
   }, [snFiltered, snSelectedId]);
 
   // Auto-scroll the highlighted snippet row into view.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!snSelectedId) return;
-    const raf = requestAnimationFrame(() => {
-      document.getElementById(`sn-ov-row-${snSelectedId}`)?.scrollIntoView({ block: 'nearest' });
-    });
-    return () => cancelAnimationFrame(raf);
+    document.getElementById(`sn-ov-row-${snSelectedId}`)?.scrollIntoView({ block: 'nearest' });
   }, [snSelectedId]);
 
   const showSnPill = (text: string, error = false) => {
@@ -619,11 +616,12 @@ export const QuickOverlay: React.FC = () => {
     snNavAccumRef.current = 0;
     const list = snFilteredRef.current;
     if (list.length === 0) return;
+    const delta = Math.max(-2, Math.min(2, steps));
     setSnSelectedId((prev) => {
       const curIdx = prev ? list.findIndex((s) => s.id === prev) : -1;
       const base = curIdx === -1 ? 0 : curIdx;
-      const next = (base + steps) % list.length;
-      return list[next < 0 ? next + list.length : next].id;
+      const next = Math.max(0, Math.min(list.length - 1, base + delta));
+      return list[next].id;
     });
   };
 
@@ -637,39 +635,25 @@ export const QuickOverlay: React.FC = () => {
   );
   const SnSelectedIcon = snSelected ? snippetIconFor(snSelected.icon) : null;
 
-  // Auto-scroll selected row into view & sync editing state
-  // (rAF-coalesced: rapid arrow holds supersede in-flight scrolls)
-  useEffect(() => {
+  // Auto-scroll selected row into view & sync editing state & render mode in lockstep before paint
+  useLayoutEffect(() => {
     if (displayItems.length === 0 || selectedIndex < 0 || selectedIndex >= displayItems.length) {
       setEditingContent('');
       return;
     }
-    const raf = requestAnimationFrame(() => {
-      const el = document.getElementById(`overlay-row-${selectedIndex}`);
-      if (el) {
-        el.scrollIntoView({ block: 'nearest' });
-      }
-    });
+    const el = document.getElementById(`overlay-row-${selectedIndex}`);
+    if (el) {
+      el.scrollIntoView({ block: 'nearest' });
+    }
     const item = displayItems[selectedIndex];
     if (item) {
       setEditingContent(item.text_content || '');
+      setRenderMode(
+        item.content_type === 'rich_text' ||
+          Boolean(item.html_content) ||
+          (Boolean(item.text_content) && isMarkdownContent(item.text_content || ''))
+      );
     }
-    return () => cancelAnimationFrame(raf);
-  }, [selectedIndex, displayItems]);
-
-  // Render-mode must sync BEFORE paint (useLayoutEffect): scrolling through
-  // items right after toggling Raw otherwise paints one stale raw-text frame
-  // before the rendered preview commits. The main window resets render mode
-  // synchronously inside its selection handlers; here layout-phase sync is
-  // the equivalent guarantee.
-  useLayoutEffect(() => {
-    const item = displayItems[selectedIndex];
-    if (!item) return;
-    setRenderMode(
-      item.content_type === 'rich_text' ||
-        Boolean(item.html_content) ||
-        (Boolean(item.text_content) && isMarkdownContent(item.text_content || ''))
-    );
   }, [selectedIndex, displayItems]);
 
   const logClient = (msg: string) => {
@@ -1782,10 +1766,10 @@ export const QuickOverlay: React.FC = () => {
     const steps = navAccumRef.current;
     if (steps === 0) return;
     navAccumRef.current = 0;
+    const delta = Math.max(-2, Math.min(2, steps));
     setSelectedIndex((prev) => {
       if (displayItems.length === 0) return prev;
-      const next = (prev + steps) % displayItems.length;
-      return next < 0 ? next + displayItems.length : next;
+      return Math.max(0, Math.min(displayItems.length - 1, prev + delta));
     });
   };
 

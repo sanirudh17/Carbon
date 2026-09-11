@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, memo, useCallback, useMemo } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useRef, memo, useCallback, useMemo } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -40,6 +40,7 @@ import {
   getTypeIcon,
   getTypeColor,
   ClipTileIcon,
+  thumbnailCache,
 } from './Icons';
 
 declare global {
@@ -335,8 +336,18 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   // Load image data URL reliably without blank placeholder
   useEffect(() => {
     if (selectedItem?.content_type === 'image' && selectedItem.image_path) {
+      const cached = thumbnailCache.get(selectedItem.image_path);
+      if (cached) {
+        setImageDataUrl(cached);
+        return;
+      }
       invoke<string>('get_image_data_url', { filePath: selectedItem.image_path })
-        .then((url) => setImageDataUrl(url))
+        .then((url) => {
+          if (url) {
+            thumbnailCache.set(selectedItem.image_path!, url);
+            setImageDataUrl(url);
+          }
+        })
         .catch(() => setImageDataUrl(''));
     } else {
       setImageDataUrl('');
@@ -589,25 +600,21 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     };
   }, []);
 
-  // Auto-scroll selected row into view (rAF-coalesced so rapid arrow
-  // holds supersede in-flight scrolls instead of piling up)
-  useEffect(() => {
+  // Auto-scroll selected row into view in lockstep with selection update
+  useLayoutEffect(() => {
     if (items.length === 0 || selectedIndex < 0 || selectedIndex >= items.length) {
       return;
     }
-    const raf = requestAnimationFrame(() => {
-      const el = document.getElementById(`enlarged-row-${selectedIndex}`);
-      if (el) {
-        el.scrollIntoView({ block: 'nearest' });
-      }
-    });
+    const el = document.getElementById(`enlarged-row-${selectedIndex}`);
+    if (el) {
+      el.scrollIntoView({ block: 'nearest' });
+    }
     const target = items[selectedIndex];
     if (target && target.id !== selectedItem?.id) {
       setSelectedItem(target);
       setEditingContent(target.text_content || '');
       setRenderMode(true);
     }
-    return () => cancelAnimationFrame(raf);
   }, [selectedIndex, items, selectedItem?.id]);
 
   useEffect(() => {
@@ -1212,10 +1219,10 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     const steps = navAccumRef.current;
     if (steps === 0) return;
     navAccumRef.current = 0;
+    const delta = Math.max(-2, Math.min(2, steps));
     setSelectedIndex((prev) => {
       if (items.length === 0) return prev;
-      const next = (prev + steps) % items.length;
-      return next < 0 ? next + items.length : next;
+      return Math.max(0, Math.min(items.length - 1, prev + delta));
     });
   };
 
