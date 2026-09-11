@@ -1784,8 +1784,7 @@ export const QuickOverlay: React.FC = () => {
     navAccumRef.current = 0;
     setSelectedIndex((prev) => {
       if (displayItems.length === 0) return prev;
-      const next = (prev + steps) % displayItems.length;
-      return next < 0 ? next + displayItems.length : next;
+      return Math.max(0, Math.min(displayItems.length - 1, prev + steps));
     });
   };
 

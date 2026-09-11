@@ -1214,8 +1214,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     navAccumRef.current = 0;
     setSelectedIndex((prev) => {
       if (items.length === 0) return prev;
-      const next = (prev + steps) % items.length;
-      return next < 0 ? next + items.length : next;
+      return Math.max(0, Math.min(items.length - 1, prev + steps));
     });
   };
 
