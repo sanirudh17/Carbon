@@ -88,7 +88,7 @@
   --app-window-bg: transparent;
 
   /* ── Floating-surface Material Tokens (ADDENDUM v14) ── */
-  --surface-float-glass: rgba(16, 16, 18, 0.82);
+  --surface-float-glass: rgba(18, 18, 22, 0.62);
   --surface-float-solid: #15161B;
   --surface-float: var(--surface-float-glass);
   --surface-float-bg: var(--surface-float-glass);
@@ -96,7 +96,7 @@
   --surface-float-shadow: 0 24px 64px rgba(0, 0, 0, 0.50);
   --surface-float-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07);
   --backdrop-blur: blur(24px);
-  --backdrop-dim: rgba(0, 0, 0, 0.40);
+  --backdrop-dim: rgba(0, 0, 0, 0.30);
 }
 
 body.win-overlay,
@@ -196,7 +196,7 @@ html.win-library body {
   --app-window-bg: transparent;
 
   /* ── Floating-surface Material Tokens (Light) (ADDENDUM v14) ── */
-  --surface-float-glass: rgba(248, 248, 250, 0.86);
+  --surface-float-glass: rgba(255, 255, 255, 0.70);
   --surface-float-solid: #FFFFFF;
   --surface-float: var(--surface-float-glass);
   --surface-float-bg: var(--surface-float-glass);
@@ -204,7 +204,7 @@ html.win-library body {
   --surface-float-shadow: 0 24px 64px rgba(0, 0, 0, 0.18);
   --surface-float-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.70);
   --backdrop-blur: blur(24px);
-  --backdrop-dim: rgba(255, 255, 255, 0.30);
+  --backdrop-dim: rgba(255, 255, 255, 0.25);
 }
 
 [data-theme="light"] body.win-overlay,
@@ -996,6 +996,7 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   place-items: center;
   flex-shrink: 0;
   overflow: hidden;
+  position: relative;
   background-clip: padding-box;
   background: var(--tile-bg) !important;
   color: currentColor !important;
@@ -1003,6 +1004,23 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   outline: none !important;
   box-shadow: none !important;
   transition: background-color 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.type-icon.has-thumb {
+  background: var(--tile-bg) !important;
+}
+
+.type-icon.has-thumb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  pointer-events: none;
+}
+
+[data-theme="light"] .type-icon.has-thumb::after {
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
 }
 
 .row:hover .type-icon {
@@ -1015,6 +1033,14 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   background: var(--tile-bg-selected) !important;
   border: none !important;
   box-shadow: none !important;
+}
+
+.row.selected .type-icon.has-thumb::after {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+
+[data-theme="light"] .row.selected .type-icon.has-thumb::after {
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.14);
 }
 
 .type-icon svg,
@@ -1030,6 +1056,7 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   height: 100%;
   object-fit: cover;
   border-radius: inherit;
+  display: block;
 }
 
 .row-body {
@@ -3293,7 +3320,29 @@ section:last-child {
   font-size: 13px;
   flex-shrink: 0;
   overflow: hidden;
+  position: relative;
   background-clip: padding-box;
+}
+
+.bulk-card-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+  display: block;
+}
+
+.bulk-card-icon.has-thumb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  pointer-events: none;
+}
+
+[data-theme="light"] .bulk-card-icon.has-thumb::after {
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
 }
 
 .bulk-card-body {
@@ -3953,6 +4002,9 @@ section:last-child {
   flex: 1;
   height: 100%;
   padding: 24px;
+  background: radial-gradient(circle at 50% 40%, var(--glass-preview) 0%, transparent 80%);
+  backdrop-filter: var(--inapp-blur);
+  -webkit-backdrop-filter: var(--inapp-blur);
 }
 
 .col-locked-card {
@@ -3961,34 +4013,36 @@ section:last-child {
   align-items: center;
   text-align: center;
   background: var(--surface-float-bg);
-  backdrop-filter: var(--inapp-blur);
-  -webkit-backdrop-filter: var(--inapp-blur);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
   border: var(--surface-float-border);
   border-radius: 14px;
   overflow: hidden;
   background-clip: padding-box;
-  padding: 22px 20px;
+  padding: 28px 24px;
   width: 100%;
-  max-width: 295px;
+  max-width: 300px;
   box-shadow: var(--surface-float-shadow), var(--surface-float-highlight);
   animation: modalScaleIn 160ms var(--ease-out);
 }
 
 .col-locked-icon {
-  width: 38px;
-  height: 38px;
-  border-radius: var(--tile-radius, 10px);
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
   background: var(--tile-bg);
+  border: 1px solid var(--glass-hairline);
+  box-shadow: var(--surface-float-highlight);
   color: currentColor;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 
 .col-locked-icon svg {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   opacity: var(--glyph-alpha, 0.72);
 }
 
@@ -4022,24 +4076,25 @@ section:last-child {
 .pin-input {
   width: 100%;
   text-align: center;
-  letter-spacing: 4px;
-  font-size: 15px;
+  letter-spacing: 5px;
+  font-size: 16px;
   font-family: inherit;
-  padding: 5px 10px 5px 14px; /* +4px on left balances trailing 4px letter-spacing */
-  height: 33px;
+  padding: 6px 12px 6px 17px; /* +5px on left balances trailing 5px letter-spacing */
+  height: 38px;
   background: var(--tile-bg);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--r-btn);
+  border: 1px solid var(--glass-hairline);
+  border-radius: 10px;
   color: var(--text);
   outline: none;
-  transition: border-color 140ms ease, box-shadow 140ms ease;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
   box-sizing: border-box;
 }
 
 .passcode-input:focus,
 .pin-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  background: color-mix(in srgb, var(--tile-bg) 80%, var(--accent) 15%);
 }
 
 .passcode-input.input-error,
@@ -4059,20 +4114,21 @@ section:last-child {
   font-weight: 600;
   letter-spacing: 2px;
   text-transform: uppercase;
-  height: 33px;
+  height: 38px;
   padding: 6px 10px;
   background: var(--tile-bg);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--r-btn);
+  border: 1px solid var(--glass-hairline);
+  border-radius: 10px;
   color: var(--text);
   outline: none;
   box-sizing: border-box;
-  transition: border-color 140ms ease, box-shadow 140ms ease;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
 }
 
 .recovery-code-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  background: color-mix(in srgb, var(--tile-bg) 80%, var(--accent) 15%);
 }
 
 .recovery-code-input.input-error {
@@ -4082,9 +4138,9 @@ section:last-child {
 }
 
 .recovery-display-box {
-  background: color-mix(in srgb, var(--surface) 80%, #000 20%);
-  border: 1px solid var(--line);
-  border-radius: var(--r-card, 8px);
+  background: var(--tile-bg);
+  border: 1px solid var(--glass-hairline);
+  border-radius: 10px;
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
@@ -4350,8 +4406,8 @@ section:last-child {
 
 .modal-card {
   background: var(--surface-float-bg);
-  backdrop-filter: var(--inapp-blur);
-  -webkit-backdrop-filter: var(--inapp-blur);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
   border: var(--surface-float-border);
   border-radius: 14px;
   width: 340px;
@@ -4370,7 +4426,7 @@ section:last-child {
   gap: 8px;
   padding: 12px 14px 10px;
   background: transparent;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--glass-hairline);
 }
 
 .modal-head-icon {
@@ -4473,7 +4529,7 @@ section:last-child {
   gap: 8px;
   padding: 10px 14px 12px;
   background: transparent;
-  border-top: 1px solid var(--line-soft);
+  border-top: 1px solid var(--glass-hairline);
 }
 
 .create-col-modal {

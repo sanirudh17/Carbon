@@ -39,6 +39,7 @@ import {
   SnippetIcon,
   getTypeIcon,
   getTypeColor,
+  ClipTileIcon,
 } from './Icons';
 
 declare global {
@@ -126,8 +127,8 @@ const EnlargedRow = memo(function EnlargedRow({
       className={`row ${isSelected ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragging ? 'is-dragging' : ''} ${queueIdx >= 0 ? 'in-queue' : ''}`}
       onClick={(e) => onRowClick(item, index, e)}
     >
-      <div className="type-icon">
-        {getTypeIcon(item.content_type)}
+      <div className={`type-icon ${item.content_type === 'image' && item.image_path && !item.is_sensitive ? 'has-thumb' : ''}`}>
+        <ClipTileIcon item={item} />
       </div>
       <div className="row-body">
         <div className="row-title">
@@ -2103,13 +2104,13 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                         return (
                           <div key={item.id} className="bulk-item-card">
                             <div
-                              className="bulk-card-icon"
+                              className={`bulk-card-icon ${item.content_type === 'image' && item.image_path && !item.is_sensitive ? 'has-thumb' : ''}`}
                               style={{
                                 background: `color-mix(in srgb, ${tint} 16%, transparent)`,
                                 color: tint,
                               }}
                             >
-                              {getTypeIcon(item.content_type)}
+                              <ClipTileIcon item={item} />
                             </div>
                             <div className="bulk-card-body">
                               <div className="bulk-card-title">

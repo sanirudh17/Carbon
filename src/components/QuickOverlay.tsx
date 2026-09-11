@@ -33,6 +33,7 @@ import {
   snippetIconFor,
   getTypeIcon,
   getTypeColor,
+  ClipTileIcon,
 } from './Icons';
 import type { ContentType } from '../types';
 import { SnippetEditorModal } from './SnippetEditorModal';
@@ -121,8 +122,8 @@ const OverlayRow = memo(function OverlayRow({
       className={`row ${isSelected ? 'selected' : ''} ${isDragging ? 'is-dragging' : ''} ${queueIdx >= 0 ? 'in-queue' : ''}`}
       onClick={() => onSelect(index)}
     >
-      <div className="type-icon">
-        {getTypeIcon(item.content_type)}
+      <div className={`type-icon ${item.content_type === 'image' && item.image_path && !item.is_sensitive ? 'has-thumb' : ''}`}>
+        <ClipTileIcon item={item} />
       </div>
       <div className="row-body">
         <div className="row-title">

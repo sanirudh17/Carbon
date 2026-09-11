@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Search,
   Clock,
@@ -47,7 +47,8 @@ import {
   Sliders,
   AlertTriangle,
 } from 'lucide-react';
-import { ContentType } from '../types';
+import { convertFileSrc } from '@tauri-apps/api/core';
+import { ClipItem, ContentType } from '../types';
 import carbonBadgeDarkPng from '../assets/carbon-badge-dark.png';
 import carbonBadgeLightPng from '../assets/carbon-badge-light.png';
 
@@ -361,6 +362,38 @@ export function getTypeIcon(kind: ContentType) {
     default: return <TextIcon />;
   }
 }
+
+/**
+ * Miniature clip tile icon (Tinycast / Raycast parity):
+ * - If sensitive: shielded with LockIcon.
+ * - If image with image_path: renders miniature image thumbnail with fallback.
+ * - Otherwise: renders content-type glyph.
+ */
+export const ClipTileIcon: React.FC<{ item: ClipItem; className?: string }> = ({ item, className }) => {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [item.image_path, item.id]);
+
+  if (item.is_sensitive) {
+    return <LockIcon className={className} />;
+  }
+
+  if (item.content_type === 'image' && item.image_path && !failed) {
+    return (
+      <img
+        src={convertFileSrc(item.image_path)}
+        alt=""
+        loading="lazy"
+        draggable={false}
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+
+  return <>{getTypeIcon(item.content_type)}</>;
+};
 
 export function getTypeColor(_kind?: ContentType): string {
   return 'currentColor';
