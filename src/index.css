@@ -1008,6 +1008,17 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
 
 .type-icon.has-thumb {
   background: var(--tile-bg) !important;
+  padding: 2.5px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  overflow: hidden !important;
+  position: relative !important;
+  box-sizing: border-box !important;
+}
+
+[data-theme="light"] .type-icon.has-thumb {
+  background: rgba(0, 0, 0, 0.05) !important;
 }
 
 .type-icon.has-thumb::after {
@@ -1015,7 +1026,7 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09);
   pointer-events: none;
 }
 
@@ -1051,15 +1062,18 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   color: currentColor;
 }
 
-.type-icon img,
-.type-icon .clip-thumb-img {
+.type-icon.has-thumb img,
+.type-icon.has-thumb .clip-thumb-img {
   width: 100% !important;
   height: 100% !important;
   max-width: 100% !important;
   max-height: 100% !important;
-  object-fit: cover !important;
-  border-radius: inherit !important;
+  object-fit: contain !important;
+  object-position: center !important;
+  border-radius: 4px !important;
   display: block !important;
+  image-rendering: -webkit-optimize-contrast !important;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.22));
 }
 
 .row-body {
@@ -3327,15 +3341,26 @@ section:last-child {
   background-clip: padding-box;
 }
 
+.bulk-card-icon.has-thumb {
+  padding: 2px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-sizing: border-box !important;
+}
+
 .bulk-card-icon img,
 .bulk-card-icon .clip-thumb-img {
   width: 100% !important;
   height: 100% !important;
   max-width: 100% !important;
   max-height: 100% !important;
-  object-fit: cover !important;
-  border-radius: inherit !important;
+  object-fit: contain !important;
+  object-position: center !important;
+  border-radius: 4px !important;
   display: block !important;
+  image-rendering: -webkit-optimize-contrast !important;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.22));
 }
 
 .bulk-card-icon.has-thumb::after {
@@ -4007,10 +4032,10 @@ section:last-child {
   justify-content: center;
   flex: 1;
   height: 100%;
-  padding: 24px;
-  background: transparent !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
+  padding: 32px 24px;
+  background: var(--glass-preview) !important;
+  backdrop-filter: var(--inapp-blur) !important;
+  -webkit-backdrop-filter: var(--inapp-blur) !important;
 }
 
 .col-locked-card {
@@ -4018,50 +4043,57 @@ section:last-child {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  background: var(--glass-sidebar);
-  border: 1px solid var(--glass-hairline);
-  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--glass-preview));
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--glass-hairline));
+  border-radius: 16px;
   overflow: hidden;
   background-clip: padding-box;
-  padding: 28px 24px;
+  padding: 32px 28px;
   width: 100%;
-  max-width: 300px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.22), var(--glass-highlight);
+  max-width: 320px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.38),
+              0 0 32px color-mix(in srgb, var(--accent) 12%, transparent),
+              inset 0 1px 0 color-mix(in srgb, var(--accent) 25%, rgba(255, 255, 255, 0.16));
   animation: modalScaleIn 160ms var(--ease-out);
 }
 
 .col-locked-icon {
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  background: var(--tile-bg);
-  border: 1px solid var(--glass-hairline);
-  box-shadow: var(--surface-float-highlight);
-  color: currentColor;
+  width: 48px;
+  height: 48px;
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--accent) 16%, var(--tile-bg));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 20%, transparent),
+              inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  color: var(--accent);
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .col-locked-icon svg {
-  width: 20px;
-  height: 20px;
-  opacity: var(--glyph-alpha, 0.72);
+  width: 22px;
+  height: 22px;
+  color: var(--accent);
+  opacity: 0.95;
 }
 
 .col-locked-title {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 650;
-  margin: 0 0 4px 0;
+  margin: 0 0 5px 0;
   color: var(--text);
+  letter-spacing: -0.01em;
 }
 
 .col-locked-subtitle {
-  font-size: 11.5px;
-  color: var(--text-3);
-  margin: 0 0 14px 0;
-  line-height: 1.4;
+  font-size: 12px;
+  color: var(--text-2);
+  margin: 0 0 18px 0;
+  line-height: 1.45;
 }
 
 .col-pin-form {
@@ -4069,7 +4101,7 @@ section:last-child {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
 .pin-input-group {
@@ -4080,14 +4112,14 @@ section:last-child {
 .pin-input {
   width: 100%;
   text-align: center;
-  letter-spacing: 5px;
-  font-size: 16px;
+  letter-spacing: 6px;
+  font-size: 18px;
   font-family: inherit;
-  padding: 6px 12px 6px 17px; /* +5px on left balances trailing 5px letter-spacing */
-  height: 38px;
-  background: var(--tile-bg);
-  border: 1px solid var(--glass-hairline);
-  border-radius: 10px;
+  padding: 8px 14px 8px 20px; /* +6px on left balances trailing 6px letter-spacing */
+  height: 44px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--tile-bg));
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--glass-border));
+  border-radius: 11px;
   color: var(--text);
   outline: none;
   transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
@@ -4097,8 +4129,8 @@ section:last-child {
 .passcode-input:focus,
 .pin-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
-  background: color-mix(in srgb, var(--tile-bg) 80%, var(--accent) 15%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--tile-bg));
 }
 
 .passcode-input.input-error,
@@ -4231,27 +4263,76 @@ section:last-child {
 
 .col-pin-actions .btn {
   width: 100%;
-  height: 33px;
-  min-height: 33px;
-  max-height: 33px;
+  height: 40px;
+  min-height: 40px;
+  max-height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
   text-align: center;
-  font-size: 12.5px;
+  font-size: 13.5px;
   font-weight: 600;
   line-height: 1;
   padding: 0 14px;
-  border-radius: var(--r-btn);
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-fg, #ffffff);
+  border: 1px solid color-mix(in srgb, var(--accent-hover) 40%, transparent);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 38%, transparent);
+  cursor: pointer;
+  transition: all 140ms ease;
   box-sizing: border-box;
+}
+
+.col-pin-actions .btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--accent) 48%, transparent);
+  transform: translateY(-0.5px);
+}
+
+.col-pin-actions .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
 }
 
 .col-locked-footer-links {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  margin-top: 10px;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.col-forgot-pin-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--accent-text);
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+
+.col-forgot-pin-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.col-forgot-pin-link.subtle {
+  color: var(--text-3);
+  font-weight: 450;
+}
+
+.col-forgot-pin-link.subtle:hover {
+  color: var(--text-2);
+}
+
+.col-footer-sep {
+  font-size: 10px;
+  color: var(--text-3);
+  opacity: 0.5;
 }
 
 /* Change Color Modal & Slider */
