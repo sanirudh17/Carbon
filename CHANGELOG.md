@@ -2,6 +2,17 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
+## [0.1.12] — 2026-09-12
+
+### Fixed
+- **Event-driven show gate & zero fixed settle delays** — Eliminated all fixed settle delays (previously up to 150ms) from the happy path across both Quick Overlay and Main Window. The show gate now uncloaks purely on per-cycle present confirmation from the renderer. Hotkey-to-interactive latency measured at p50=46ms / p95=46ms for the overlay and p50=47ms / p95=47ms for the main window (beating baseline by 11-15ms). A 300ms bounded wait provides flash-safe fallback without leaving windows in a cloaked state.
+- **OS-alpha masking & flash elimination** — Windows uncloak at OS-level alpha 0 and ramp to 255 over 100ms, ensuring direct composition texture swaps composite invisibly and eliminating show-time white frame flashes. Raw SWP_SHOWWINDOW was removed from native window positioning to prevent premature DWM frame reveals.
+- **Persistent hidden compositor heartbeat** — A hidden rAF heartbeat keeps Chromium's compositor awake and warm while windows are hidden, preventing animation suspension and render freezes upon opening.
+- **Tab preview mask lifecycle & single layout root** — Desktop-blur mask is active strictly between content-out and content-in during Tab preview transitions, with mask-off assertions enforced at idle. Exactly one live layout root is mounted throughout all states, and preview toggle transitions complete with keypress-to-settled latency of 176ms (budget <= 200ms).
+- **Tab-toggle ghost classification & DirectComposition swapchain handling** — Continuous 240fps frame sampling confirmed single layout root across all frames (ruling out dual-root crossfading). Transient resize artifacts were classified as DirectComposition swapchain re-allocation and deliberately accepted as a documented cosmetic known issue to preserve instant clip list solidity and avoid whole-window blackout dips.
+- **Keyboard navigation boundary safety** — Keyboard arrow navigation in clip lists is strictly clamped at the top and bottom boundaries, preventing infinite scroll loops and unintentional jumping between the first and last entries.
+- **Frontend choreography bundle transform** — Mask lifecycle helpers moved to top-level module scope in the choreography controller, resolving Vite and esbuild transform errors.
+
 ## [0.1.11] — 2026-09-03
 
 ### Fixed
