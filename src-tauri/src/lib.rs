@@ -1,4 +1,5 @@
 mod clipboard_watcher;
+pub mod choreo;
 mod db;
 mod expansion;
 mod history;
@@ -23,14 +24,14 @@ use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Emitter, Manager, State, WebviewWindow, WindowEvent,
+    AppHandle, Emitter, Listener, Manager, State, WebviewWindow, WindowEvent,
 };
 
-struct AppState {
-    db: Arc<DbState>,
-    settings: Arc<SettingsState>,
-    watcher: Arc<ClipboardWatcher>,
-    paste_queue: Arc<Mutex<VecDeque<String>>>,
+pub struct AppState {
+    pub db: Arc<DbState>,
+    pub settings: Arc<SettingsState>,
+    pub watcher: Arc<ClipboardWatcher>,
+    pub paste_queue: Arc<Mutex<VecDeque<String>>>,
 }
 
 #[tauri::command]
@@ -620,70 +621,16 @@ fn set_overlay_preview(
     app_handle: AppHandle,
     window: WebviewWindow,
     enabled: bool,
+    r#gen: u64,
 ) -> Result<(), String> {
-    let mut settings = state.settings.get();
-    settings.preview_enabled = enabled;
-    state.settings.update(settings.clone())?;
+    choreo::set_overlay_preview(&state, &app_handle, &window, enabled, r#gen)
+}
 
-    // Content is already faded by QuickOverlay before this command runs. One
-    // centered snap restores the compact 680x440 overlay without animating the
-    // native surface or exposing its repaint frame.
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let (w_log, h_log) = if enabled { (1020, 560) } else { (680, 440) };
-    let (w_phys, h_phys) = (
-        (w_log as f64 * scale).round() as u32,
-        (h_log as f64 * scale).round() as u32,
-    );
-    let pos_x: i32;
-    let pos_y: i32;
-    if let (Ok(old_pos), Ok(old_size)) = (window.outer_position(), window.outer_size()) {
-        pos_x = old_pos.x + old_size.width as i32 / 2 - w_phys as i32 / 2;
-        pos_y = old_pos.y + old_size.height as i32 / 2 - h_phys as i32 / 2;
-    } else {
-        let (cx, cy) = paste::get_cursor_position();
-        let (pos_x_l, pos_y_l) = hotkey::calculate_overlay_position(cx, cy, w_log, h_log, scale);
-        pos_x = pos_x_l;
-        pos_y = pos_y_l;
-    }
-
-    // Instant centered snap behind the renderer's fade mask (glass behavior):
-    // animating the native surface reallocates the composition surface every
-    // frame and reads as slow, swimmy Tab switching.
-    let mat = vibrancy::WindowMaterial::from_str(&settings.window_material);
-    vibrancy::set_window_default_background(&window, mat, &settings.theme);
-    crate::webview_bg::set_webview_transparent_background(window.as_ref());
-
-    #[cfg(windows)]
-    {
-        use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
-        if let Ok(hwnd) = window.hwnd() {
-            unsafe {
-                let _ = SetWindowPos(
-                    HWND(hwnd.0 as *mut _), None, pos_x, pos_y,
-                    w_phys as i32, h_phys as i32, SWP_NOACTIVATE | SWP_NOZORDER,
-                );
-            }
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        window
-            .set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                width: w_phys,
-                height: h_phys,
-            }))
-            .map_err(|e| e.to_string())?;
-
-        window
-            .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                x: pos_x,
-                y: pos_y,
-            }))
-            .map_err(|e| e.to_string())?;
-    }
-    let _ = app_handle.emit("preview-toggled", enabled);
-    Ok(())
+/// Cloaks a window immediately without hiding it, so the hide fade plays
+/// invisibly instead of exposing the bare acrylic slab (close flash).
+#[tauri::command]
+fn cloak_window(app_handle: AppHandle, window_label: String) -> Result<(), String> {
+    choreo::cloak_window(&app_handle, window_label)
 }
 
 #[tauri::command]
@@ -712,26 +659,22 @@ fn overlay_phase_ack(phase: String) {
 
 #[tauri::command]
 fn hide_overlay(app_handle: AppHandle) -> Result<(), String> {
-    // The renderer may have already acknowledged its fade/atomic Glass hide
-    // before this command arrives. Native hide is the terminal authority and
-    // must never be rejected based on a stale phase snapshot.
-    hotkey::hide_overlay_window(&app_handle);
-    Ok(())
+    choreo::hide_overlay(&app_handle)
 }
 
 /// Renderer confirms the overlay presented its first painted frame after
 /// show → lift the DWM cloak gate (white-flash fix). Safe to call when
 /// already hidden/uncloaked: the generation check makes it a no-op.
 #[tauri::command]
-fn overlay_painted(app_handle: AppHandle) {
-    hotkey::note_overlay_painted(&app_handle);
+fn overlay_painted(app_handle: AppHandle, token: Option<u64>) {
+    choreo::note_window_painted(&app_handle, "overlay", token);
 }
 
 /// Renderer confirms the main window presented its first painted frame
 /// after show → lift the DWM cloak gate (white-flash fix).
 #[tauri::command]
-fn enlarged_painted(app_handle: AppHandle) {
-    hotkey::note_enlarged_painted(&app_handle);
+fn enlarged_painted(app_handle: AppHandle, token: Option<u64>) {
+    choreo::note_window_painted(&app_handle, "main", token);
 }
 
 #[tauri::command]
@@ -741,6 +684,8 @@ fn enlarged_hide_ack(gen: u64) {
 
 #[tauri::command]
 fn hide_enlarged(window: WebviewWindow) -> Result<(), String> {
+    crate::paste::log_diag("[HIDE_MAIN] hide_enlarged invoked (webview fade done)");
+    hotkey::invalidate_enlarged_show_gen();
     let _ = window.eval("document.documentElement.classList.add('wm-hidden')");
     paste::restore_target_window();
     // Windows stay warm: always hide, never close (instant next open).
@@ -1131,19 +1076,28 @@ pub fn run() {
             // process and tray icon. Handle both hidden (warm) and visible
             // states.
             if let Some(win) = app.get_webview_window("main") {
+                hotkey::set_window_cloaked(&win, true);
                 if win.is_minimized().unwrap_or(false) {
                     let _ = win.unminimize();
                 }
                 let _ = win.show();
+                hotkey::set_window_cloaked(&win, true);
                 let _ = win.set_focus();
                 // Route through the same reveal choreography as the hotkey
                 // path so the frontend lifts its wm-hidden mask (otherwise a
                 // second-launch focus leaves a stuck blank window).
-                let _ = app.emit("enlarged-opened", ());
+                let enlarged_gen = hotkey::next_enlarged_show_gen();
+                let _ = app.emit("enlarged-opened", hotkey::EnlargedOpenedPayload { token: enlarged_gen });
             } else if let Some(win) = app.get_webview_window("overlay") {
                 let _ = win.show();
                 let _ = win.set_focus();
-                let _ = app.emit("overlay-opened", ());
+                let overlay_gen = hotkey::next_overlay_show_gen();
+                let _ = app.emit("overlay-opened", hotkey::OverlayOpenedPayload {
+                    token: overlay_gen,
+                    preview_enabled: true,
+                    target_app: None,
+                    hide_gen: 0,
+                });
             }
         }))
         .plugin(tauri_plugin_opener::init())
@@ -1242,6 +1196,31 @@ pub fn run() {
                 });
             }
 
+            // Genuine first-present prewarm (ported from final-visual-polish):
+            // cloaked windows are excluded from DWM composition, so the cloak
+            // prewarm alone never presents a real first frame — the first
+            // uncloaked show then flashes white. Once the UI reports mounted,
+            // present each hidden window once off-screen (uncloaked) and
+            // re-cloak, so every later show composites a warm surface.
+            {
+                let handle = app_handle.clone();
+                app.listen("carbon-ui-ready", move |_| {
+                    static DONE: std::sync::atomic::AtomicBool =
+                        std::sync::atomic::AtomicBool::new(false);
+                    if DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                        return;
+                    }
+                    let handle = handle.clone();
+                    std::thread::spawn(move || {
+                        // Small buffer so the first layout/paint has settled.
+                        std::thread::sleep(std::time::Duration::from_millis(350));
+                        vibrancy::prewarm_first_paint(&handle);
+                        hotkey::recloak_window(&handle, "overlay");
+                        hotkey::recloak_window(&handle, "main");
+                    });
+                });
+            }
+
             // Build Tray Icon
             let show_i = MenuItem::with_id(app, "show", "Open Carbon", true, None::<&str>)?;
             let overlay_i = MenuItem::with_id(app, "overlay", "Quick Overlay", true, None::<&str>)?;
@@ -1289,6 +1268,8 @@ pub fn run() {
                 api.prevent_close();
                 if window.label() == "overlay" {
                     hotkey::hide_overlay_window(&window.app_handle());
+                } else if window.label() == "main" || window.label() == "enlarged" {
+                    let _ = choreo::hide_enlarged(&window.app_handle());
                 } else {
                     window.hide().ok();
                 }
@@ -1363,6 +1344,7 @@ pub fn run() {
             stop_recording_hotkey,
             get_target_app_name,
             set_overlay_preview,
+            cloak_window,
             set_overlay_default_tab,
             get_stats,
             hide_overlay,
@@ -1404,7 +1386,11 @@ pub fn run() {
             paste_snippet_text,
             set_window_material,
             clear_window_material,
-            log_client_event
+            log_client_event,
+            choreo::choreo_set_overlay_preview,
+            choreo::choreo_hide_overlay,
+            choreo::choreo_hide_enlarged,
+            choreo::choreo_notify_painted
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test": "node --test test/*.test.mjs",
+    "canary": "node scripts/visual-canary.mjs"
   },
   "dependencies": {
     "@hugeicons/core-free-icons": "^4.3.2",

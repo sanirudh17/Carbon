@@ -270,3 +270,54 @@ pub fn set_webview_default_background<W: tauri::Runtime>(
     #[cfg(not(target_os = "windows"))]
     let _ = (webview, material, theme);
 }
+
+/// Force each hidden window's WebView2 to present its first frame while the
+/// user can't see it. A cloaked window is excluded from DWM composition, so
+/// the cloak-gated prewarm alone never produces a genuine first present —
+/// the first uncloaked present then comes out white (the "first hotkey press
+/// flashes" bug, ported from final-visual-polish). The windows are parked
+/// off-screen and shown WITHOUT activation (SW_SHOWNOACTIVATE) so real
+/// composition happens, then hidden and restored — nothing visible on screen.
+/// Callers must re-cloak afterwards: show/hide cycles can clear the DWM cloak
+/// flag on some drivers.
+pub fn prewarm_first_paint(app: &AppHandle) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::time::Duration;
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOWNOACTIVATE};
+        for label in ["main", "overlay"] {
+            let Some(win) = app.get_webview_window(label) else {
+                continue;
+            };
+            if win.is_visible().unwrap_or(false) {
+                continue;
+            }
+            let Ok(hwnd) = win.hwnd() else {
+                continue;
+            };
+            let orig = win.outer_position().ok();
+            let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                x: -32000,
+                y: -32000,
+            }));
+            let h_raw: isize = hwnd.0 as isize;
+            let h = HWND(h_raw as *mut _);
+            unsafe {
+                let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
+            }
+            std::thread::sleep(Duration::from_millis(250));
+            unsafe {
+                let _ = ShowWindow(h, SW_HIDE);
+            }
+            if let Some(p) = orig {
+                let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                    x: p.x,
+                    y: p.y,
+                }));
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
+}

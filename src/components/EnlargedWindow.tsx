@@ -41,6 +41,7 @@ import {
   getTypeColor,
   ClipTileIcon,
 } from './Icons';
+import { executeWindowHide, traceChoreo } from '../lib/choreo';
 
 declare global {
   interface Window {
@@ -1223,21 +1224,25 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent | KeyboardEvent) => {
-    // Global hotkey toggles (Ctrl+Alt+X hides enlarged, Ctrl+Shift+Z switches to overlay)
-    if (matchesHotkeyCombo(e, hotkeys.enlarged || 'Ctrl+Alt+X')) {
+    // Global hotkey toggles: single-path routing — the OS global shortcut
+    // owns every toggle so each physical press toggles exactly once even
+    // under ultra-fast mashing (webview + hook both firing per press caused
+    // ordering inversions that ate taps). Only suppress browser defaults.
+    // !e.repeat: holding the combo must not auto-repeat toggles into a storm.
+    if (!e.repeat && matchesHotkeyCombo(e, hotkeys.enlarged || 'Ctrl+Alt+X')) {
       e.preventDefault();
       e.stopPropagation();
+      traceChoreo('main webview hotkey-hide pressed');
       if (window.__carbonRequestEnlargedHide) {
         window.__carbonRequestEnlargedHide();
       } else {
-        invoke('hide_enlarged').catch(console.error);
+        executeWindowHide('main');
       }
       return;
     }
-    if (matchesHotkeyCombo(e, hotkeys.overlay || 'Ctrl+Shift+Z')) {
+    if (!e.repeat && matchesHotkeyCombo(e, hotkeys.overlay || 'Ctrl+Shift+Z')) {
       e.preventDefault();
       e.stopPropagation();
-      invoke('toggle_overlay').catch(console.error);
       return;
     }
 
@@ -1461,10 +1466,11 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
         return;
       }
       setPasteMenuOpen(false);
+      traceChoreo('main webview Escape-hide pressed');
       if (window.__carbonRequestEnlargedHide) {
         window.__carbonRequestEnlargedHide();
       } else {
-        invoke('hide_enlarged').catch(console.error);
+        executeWindowHide('main');
       }
       return;
     }
@@ -1493,6 +1499,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   return (
     <div
       className="enlarged"
+      data-carbon-layout-root
       tabIndex={0}
       onDragOver={(e) => {
         e.preventDefault();

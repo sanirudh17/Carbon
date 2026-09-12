@@ -645,7 +645,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   const isCustomColor = !ACCENT_SWATCHES.some((s) => s.color.toLowerCase() === settings.accent_color.toLowerCase());
 
   return (
-    <div className="settings">
+    <div className="settings" data-carbon-layout-root>
       <div className="settings-head">
         <button className="btn subtle icon-btn" title="Back" onClick={onBack}>
           <ChevronLeftIcon />

@@ -19,6 +19,12 @@ import {
 import { useSnippetFlow } from '../utils/useSnippetFlow';
 import { SnippetArgPrompt } from './SnippetArgPrompt';
 import {
+  executeWindowShow,
+  executeWindowHide,
+  createPreviewLayoutController,
+  type LayoutTransitionController,
+} from '../lib/choreo';
+import {
   SearchIcon,
   CopyIcon,
   LockIcon,
@@ -211,15 +217,12 @@ export const QuickOverlay: React.FC = () => {
   const previewOpenRef = useRef(previewOpen);
   previewOpenRef.current = previewOpen;
   const targetPreviewOpenRef = useRef<boolean>(previewOpen);
+  const previewPaneRef = useRef<HTMLDivElement | null>(null);
 
   // F3 Preview state machine: idle | out | snap | in
   type PreviewPhase = 'idle' | 'out' | 'snap' | 'in';
   const [previewPhase, setPreviewPhase] = useState<PreviewPhase>('idle');
   const previewPhaseRef = useRef<PreviewPhase>('idle');
-  const previewTimerRef = useRef<number | null>(null);
-  const previewRafRef = useRef<number | null>(null);
-  const watchdogTimerRef = useRef<number | null>(null);
-
   // F1 Single-Surface Guarantee & State Machine Transition Log
   interface TransitionRecord {
     time: number;
@@ -245,83 +248,23 @@ export const QuickOverlay: React.FC = () => {
     });
   }, []);
 
-  const assertSingleLiveLayout = useCallback(() => {
-    if (!import.meta.env.DEV) return;
-    const layers = document.querySelectorAll('[data-carbon-layout-layer="overlay"]');
-    let hasViolation = false;
-    if (layers.length !== 1) {
-      console.error(`[overlay] VIOLATION: expected exactly 1 live layout surface mounted, found ${layers.length}`);
-      hasViolation = true;
-    }
-    if (document.documentElement.classList.contains('wm-resizing') && previewPhaseRef.current === 'idle') {
-      console.error('[overlay] VIOLATION: wm-resizing leaked after preview transition (state is idle)');
-      hasViolation = true;
-    }
-    if (previewPaneRef.current?.classList.contains('snap-veil') && previewPhaseRef.current === 'idle') {
-      console.error('[overlay] VIOLATION: snap-veil leaked after preview transition (state is idle)');
-      hasViolation = true;
-    }
-    if (previewPaneRef.current?.classList.contains('preview-out') && previewPhaseRef.current === 'idle') {
-      console.error('[overlay] VIOLATION: preview-out leaked after preview transition (state is idle)');
-      hasViolation = true;
-    }
-    const content = document.getElementById('content');
-    if ((content?.classList.contains('content-fading-out') || content?.classList.contains('content-fading-in')) && previewPhaseRef.current === 'idle') {
-      console.error('[overlay] VIOLATION: content-fading-* leaked after preview transition (state is idle)');
-      hasViolation = true;
-    }
-    if (hasViolation) {
-      console.error('[overlay] State machine transition log (last 20 entries):');
-      console.table(transitionLogRef.current);
-    }
-  }, []);
+  const previewLayoutRef = useRef<LayoutTransitionController | null>(null);
+  if (!previewLayoutRef.current) {
+    previewLayoutRef.current = createPreviewLayoutController({
+      previewPaneRef,
+      previewOpenRef,
+      targetPreviewOpenRef,
+      previewPhaseRef,
+      setPreviewOpen,
+      setPreviewPhase,
+      recordTransition,
+    });
+  }
 
-  // Sends the preview size native, deduped: rapid Tab spam otherwise issues
-  // a native resize per keystroke (each reallocates the surface → jank and
-  // flash storms). REVERT NOTE (resize-storm fix): to revert, delete this
-  // helper and call invoke('set_overlay_preview', ...) directly again.
-  const sendPreviewSize = (enabled: boolean) => {
-    if (lastSentPreviewRef.current === enabled) return;
-    lastSentPreviewRef.current = enabled;
-    invoke('set_overlay_preview', { enabled }).catch(console.error);
-  };
-
-  // F1 & F3 Single-live-layout: force-finalize current phase (clear timers, strip classes, settle state to target)
+  // Finalize current phase (settle state to target)
   const finalizeTransition = useCallback((targetState?: boolean) => {
-    if (previewTimerRef.current) {
-      window.clearTimeout(previewTimerRef.current);
-      previewTimerRef.current = null;
-    }
-    if (previewRafRef.current) {
-      cancelAnimationFrame(previewRafRef.current);
-      previewRafRef.current = null;
-    }
-    if (watchdogTimerRef.current) {
-      window.clearTimeout(watchdogTimerRef.current);
-      watchdogTimerRef.current = null;
-    }
-    document.documentElement.classList.remove('wm-resizing');
-    if (previewPaneRef.current) {
-      previewPaneRef.current.classList.remove('snap-veil', 'preview-out');
-    }
-    const contentEl = document.getElementById('content');
-    if (contentEl) {
-      contentEl.classList.remove('content-fading-out', 'content-fading-in');
-    }
-    lastSnapAtRef.current = performance.now(); // interrupted snap still settles caches
-
-    const prevPhase = previewPhaseRef.current;
-    const resolvedTarget = typeof targetState === 'boolean' ? targetState : targetPreviewOpenRef.current;
-    previewOpenRef.current = resolvedTarget;
-    targetPreviewOpenRef.current = resolvedTarget;
-    setPreviewOpen(resolvedTarget);
-    sendPreviewSize(resolvedTarget);
-
-    previewPhaseRef.current = 'idle';
-    setPreviewPhase('idle');
-    recordTransition(prevPhase, 'idle', `finalizeTransition(target=${resolvedTarget})`);
-    requestAnimationFrame(assertSingleLiveLayout);
-  }, [assertSingleLiveLayout, recordTransition]);
+    previewLayoutRef.current?.finalize(targetState);
+  }, []);
   const [showSnippets, setShowSnippets] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       if (window.__carbonSettings && typeof window.__carbonSettings.show_snippets === 'boolean') {
@@ -785,14 +728,6 @@ export const QuickOverlay: React.FC = () => {
   // Last time a hide fully completed (finish()). The open path compares it
   // against now to detect cold opens after a long idle (see COLD_IDLE_MS).
   const lastHideAtRef = useRef(performance.now());
-  // Last snap completion (content-in or interrupt settle). Snaps after a
-  // long idle need the cold present window again (see below).
-  const lastSnapAtRef = useRef(0);
-  // Direct handle to the preview pane element for the snap veil.
-  const previewPaneRef = useRef<HTMLDivElement | null>(null);
-  // Last preview size sent native: skips redundant SetWindowPos storms when
-  // Tab is spammed (each native resize reallocates the DWM surface).
-  const lastSentPreviewRef = useRef<boolean | null>(null);
 
   const requestHide = (gen?: number | null) => {
     // Tell Rust this generation is handled: fallback only fires if webview hangs
@@ -802,35 +737,12 @@ export const QuickOverlay: React.FC = () => {
     if (pendingHideRef.current) return;
 
     overlayPhaseRef.current = 'hiding';
-    invoke('overlay_phase_ack', { phase: 'hiding' }).catch(() => {});
-
-    const html = document.documentElement;
-    html.classList.add('wm-hiding', 'wm-hidden');
-
-    let cancelled = false;
-    let finished = false;
-    const finish = () => {
-      if (cancelled || finished) return;
-      finished = true;
+    setTargetApp(null);
+    pendingHideRef.current = executeWindowHide('overlay', () => {
       pendingHideRef.current = null;
       lastHideAtRef.current = performance.now();
       overlayPhaseRef.current = 'hidden';
-      invoke('overlay_phase_ack', { phase: 'hidden' }).catch(() => {});
-      html.classList.remove('wm-hiding');
-      invoke('hide_overlay').catch(console.error);
-    };
-
-    const timer = window.setTimeout(finish, 90);
-    pendingHideRef.current = {
-      cancel: () => {
-        if (cancelled || finished) return;
-        cancelled = true;
-        finished = true;
-        window.clearTimeout(timer);
-        html.classList.remove('wm-hiding');
-        pendingHideRef.current = null;
-      },
-    };
+    });
   };
 
   useEffect(() => {
@@ -924,50 +836,44 @@ export const QuickOverlay: React.FC = () => {
       window.addEventListener('load', () => { windowLoaded = true; }, { once: true });
     }
 
-    const revealOverlayPaintGate = () => {
-      const epoch = ++showEpochRef.current;
-      const started = performance.now();
-      let framesSinceShow = 0;
-      let warned = false;
-      const wait = () => requestAnimationFrame(() => {
-        if (epoch !== showEpochRef.current) return;
-        framesSinceShow += 1;
-        const html = document.documentElement;
-        const isReady = windowLoaded || document.readyState === 'complete';
-        if (isReady && html.dataset.painted === '1' && framesSinceShow >= 2) {
-          invoke('overlay_painted').catch(() => {});
-          html.classList.remove('wm-hiding', 'wm-hidden');
-          overlayPhaseRef.current = 'shown';
-          invoke('overlay_phase_ack', { phase: 'shown' }).catch(() => {});
-          return;
-        }
-        if (import.meta.env.DEV && !warned && performance.now() - started > 3000) {
-          console.warn('[paint-gate] Overlay window gate stayed closed >3s (slow dependency optimization or cold-load delay detected).');
-          warned = true;
-        }
-        wait();
-      });
-      wait();
-    };
-
-    const unlistenOpened = safeListen('overlay-opened', () => {
+    const unlistenOpened = safeListen<{
+      token?: number;
+      preview_enabled?: boolean;
+      target_app?: string | null;
+      hide_gen?: number;
+    } | number>('overlay-opened', (e) => {
       logClient('Received overlay-opened event.');
+      const payload = e?.payload;
+      const token = typeof payload === 'object' && payload !== null && typeof payload.token === 'number'
+        ? payload.token
+        : (typeof payload === 'number' ? payload : undefined);
+      const previewEnabled = typeof payload === 'object' && payload !== null && typeof payload.preview_enabled === 'boolean'
+        ? payload.preview_enabled
+        : undefined;
+      const appName = typeof payload === 'object' && payload !== null && 'target_app' in payload
+        ? payload.target_app
+        : undefined;
+
       showEpochRef.current += 1;
       if (pendingHideRef.current) pendingHideRef.current.cancel();
       overlayPhaseRef.current = 'showing';
       invoke('overlay_phase_ack', { phase: 'showing' }).catch(() => {});
+
+      if (typeof previewEnabled === 'boolean') {
+        previewOpenRef.current = previewEnabled;
+        setPreviewOpen(previewEnabled);
+        if (previewEnabled) {
+          document.documentElement.setAttribute('data-painted-expanded', '1');
+        }
+      }
+      if (appName !== undefined) {
+        setTargetApp(appName);
+      }
       finalizeTransition(previewOpenRef.current);
 
-      const html = document.documentElement;
-      const isReady = windowLoaded || document.readyState === 'complete';
-      if (isReady && html.dataset.painted === '1') {
-        html.classList.remove('wm-hiding', 'wm-hidden');
-        invoke('overlay_painted').catch(() => {});
+      executeWindowShow('overlay', () => {
         overlayPhaseRef.current = 'shown';
-        invoke('overlay_phase_ack', { phase: 'shown' }).catch(() => {});
-      } else {
-        revealOverlayPaintGate();
-      }
+      }, 0, token);
 
       lastHideAtRef.current = performance.now();
 
@@ -977,7 +883,9 @@ export const QuickOverlay: React.FC = () => {
       setSnSearch('');
       setSnActionOpen(false);
       setSnActionIndex(0);
-      loadTargetApp();
+      if (appName === undefined) {
+        loadTargetApp();
+      }
       fetchItems();
       fetchSnippets();
       // Re-sync live settings (preview/snippets flags) without touching the
@@ -992,18 +900,25 @@ export const QuickOverlay: React.FC = () => {
         });
     });
 
-    const unlistenCancelHide = safeListen('overlay-cancel-hide', () => {
-      logClient('Received overlay-cancel-hide event.');
-      if (pendingHideRef.current) {
-        pendingHideRef.current.cancel();
-        pendingHideRef.current = null;
+    const unlistenCancelHide = safeListen<{ token?: number; hide_gen?: number } | number>(
+      'overlay-cancel-hide',
+      (e) => {
+        logClient('Received overlay-cancel-hide event.');
+        if (pendingHideRef.current) {
+          pendingHideRef.current.cancel();
+          pendingHideRef.current = null;
+        }
+        overlayPhaseRef.current = 'showing';
+        invoke('overlay_phase_ack', { phase: 'showing' }).catch(() => {});
+        const payload = e?.payload;
+        const token = typeof payload === 'object' && payload !== null && typeof payload.token === 'number'
+          ? payload.token
+          : (typeof payload === 'number' ? payload : undefined);
+        executeWindowShow('overlay', () => {
+          overlayPhaseRef.current = 'shown';
+        }, 0, token);
       }
-      overlayPhaseRef.current = 'shown';
-      const html = document.documentElement;
-      invoke('overlay_painted').catch(() => {});
-      html.classList.remove('wm-hiding', 'wm-hidden');
-      invoke('overlay_phase_ack', { phase: 'shown' }).catch(() => {});
-    });
+    );
 
     const unlistenHideReq = safeListen<number>('overlay-hide-requested', (e) => {
       logClient(`Received overlay-hide-requested (gen=${e.payload}).`);
@@ -1067,9 +982,15 @@ export const QuickOverlay: React.FC = () => {
       window.addEventListener('focus', onWindowFocus);
     }
 
-    const unlistenPreviewToggle = safeListen<boolean>('preview-toggled', (e) => {
-      setPreviewOpen(e.payload);
-    });
+    // Present-ack from Rust (set_overlay_preview settles + presents, then
+    // emits). Completes the snap onto real pixels; stale gens ignored.
+    const unlistenPreviewToggle = safeListen<{ enabled: boolean; gen: number }>(
+      'preview-toggled',
+      (e) => {
+        setPreviewOpen(e.payload.enabled);
+        previewLayoutRef.current?.notifySnapPresented(e.payload.gen);
+      }
+    );
 
     const unlistenQueue = safeListen('paste-queue-updated', () => {
       fetchQueue();
@@ -1162,158 +1083,11 @@ export const QuickOverlay: React.FC = () => {
     }
   };
 
-  // F2 & F3 PREVIEW TOGGLE PROTOCOL (State machine: idle | out | snap | in):
-  // Step 1: CONTENT-OUT (90ms linear fade to opacity 0)
-  // Step 2: SNAP (add html.wm-resizing + 0ms animated SetWindowPos + layout snap behind opacity 0, wait 2 rAF ticks)
-  // Step 3: CONTENT-IN (remove html.wm-resizing + 160ms opacity settle; preview stays spatially locked)
-  // Interruption: if toggled during ANY in-flight phase, instantly finalize previous target state, then start fresh transition.
-  // Watchdog: force-finalize if in-flight >380ms.
-  // Reduced motion: instant snap without fade.
+  // F1, F2 & F3 Preview Toggle via centralized Choreo module (Invariants I2, I5, I7, F2.2)
   const togglePreview = useCallback(() => {
-    const isReduced =
-      typeof window !== 'undefined' &&
-      window.matchMedia &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-    if (isReduced) {
-      const next = !previewOpenRef.current;
-      previewOpenRef.current = next;
-      targetPreviewOpenRef.current = next;
-      setPreviewOpen(next);
-      invoke('set_overlay_preview', { enabled: next }).catch(console.error);
-      return;
-    }
-
-    // F1 & F3 Single-live-layout rule:
-    // If Tab is pressed during ANY phase of an in-flight transition:
-    // 1. Instantly finalize the current phase (clear timers, settle state to target).
-    // 2. Immediately begin the fresh transition from that settled state.
-    if (previewPhaseRef.current !== 'idle') {
-      finalizeTransition();
-    }
-
-    const currentSettled = previewOpenRef.current;
-    const next = !currentSettled;
-    targetPreviewOpenRef.current = next;
-
-    // F1.2 Watchdog timer (250ms): force-finalize if transition hangs without completing
-    if (watchdogTimerRef.current) window.clearTimeout(watchdogTimerRef.current);
-    watchdogTimerRef.current = window.setTimeout(() => {
-      if (import.meta.env.DEV) {
-        console.warn('[overlay] Preview transition watchdog triggered (>250ms)');
-      }
-      finalizeTransition(next);
-    }, 250);
-
-    if (next) {
-      // ── OPENING PREVIEW (Tab-in) ──
-      // F2 First-Expand Cold Gate:
-      // Until data-painted-expanded="1" exists, cold expand runs with .wm-resizing
-      // mask held through the snap AND the first two rAFs post-resize; subsequent
-      // (warm) expands keep the fast path unchanged.
-      const html = document.documentElement;
-      const isColdExpand = html.getAttribute('data-painted-expanded') !== '1';
-
-      previewPhaseRef.current = 'snap';
-      setPreviewPhase('snap');
-      recordTransition('idle', 'snap', isColdExpand ? 'open-cold' : 'open-warm');
-
-      if (isColdExpand) {
-        html.classList.add('wm-resizing');
-      }
-      previewPaneRef.current?.classList.add('snap-veil');
-
-      previewOpenRef.current = true;
-      setPreviewOpen(true);
-      sendPreviewSize(true);
-
-      if (isColdExpand) {
-        let snapTicks = 0;
-        const waitColdSnapTicks = () => {
-          previewRafRef.current = requestAnimationFrame(() => {
-            snapTicks += 1;
-            if (snapTicks < 2) {
-              waitColdSnapTicks();
-              return;
-            }
-            // Double rAF completed: stamp gate attribute, release mask & veil
-            html.setAttribute('data-painted-expanded', '1');
-            html.classList.remove('wm-resizing');
-            previewPaneRef.current?.classList.remove('snap-veil');
-            lastSnapAtRef.current = performance.now();
-
-            const prevPhase = previewPhaseRef.current;
-            previewPhaseRef.current = 'in';
-            setPreviewPhase('in');
-            recordTransition(prevPhase, 'in', 'cold-content-in');
-
-            previewTimerRef.current = window.setTimeout(() => {
-              const curPhase = previewPhaseRef.current;
-              previewPhaseRef.current = 'idle';
-              setPreviewPhase('idle');
-              recordTransition(curPhase, 'idle', 'cold-settle');
-              if (watchdogTimerRef.current) {
-                window.clearTimeout(watchdogTimerRef.current);
-                watchdogTimerRef.current = null;
-              }
-              previewTimerRef.current = null;
-              requestAnimationFrame(assertSingleLiveLayout);
-            }, 130);
-          });
-        };
-        waitColdSnapTicks();
-      } else {
-        // Subsequent (warm) expands keep the fast path unchanged
-        previewRafRef.current = requestAnimationFrame(() => {
-          previewPaneRef.current?.classList.remove('snap-veil');
-          lastSnapAtRef.current = performance.now();
-
-          const prevPhase = previewPhaseRef.current;
-          previewPhaseRef.current = 'in';
-          setPreviewPhase('in');
-          recordTransition(prevPhase, 'in', 'warm-content-in');
-
-          previewTimerRef.current = window.setTimeout(() => {
-            const curPhase = previewPhaseRef.current;
-            previewPhaseRef.current = 'idle';
-            setPreviewPhase('idle');
-            recordTransition(curPhase, 'idle', 'warm-settle');
-            if (watchdogTimerRef.current) {
-              window.clearTimeout(watchdogTimerRef.current);
-              watchdogTimerRef.current = null;
-            }
-            previewTimerRef.current = null;
-            requestAnimationFrame(assertSingleLiveLayout);
-          }, 130);
-        });
-      }
-    } else {
-      // ── CLOSING PREVIEW (Tab-out) ──
-      // Smooth 70ms fade-out of preview pane, then instant compact snap to 680x440.
-      // List fills 100% of compact window with NO right-to-left layout reflow.
-      const prevPhase = previewPhaseRef.current;
-      previewPhaseRef.current = 'out';
-      setPreviewPhase('out');
-      recordTransition(prevPhase, 'out', 'tab-close');
-
-      previewTimerRef.current = window.setTimeout(() => {
-        previewOpenRef.current = false;
-        setPreviewOpen(false);
-        sendPreviewSize(false);
-
-        const curPhase = previewPhaseRef.current;
-        previewPhaseRef.current = 'idle';
-        setPreviewPhase('idle');
-        recordTransition(curPhase, 'idle', 'close-settle');
-        if (watchdogTimerRef.current) {
-          window.clearTimeout(watchdogTimerRef.current);
-          watchdogTimerRef.current = null;
-        }
-        previewTimerRef.current = null;
-        requestAnimationFrame(assertSingleLiveLayout);
-      }, 70);
-    }
-  }, [finalizeTransition, assertSingleLiveLayout, recordTransition]);
+    const next = !previewOpenRef.current;
+    previewLayoutRef.current?.toggle(next);
+  }, []);
 
   // The highlighted clip of the VISIBLE (possibly app-filtered) list — every
   // paste/queue/preview action must operate on this, not the unfiltered array.
@@ -1840,13 +1614,7 @@ export const QuickOverlay: React.FC = () => {
       <div className={`overlay ${!previewOpen ? 'no-preview' : ''} ${tab === 'snippets' ? 'sn-tab' : ''}`}>
         <div
           id="content"
-          className={`overlay-content ${
-            previewPhase === 'out'
-              ? 'content-fading-out'
-              : previewPhase === 'in'
-              ? 'content-fading-in'
-              : ''
-          }`}
+          className="overlay-content"
           data-carbon-layout-layer="overlay"
         >
         {/* Top Search Bar — no tab switcher header: reopening restores the
@@ -2095,7 +1863,7 @@ export const QuickOverlay: React.FC = () => {
               ))
             )}
           </div>
-          <div ref={previewPaneRef} className={`overlay-preview ${!previewOpen ? 'collapsed' : ''} ${previewPhase === 'out' ? 'preview-out' : ''}`}>
+          <div ref={previewPaneRef} className={`overlay-preview ${!previewOpen ? 'collapsed' : ''} ${previewPhase === 'out' ? 'preview-out' : ''} ${previewPhase === 'snap' ? 'snap-veil' : ''}`}>
             {tab === 'snippets' ? (
               snSelected ? (
                 <>

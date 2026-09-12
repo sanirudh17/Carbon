@@ -14,6 +14,7 @@ import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import type { Update } from '@tauri-apps/plugin-updater';
 import type { AppSettings } from './types';
+import { initPaintGate, executeWindowShow, executeWindowHide, traceChoreo } from './lib/choreo';
 
 declare global {
   interface Window {
@@ -71,18 +72,10 @@ export function App() {
     };
   }, []);
 
-  // v9 F2: hidden warm windows may only reveal after React has committed a
-  // paintable tree. The window-specific choreography still waits two frames
-  // after native show(); this flag prevents a cold first reveal racing mount.
+  // v9 F2 & v15 I1: hidden warm windows may only reveal after React has committed a
+  // paintable tree. Initialized via choreo module paint gate.
   useEffect(() => {
-    const html = document.documentElement;
-    html.dataset.painted = '0';
-    let firstFrame = requestAnimationFrame(() => {
-      firstFrame = requestAnimationFrame(() => {
-        html.dataset.painted = '1';
-      });
-    });
-    return () => cancelAnimationFrame(firstFrame);
+    return initPaintGate();
   }, []);
 
   const applySettingsData = (settings: Partial<AppSettings>) => {
@@ -258,101 +251,49 @@ export function App() {
   useEffect(() => {
     if (windowLabel !== 'main') return;
 
-    const html = document.documentElement;
-    const fadeTarget = () =>
-      html.dataset.material === 'solid'
-        ? document.getElementById('root') ?? html
-        : html;
-    let showEpoch = 0;
+    let cancelShow: (() => void) | null = null;
+    let hideHandle: { cancel: () => void } | null = null;
 
-    const doHide = () => {
-      html.classList.add('wm-hiding', 'wm-hidden');
-      const target = fadeTarget();
-      let finished = false;
-      const finish = () => {
-        if (finished) return;
-        finished = true;
-        target.removeEventListener('transitionend', onEnd);
-        html.classList.remove('wm-hiding');
-        invoke('hide_enlarged').catch(console.error);
-      };
-      const onEnd = (ev: TransitionEvent) => {
-        if (ev.target === target && ev.propertyName === 'opacity') finish();
-      };
-      target.addEventListener('transitionend', onEnd);
-      setTimeout(finish, 100);
-      if (html.dataset.material === 'glass') finish();
+    const doHide = (reason: string) => {
+      traceChoreo(`main doHide start (reason=${reason})`);
+      if (cancelShow) cancelShow();
+      hideHandle = executeWindowHide('main');
     };
 
-    window.__carbonRequestEnlargedHide = doHide;
+    window.__carbonRequestEnlargedHide = () => doHide('webview-hotkey');
 
-    let windowLoaded = document.readyState === 'complete';
-    if (!windowLoaded) {
-      window.addEventListener('load', () => { windowLoaded = true; }, { once: true });
-    }
-
-    const revealAfterPaintGate = () => {
-      const epoch = ++showEpoch;
-      const started = performance.now();
-      let framesSinceShow = 0;
-      let warned = false;
-      const wait = () => requestAnimationFrame(() => {
-        if (epoch !== showEpoch) return;
-        framesSinceShow += 1;
-        const isReady = windowLoaded || document.readyState === 'complete';
-        if (isReady && html.dataset.painted === '1' && framesSinceShow >= 2) {
-          // Painted: release the native DWM cloak gate first so the first
-          // composited frame is real content, then lift the fade mask.
-          invoke('enlarged_painted').catch(() => {});
-          html.classList.remove('wm-hidden');
-          return;
-        }
-        if (import.meta.env.DEV && !warned && performance.now() - started > 3000) {
-          console.warn('[paint-gate] Main window gate stayed closed >3s (slow dependency optimization or cold-load delay detected).');
-          warned = true;
-        }
-        wait();
-      });
-      wait();
-    };
-
-    // Show choreography: wait for the cold-start paint gate and two frames
-    // presented after show before removing the material-specific fade mask.
-    const unlistenOpened = listen('enlarged-opened', () => {
-      html.classList.remove('wm-hiding');
-      const isReady = windowLoaded || document.readyState === 'complete';
-      if (isReady && html.dataset.painted === '1' && html.dataset.material === 'glass') {
-        revealAfterPaintGate();
-        return;
-      }
-      if (!html.classList.contains('wm-hidden')) {
-        html.classList.add('wm-hidden', 'no-anim');
-        void html.offsetWidth;
-        html.classList.remove('no-anim');
-      }
-      revealAfterPaintGate();
+    // Show choreography: warm invocations uncloak immediately after the 2-rAF
+    // paint gate (settleMs=0) to meet Invariant I1 and I5 (latency within baseline).
+    const unlistenOpened = listen<{ token?: number }>('enlarged-opened', (e) => {
+      traceChoreo('main enlarged-opened received');
+      if (hideHandle) hideHandle.cancel();
+      const token = typeof e.payload === 'object' && e.payload !== null && typeof e.payload.token === 'number'
+        ? e.payload.token
+        : undefined;
+      cancelShow = executeWindowShow('main', undefined, 0, token);
     });
 
-    // Hide choreography: 90ms fade on html before calling hide_enlarged
+    // Hide choreography: ack generation and execute choreo hide
     const unlistenHideReq = listen<number>('enlarged-hide-requested', (e) => {
       if (typeof e.payload === 'number') {
         invoke('enlarged_hide_ack', { gen: e.payload }).catch(() => {});
       }
-      doHide();
+      doHide('hide-requested');
     });
 
-    // If initial mount and window is visible, lift wm-hidden after 2 rAF ticks
+    // If initial mount and window is visible, run paint gate
     getCurrentWindow()
       .isVisible()
       .then((vis) => {
         if (vis) {
-          revealAfterPaintGate();
+          cancelShow = executeWindowShow('main', undefined, 150);
         }
       })
       .catch(() => {});
 
     return () => {
       window.__carbonRequestEnlargedHide = undefined;
+      if (cancelShow) cancelShow();
       unlistenOpened.then((fn) => fn());
       unlistenHideReq.then((fn) => fn());
     };

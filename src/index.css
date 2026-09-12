@@ -380,32 +380,60 @@ html {
   opacity: 1;
 }
 
+/* ── I4 FADE TARGET PER MODE ──
+   Glass -> html element; Solid -> #root. */
 html.wm-hidden {
-  opacity: 1 !important;
+  pointer-events: none !important;
 }
 
 html #root.wm-fade-target {
   opacity: 1;
-  transition: opacity 100ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-html.wm-hidden #root.wm-fade-target {
+/* Glass mode (default): fade html element only (#root stays opacity: 1) */
+html:not([data-material="solid"]).wm-hiding {
   opacity: 0 !important;
-  pointer-events: none !important;
   transition: opacity 90ms linear !important;
 }
-
-/* Glass never presents an empty fade frame. WebView2 may composite a
-   transparent acrylic frame as white, so warm Glass windows reveal/hide
-   atomically while Solid retains the content-only fade above. */
-html[data-material="glass"] #root.wm-fade-target,
-html[data-material="glass"].wm-hidden #root.wm-fade-target {
+html:not([data-material="solid"]).wm-hidden {
+  opacity: 0 !important;
+}
+html:not([data-material="solid"]) #root.wm-fade-target {
+  opacity: 1 !important;
   transition: none !important;
 }
 
-html.wm-hiding #root.wm-fade-target {
+/* Solid mode: fade #root (html element stays opacity: 1) */
+html[data-material="solid"].wm-hiding #root.wm-fade-target {
   opacity: 0 !important;
   transition: opacity 90ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+html[data-material="solid"].wm-hidden #root.wm-fade-target {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: none !important;
+}
+html[data-material="solid"]:not(.wm-hiding):not(.wm-hidden) #root.wm-fade-target {
+  opacity: 1 !important;
+  transition: none !important;
+}
+html[data-material="solid"].wm-hiding,
+html[data-material="solid"].wm-hidden {
+  opacity: 1 !important;
+}
+
+/* ── I6 INSTANT TEXT/LABEL CHANGES ──
+   Footer hints, keys, labels, and counters swap instantly with zero
+   opacity or transform transitions. */
+.overlay-bar,
+.overlay-bar *,
+.hint,
+.hint *,
+.preview-foot,
+.preview-foot *,
+.side-footer,
+.side-footer * {
+  transition-property: background-color, border-color, color !important;
 }
 
 html.no-anim,
@@ -513,8 +541,8 @@ input, textarea, select, button {
 }
 
 /* F5 Content Layer & Micro-Animations:
-   - overlay show: html opacity + #content scale(0.985)->1 (100ms)
-   - overlay hide: opacity only
+   - overlay show: instant unhide behind DWM cloak gate (zero scale animation)
+   - overlay hide: opacity and scale down on hiding
    - preview content-in: translateX(8px)->0 + opacity (100ms, 20ms delay) */
 #content,
 .overlay-content {
@@ -524,14 +552,12 @@ input, textarea, select, button {
   flex-direction: column;
   opacity: 1;
   transform: scale(1);
-  transition: opacity 100ms cubic-bezier(0.16, 1, 0.3, 1),
-              transform 100ms cubic-bezier(0.16, 1, 0.3, 1);
   will-change: opacity, transform;
 }
 
 html.wm-hidden #content,
 html.wm-hidden .overlay-content {
-  transform: scale(0.985);
+  opacity: 0;
 }
 
 html.wm-hiding #content,
@@ -545,13 +571,13 @@ html.wm-hiding .overlay-content {
 #content.content-fading-out,
 .overlay-content.content-fading-out {
   opacity: 0;
-  transition: opacity 90ms linear;
+  transition: opacity 60ms linear;
 }
 
 #content.content-fading-in,
 .overlay-content.content-fading-in {
   opacity: 1;
-  transition: opacity 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 100ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* Subtle noise texture overlay to eliminate gradient banding */
@@ -2580,8 +2606,10 @@ section:last-child {
   overflow: hidden;
   opacity: 0;
   transform: translateX(6px);
-  transition: opacity 120ms cubic-bezier(0.16, 1, 0.3, 1),
-              transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
+  /* No pane-level fade/slide: unveiling snaps the pane while the children
+     fade once via the `> *` rules below. A pane slide stacked on the child
+     fade read as muddy/janky expansion; a single content fade is smooth. */
+  transition: none;
 }
 
 .overlay-preview:not(.collapsed) {
@@ -2610,7 +2638,8 @@ section:last-child {
 
 .overlay-preview > * {
   opacity: 0;
-  transition: opacity 100ms cubic-bezier(0.16, 1, 0.3, 1);
+  transform: translateX(6px);
+  transition: opacity 100ms cubic-bezier(0.16, 1, 0.3, 1), transform 100ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .overlay-preview:not(.collapsed) > * {
@@ -2630,13 +2659,31 @@ section:last-child {
 .overlay-preview.preview-out {
   opacity: 0 !important;
   transform: translateX(6px) !important;
-  transition: opacity 70ms linear, transform 70ms linear !important;
+  transition: opacity 60ms linear, transform 60ms linear !important;
 }
 
 .overlay-preview.snap-veil {
   opacity: 0 !important;
   transition: none !important;
   pointer-events: none !important;
+}
+
+/* Synchronous kids-veil: applied to #content in the SAME task the pane veil
+   lifts, hiding preview children instantly (transition none) so the
+   React-async #content fade can never expose a 1-frame full-content pop
+   (flash). Removed on the next frame; children then fade back via their own
+   `.overlay-preview > *` rules. Cleaned up defensively at idle/finalize. */
+#content.kids-veil .overlay-preview > * {
+  opacity: 0 !important;
+  transition: none !important;
+}
+
+/* Async media (images/video decode after layout) must never pop white while
+   loading inside the preview: dark placeholder box instead. */
+.overlay-preview-content img,
+.preview-render img,
+.overlay-preview-content video {
+  background: rgba(10, 10, 12, 0.35);
 }
 
 .overlay-preview-head {

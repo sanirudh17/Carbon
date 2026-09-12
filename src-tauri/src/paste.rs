@@ -422,6 +422,12 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::time::SystemTime;
 
+/// File logging is opt-in via CARBON_DIAG_LOG=1: every hotkey press used to
+/// open+append+close focus_diagnostic.log dozens of times (once per
+/// save_target_window scan step), adding milliseconds to the show critical
+/// path. Stderr logging stays always-on (cheap); the file sink only when set.
+static DIAG_FILE_LOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
 pub fn log_diag(event: &str) {
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -434,6 +440,14 @@ pub fn log_diag(event: &str) {
     let line = format!("[{:02}:{:02}:{:02}.{:03}] {}", h, m, s, ms, event);
     eprintln!("{}", line);
 
+    let enabled = DIAG_FILE_LOG.get_or_init(|| {
+        std::env::var("CARBON_DIAG_LOG")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    });
+    if !enabled {
+        return;
+    }
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("focus_diagnostic.log") {
         let _ = writeln!(file, "{}", line);
     }
