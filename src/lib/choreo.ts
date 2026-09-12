@@ -83,6 +83,61 @@ export function assertLayoutRoot(): boolean {
   return true;
 }
 
+// ── ADDENDUM v24: Per-Frame Sampler for Ghost Classification ──
+
+export interface FrameSample {
+  timestamp: number;
+  layoutRootCount: number;
+  windowWidth: number;
+  windowHeight: number;
+  osAlpha: number;
+  maskState: string;
+  contentOpacity: number;
+}
+
+export function sampleCurrentFrame(): FrameSample {
+  if (typeof document === 'undefined' || typeof window === 'undefined') {
+    return {
+      timestamp: 0,
+      layoutRootCount: 1,
+      windowWidth: 680,
+      windowHeight: 440,
+      osAlpha: 255,
+      maskState: 'idle',
+      contentOpacity: 1,
+    };
+  }
+  const roots = document.querySelectorAll(
+    '[data-carbon-layout-root], [data-carbon-layout-layer="overlay"]'
+  );
+  const content = document.getElementById('content');
+  const previewPane = document.querySelector('.overlay-preview');
+  let maskState = 'idle';
+  if (previewPane?.classList.contains('preview-out')) {
+    maskState = 'out';
+  } else if (previewPane?.classList.contains('snap-veil')) {
+    maskState = 'snap';
+  } else if (content?.classList.contains('kids-veil')) {
+    maskState = 'in';
+  }
+
+  let contentOpacity = 1;
+  if (previewPane) {
+    const style = window.getComputedStyle(previewPane);
+    contentOpacity = parseFloat(style.opacity || '1');
+  }
+
+  return {
+    timestamp: performance.now(),
+    layoutRootCount: roots.length,
+    windowWidth: window.innerWidth,
+    windowHeight: window.innerHeight,
+    osAlpha: 255,
+    maskState,
+    contentOpacity,
+  };
+}
+
 // ── Invariant I4: Fade Target Per Mode ──
 
 export function getWindowMaterial(): 'glass' | 'solid' {
