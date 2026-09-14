@@ -54,7 +54,9 @@ pub fn get_tint_color() -> window_vibrancy::Color {
 pub fn set_round_corners(window: &WebviewWindow) {
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE};
+        use windows::Win32::Graphics::Dwm::{
+            DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE,
+        };
 
         if let Ok(w_hwnd) = window.hwnd() {
             unsafe {
@@ -66,6 +68,14 @@ pub fn set_round_corners(window: &WebviewWindow) {
                     DWMWA_WINDOW_CORNER_PREFERENCE,
                     &preference as *const _ as *const std::ffi::c_void,
                     std::mem::size_of::<i32>() as u32,
+                );
+                // DWMWA_COLOR_NONE = 0xFFFFFFFE: suppress default Windows 11 window border
+                let no_border = 0xFFFFFFFEu32;
+                let _ = DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_BORDER_COLOR,
+                    &no_border as *const _ as *const std::ffi::c_void,
+                    std::mem::size_of::<u32>() as u32,
                 );
             }
         }

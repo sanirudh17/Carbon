@@ -54,15 +54,15 @@ pub fn set_overlay_preview(
         pos_y = pos_y_l;
     }
 
-    // Instant centered snap behind renderer mask:
-    let mat = vibrancy::WindowMaterial::from_str(&settings.window_material);
-    vibrancy::set_window_default_background(window, mat, &settings.theme);
-    crate::webview_bg::set_webview_transparent_background(window.as_ref());
+    // Instant centered snap behind renderer mask
 
     #[cfg(windows)]
     {
         use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOREDRAW, SWP_NOSENDCHANGING,
+            SWP_NOZORDER,
+        };
         if let Ok(hwnd) = window.hwnd() {
             unsafe {
                 let _ = SetWindowPos(
@@ -72,7 +72,11 @@ pub fn set_overlay_preview(
                     pos_y,
                     w_phys as i32,
                     h_phys as i32,
-                    SWP_NOACTIVATE | SWP_NOZORDER,
+                    SWP_NOACTIVATE
+                        | SWP_NOZORDER
+                        | SWP_NOREDRAW
+                        | SWP_NOCOPYBITS
+                        | SWP_NOSENDCHANGING,
                 );
             }
         }

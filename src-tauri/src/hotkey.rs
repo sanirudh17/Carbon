@@ -425,7 +425,9 @@ pub fn set_recording_target(target: Option<String>) {
 
 #[cfg(windows)]
 pub fn disable_window_dwm_transitions(win: &tauri::WebviewWindow) {
-    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED};
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_TRANSITIONS_FORCEDISABLED,
+    };
     if let Ok(hwnd) = win.hwnd() {
         let disable: i32 = 1;
         unsafe {
@@ -435,6 +437,13 @@ pub fn disable_window_dwm_transitions(win: &tauri::WebviewWindow) {
                 DWMWA_TRANSITIONS_FORCEDISABLED,
                 &disable as *const _ as *const std::ffi::c_void,
                 std::mem::size_of::<i32>() as u32,
+            );
+            let no_border: u32 = 0xFFFFFFFE;
+            let _ = DwmSetWindowAttribute(
+                native,
+                DWMWA_BORDER_COLOR,
+                &no_border as *const _ as *const std::ffi::c_void,
+                std::mem::size_of::<u32>() as u32,
             );
         }
     }
