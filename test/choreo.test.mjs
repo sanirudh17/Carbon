@@ -162,7 +162,7 @@ test('ADDENDUM v15 - Invariant I6: Footer hints, keys and labels swap instantly 
   );
 });
 
-test('ADDENDUM v15 - Invariant I7: 250ms watchdog and Canary alerts on violation', () => {
+test('ADDENDUM v15 - Invariant I7: 400ms watchdog and Canary alerts on violation', () => {
   const choreoTsPath = path.join(SRC_DIR, 'lib', 'choreo.ts');
   const content = fs.readFileSync(choreoTsPath, 'utf-8');
 
@@ -174,9 +174,11 @@ test('ADDENDUM v15 - Invariant I7: 250ms watchdog and Canary alerts on violation
     content.includes('reportViolation'),
     'choreo.ts must have reportViolation function'
   );
+  // Budget must clear the real transition (60ms out + layout frame + native
+  // ack + 100ms in ≈ 275ms), otherwise the watchdog force-finalizes mid-fade.
   assert.ok(
-    content.includes('600'),
-    'choreo.ts must have 600ms watchdog timer (ack-loss fallback)'
+    content.includes('WATCHDOG_MS = 400'),
+    'choreo.ts must have the 400ms watchdog timer (ack-loss fallback)'
   );
 });
 

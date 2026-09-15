@@ -32,9 +32,14 @@ pub fn set_overlay_preview(
     enabled: bool,
     r#gen: u64,
 ) -> Result<(), String> {
-    let mut settings = state.settings.get();
-    settings.preview_enabled = enabled;
-    state.settings.update(settings.clone())?;
+    // Persist the choice AFTER the native resize + ack. A synchronous
+    // settings.json write on the toggle path put disk I/O in front of the
+    // resize, and the renderer veil only lifts on the ack — that dead time
+    // read as a stutter/jagged start on every Tab press.
+    let settings_before = state.settings.get();
+    let persist_needed = settings_before.preview_enabled != enabled;
+    let mat = vibrancy::WindowMaterial::from_str(&settings_before.window_material);
+    let theme = settings_before.theme.clone();
 
     let scale = window.scale_factor().unwrap_or(1.0);
     let (w_log, h_log) = if enabled { (1020, 560) } else { (680, 440) };
@@ -54,15 +59,26 @@ pub fn set_overlay_preview(
         pos_y = pos_y_l;
     }
 
-    // Instant centered snap behind renderer mask
+    // Instant centered snap behind renderer mask.
+    //
+    // Resizing a WebView2 window reallocates its composition surface, and the
+    // first present on the new surface can be an UNPAINTED frame. Two guards
+    // (both documented, both required) keep that frame invisible:
+    //   1. The controller default background must be transparent (glass) or an
+    //      opaque theme match (solid) — never Chromium's white default.
+    //   2. The DWM border must stay suppressed across the frame recalculation.
+    // Re-asserting them here (and NOT suppressing the redraw) matters: with a
+    // suppressed redraw the newly exposed client band is never repainted, so
+    // DWM keeps compositing a stale, rescaled surface (the jagged Tab toggle)
+    // and the undefined band can composite white (the intermittent flash).
+    vibrancy::set_window_default_background(window, mat, &theme);
+    crate::webview_bg::set_webview_transparent_background(window.as_ref());
+    vibrancy::set_window_border_suppressed(window);
 
     #[cfg(windows)]
     {
         use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{
-            SetWindowPos, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOREDRAW, SWP_NOSENDCHANGING,
-            SWP_NOZORDER,
-        };
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
         if let Ok(hwnd) = window.hwnd() {
             unsafe {
                 let _ = SetWindowPos(
@@ -72,11 +88,7 @@ pub fn set_overlay_preview(
                     pos_y,
                     w_phys as i32,
                     h_phys as i32,
-                    SWP_NOACTIVATE
-                        | SWP_NOZORDER
-                        | SWP_NOREDRAW
-                        | SWP_NOCOPYBITS
-                        | SWP_NOSENDCHANGING,
+                    SWP_NOACTIVATE | SWP_NOZORDER,
                 );
             }
         }
@@ -109,6 +121,13 @@ pub fn set_overlay_preview(
         let _ = DwmFlush();
     }
     let _ = app_handle.emit("preview-toggled", PreviewToggled { enabled, r#gen });
+
+    // Persist last: the resize + ack above are the latency-critical path.
+    if persist_needed {
+        let mut updated = settings_before;
+        updated.preview_enabled = enabled;
+        let _ = state.settings.update(updated);
+    }
     Ok(())
 }
 

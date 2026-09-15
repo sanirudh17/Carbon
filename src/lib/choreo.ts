@@ -509,37 +509,43 @@ export function createPreviewLayoutController(options: {
     // F2.3: layout-root count === 1 sampled every rAF during Tab toggles
     startLayoutRootSampling();
 
-    // Invariant I5 & I7: 250ms watchdog (was 600ms in legacy) force-finalizes if ack is lost.
-    const WATCHDOG_MS = 250;
+    // Invariant I5 & I7: 400ms watchdog force-finalizes if the ack is lost.
+    // Must exceed the real worst case: 60ms content-out + one frame for the
+    // layout commit + native resize/ack (~100ms under load) + 100ms content-in
+    // ≈ 275ms. The old 250ms budget fired on EVERY expand and interrupted the
+    // in-fade with a force-finalize, which read as a jagged end to the motion.
+    const WATCHDOG_MS = 400;
     if (watchdogId) window.clearTimeout(watchdogId);
     watchdogId = window.setTimeout(() => {
-      reportViolation('I7', 'Preview transition watchdog triggered (>250ms, ack lost?)');
-      traceChoreo('[WATCHDOG_FINALIZE] watchdog triggered >250ms, executing flash-safe recovery');
+      reportViolation('I7', 'Preview transition watchdog triggered (>400ms, ack lost?)');
+      traceChoreo('[WATCHDOG_FINALIZE] watchdog triggered >400ms, executing flash-safe recovery');
       finalize(next);
     }, WATCHDOG_MS);
 
     // This snap's generation: only its own present-ack may unveil it.
     const snapId = ++snapGen;
 
-    // F2 Protocol: content-out (60ms, opacity 0) -> SYNCHRONOUS setSize in
-    // same task -> native present-ack -> content-in (100ms, translateX
-    // settle). The veil NEVER lifts on a fixed frame count; it lifts only
-    // when Rust confirms the resized raster actually presented.
     const prev = options.previewPhaseRef.current;
-    options.previewPhaseRef.current = 'out';
-    options.setPreviewPhase('out');
-    options.previewPaneRef.current?.classList.add('preview-out');
-    applyMask(options.previewPaneRef.current, 'preview-out', 'out');
-    if (options.recordTransition) {
-      options.recordTransition(prev, 'out', next ? 'expand-out' : 'collapse-out');
+    // Expand from a hidden pane has nothing to fade out: the pane is already
+    // .collapsed (width 0, opacity 0), so the 60ms content-out was pure dead
+    // time in front of the window grow — the stutter at the start of Tab.
+    // Collapse still fades the visible pane out first (F2 protocol).
+    const expandingFromHidden = next && !options.previewOpenRef.current;
+    if (!expandingFromHidden) {
+      options.previewPhaseRef.current = 'out';
+      options.setPreviewPhase('out');
+      options.previewPaneRef.current?.classList.add('preview-out');
+      applyMask(options.previewPaneRef.current, 'preview-out', 'out');
+      if (options.recordTransition) {
+        options.recordTransition(prev, 'out', next ? 'expand-out' : 'collapse-out');
+      }
     }
 
-    // Step 1: Wait 60ms content-out so content layer reaches opacity 0
-    timerId = window.setTimeout(() => {
-      // Step 2: Content layer opacity is 0. Commit the React layout first so
-      // Chromium lays out the target geometry, THEN resize natively on the
-      // next frame while still veiled (I2: resize still happens only while
-      // the veil holds).
+    // Step 2: content is veiled (opacity 0). Commit the React layout first so
+    // Chromium lays out the target geometry, THEN resize natively on the next
+    // frame while still veiled (I2: resize still happens only while the veil
+    // holds).
+    const snapStep = () => {
       options.previewPaneRef.current?.classList.add('snap-veil');
       applyMask(options.previewPaneRef.current, 'snap-veil', 'snap');
       options.previewOpenRef.current = next;
@@ -548,21 +554,30 @@ export function createPreviewLayoutController(options: {
         rafId = null;
         const sent = setWindowPreviewSize(next, snapId);
 
-      options.previewPhaseRef.current = 'snap';
-      options.setPreviewPhase('snap');
-      if (options.recordTransition) {
-        options.recordTransition('out', 'snap', next ? 'expand-snap' : 'collapse-snap');
-      }
+        options.previewPhaseRef.current = 'snap';
+        options.setPreviewPhase('snap');
+        if (options.recordTransition) {
+          options.recordTransition(prev, 'snap', next ? 'expand-snap' : 'collapse-snap');
+        }
 
-      // Step 3: reveal on the native present-ack (notifySnapPresented). No
-      // fixed rAF wait: resizes repaint asynchronously, and 2 rAFs routinely
-      // beat the new raster (the black Tab flash). If the resize was deduped
-      // (pixels unchanged), reveal immediately — no ack will come.
-      if (!sent) {
-        beginContentIn(next, snapId);
-      }
+        // Step 3: reveal on the native present-ack (notifySnapPresented). No
+        // fixed rAF wait: resizes repaint asynchronously, and 2 rAFs routinely
+        // beat the new raster (the black Tab flash). If the resize was deduped
+        // (pixels unchanged), reveal immediately — no ack will come.
+        if (!sent) {
+          beginContentIn(next, snapId);
+        }
       });
-    }, 60);
+    };
+
+    // Step 1: content-out (60ms) only when a visible pane must fade out first.
+    if (expandingFromHidden) {
+      snapStep();
+    } else {
+      timerId = window.setTimeout(() => {
+        snapStep();
+      }, 60);
+    }
   };
 
   // Step 4: Content-in (100ms, translateX settle). Idempotent: only the

@@ -55,7 +55,7 @@ pub fn set_round_corners(window: &WebviewWindow) {
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::Graphics::Dwm::{
-            DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE,
+            DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE,
         };
 
         if let Ok(w_hwnd) = window.hwnd() {
@@ -69,7 +69,27 @@ pub fn set_round_corners(window: &WebviewWindow) {
                     &preference as *const _ as *const std::ffi::c_void,
                     std::mem::size_of::<i32>() as u32,
                 );
-                // DWMWA_COLOR_NONE = 0xFFFFFFFE: suppress default Windows 11 window border
+                // DWMWA_COLOR_NONE: suppress default Windows 11 window border
+                set_window_border_suppressed(window);
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = window;
+}
+
+/// Re-asserts DWMWA_COLOR_NONE for the DWM border.
+/// Called again immediately BEFORE any native resize: frame recalculation
+/// during SetWindowPos can otherwise let DWM paint its default (light) border
+/// for a frame on the exposed edge — the "white border" on Tab preview toggles.
+pub fn set_window_border_suppressed(window: &WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR};
+        if let Ok(w_hwnd) = window.hwnd() {
+            unsafe {
+                let hwnd = windows::Win32::Foundation::HWND(w_hwnd.0 as _);
+                // DWMWA_COLOR_NONE = 0xFFFFFFFE
                 let no_border = 0xFFFFFFFEu32;
                 let _ = DwmSetWindowAttribute(
                     hwnd,
