@@ -406,11 +406,16 @@ test('Unified Frame - media types skip the preview header for image space', () =
     qo.includes('<div className="overlay-preview-head">'),
     'overlay must keep the head for text'
   );
-  // Main window: same rule — actions stay keyboard-accessible.
+  // Main window: heading gated the same way, but the action buttons stay
+  // (right-aligned for media via marginLeft auto).
   const enlarged = fs.readFileSync(path.join(ROOT_DIR, 'src', 'components', 'EnlargedWindow.tsx'), 'utf8');
   assert.ok(
-    enlarged.includes('Media types get the full pane'),
-    'main preview must gate the head on media type'
+    enlarged.includes('Media types skip the kind/seg heading'),
+    'main preview must gate the heading on media type'
+  );
+  assert.ok(
+    enlarged.includes('<div className="preview-actions"'),
+    'main preview must keep the action buttons'
   );
   assert.ok(
     enlarged.includes('<div className="preview-head">'),
