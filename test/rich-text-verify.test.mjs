@@ -57,7 +57,7 @@ test('RichText VERIFY - preview pairs clear AA (4.5:1)', () => {
 });
 
 test('RichText VERIFY - sanitizer keeps author fidelity (incl. white-on-black)', () => {
-  const tsx = fs.readFileSync(path.join(SRC_DIR, 'components', 'ClipPreview.tsx'), 'utf8');
+  const tsx = fs.readFileSync(path.join(SRC_DIR, 'lib', 'richText.ts'), 'utf8');
   // Inline styles survive: a self-contained white-on-black fragment keeps
   // its own colors inside the card. Only executable vectors are stripped.
   assert.doesNotMatch(tsx, /removeAttribute\('style'\)/, 'sanitizer must never strip style attributes');
@@ -96,15 +96,16 @@ test('RichText VERIFY - paste restores formatting (CF_HTML + text fallback)', ()
 });
 
 test('RichText VERIFY - dark sources render on a dark card (black sites)', () => {
-  const tsx = fs.readFileSync(path.join(SRC_DIR, 'components', 'ClipPreview.tsx'), 'utf8');
+  const tsx = fs.readFileSync(path.join(SRC_DIR, 'lib', 'richText.ts'), 'utf8');
   // Detection must read page-level dark signals (body is stripped later).
   assert.ok(tsx.includes('function detectSourceTheme'), 'source-theme detector must exist');
   for (const signal of ['bgcolor', 'color-scheme', 'data-theme']) {
     assert.ok(tsx.includes(signal), `detector must read ${signal}`);
   }
   // Dark branch must use the dark card, never the white one.
-  assert.ok(tsx.includes('rich-doc-dark'), 'dark sources must render with the dark card');
-  assert.ok(tsx.includes("background: '#14161a'"), 'dark card surface must be dark in both themes');
+  const qo = fs.readFileSync(path.join(SRC_DIR, 'components', 'ClipPreview.tsx'), 'utf8');
+  assert.ok(qo.includes('rich-doc-dark'), 'dark sources must render with the dark card');
+  assert.ok(qo.includes("background: '#14161a'"), 'dark card surface must be dark in both themes');
   // Content fallback: inline light-on-transparent text (backdrop stripped
   // with <body>) must also flip, guarded by the dark-text majority rule.
   assert.ok(tsx.includes('createTreeWalker'), 'detector must scan fragment content');
@@ -121,6 +122,25 @@ test('RichText VERIFY - dark sources render on a dark card (black sites)', () =>
     const ratio = contrast(fg, bg);
     assert.ok(ratio >= 4.5, `${label} contrast ${ratio.toFixed(1)}:1 must clear AA (4.5:1)`);
   }
+});
+
+test('RichText v28-A - per-node AA enforcement pipeline exists', () => {
+  const ts = fs.readFileSync(path.join(SRC_DIR, 'lib', 'richText.ts'), 'utf8');
+  assert.ok(ts.includes('export function prepareRichPreview'), 'full pipeline must be exported');
+  assert.ok(ts.includes('export function enforceRichContrast'), 'per-node pass must be exported');
+  assert.ok(ts.includes('export function contrastRatio'), 'ratio helper must be exported');
+  assert.ok(ts.includes('export function pickContrastingFg'), 'fg picker must be exported');
+  assert.ok(ts.includes('RICH_CARD_THEMES'), 'card themes must be centralized');
+  // Inline backgrounds authoritative: the pass rewrites fg only, never bg.
+  assert.doesNotMatch(
+    ts,
+    /\.style\.background(Color)?\s*=/,
+    'enforcement must never rewrite backgrounds'
+  );
+  // UA <mark> neutralized explicitly in both card themes.
+  const css = fs.readFileSync(path.join(SRC_DIR, 'index.css'), 'utf8');
+  assert.ok(css.includes('.rich-doc-light mark'), 'light card must neutralize mark');
+  assert.ok(css.includes('.rich-doc-dark mark'), 'dark card must neutralize mark');
 });
 
 test('RichText VERIFY - capture stores HTML for fidelity', () => {
