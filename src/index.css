@@ -2660,7 +2660,11 @@ section:last-child {
    the library image wrapper (centered column) and must never match here —
    that collision shrank overlay text into a small centered box. */
 .overlay-preview .ov-preview-media {
-  flex: 0 1 auto;
+  /* flex-grow (capped by the max-height below): the media absorbs all free
+     space so the Information block is pinned at the bottom whether the
+     content is tiny or tall. Without this, small images/texts collapse the
+     media and the info block rides up, leaving a void underneath. */
+  flex: 1 1 auto;
   min-height: 0;
   max-height: var(--media-cap);
   overflow-y: auto;

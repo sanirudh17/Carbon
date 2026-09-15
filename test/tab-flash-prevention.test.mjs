@@ -332,6 +332,12 @@ test('Unified Frame - permanent preview pane with media cap and info block', () 
     css.includes('.overlay-preview .ov-preview-media'),
     'overlay media wrapper must be namespaced'
   );
+  // Info pinned at the bottom: the media absorbs free space (flex-grow,
+  // capped) so small images/texts can't drag the info block up.
+  assert.ok(
+    css.includes('flex: 1 1 auto;'),
+    'overlay media must grow to pin the info block at the bottom'
+  );
   assert.ok(
     css.includes('.overlay-preview .ov-preview-info'),
     'overlay info wrapper must be namespaced'
