@@ -700,6 +700,95 @@ pub fn save_target_window(app_handle: &AppHandle) {
 
 const ASFW_ANY: u32 = 0xFFFFFFFF;
 
+/// Peek at the saved paste target without consuming it (lets callers gate
+/// on the target — e.g. the elevation check — before paste_item takes it).
+pub fn peek_target_hwnd() -> Option<isize> {
+    TARGET_HWND.lock().unwrap().clone()
+}
+
+/// Friendly label for a saved target HWND (exe display name), if resolvable.
+pub fn describe_target(hwnd_val: isize) -> Option<String> {
+    let hwnd = HWND(hwnd_val as *mut _);
+    get_window_exe_name(hwnd).map(|exe| friendly_app_name(&exe))
+}
+
+/// True when injection is impossible: the target runs elevated but Carbon
+/// does not. Callers must fall back to clipboard-set + a user-visible hint
+/// instead of a dead keypress. Reads no window state beyond the given HWND.
+pub fn target_needs_elevation_fallback(hwnd_val: isize) -> bool {
+    use std::sync::OnceLock;
+    static SELF_ELEVATED: OnceLock<bool> = OnceLock::new();
+    let self_elevated = *SELF_ELEVATED.get_or_init(|| process_is_elevated(std::process::id()));
+    if self_elevated {
+        return false;
+    }
+    unsafe {
+        let hwnd = HWND(hwnd_val as *mut _);
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == 0 || pid == std::process::id() {
+            return false;
+        }
+        process_is_elevated(pid)
+    }
+}
+
+fn process_is_elevated(pid: u32) -> bool {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
+    use windows::Win32::System::Threading::OpenProcessToken;
+    unsafe {
+        let process = match OpenProcess(PROCESS_QUERY_INFORMATION, false, pid) {
+            Ok(h) => h,
+            Err(_) => return false,
+        };
+        struct Closer(windows::Win32::Foundation::HANDLE);
+        impl Drop for Closer {
+            fn drop(&mut self) {
+                unsafe {
+                    let _ = CloseHandle(self.0);
+                }
+            }
+        }
+        let _proc = Closer(process);
+        let mut token = windows::Win32::Foundation::HANDLE::default();
+        if OpenProcessToken(process, TOKEN_QUERY, &mut token).is_err() {
+            return false;
+        }
+        let _tok = Closer(token);
+        let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut returned = 0u32;
+        if GetTokenInformation(
+            token,
+            TokenElevation,
+            Some(&mut elevation as *mut _ as *mut std::ffi::c_void),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut returned,
+        )
+        .is_err()
+        {
+            return false;
+        }
+        elevation.TokenIsElevated != 0
+    }
+}
+
+/// Clipboard half of a paste (transform + write + watcher mark), WITHOUT
+/// injection or the in-flight guard. Used by the elevation fallback, where
+/// the content is staged for a manual Ctrl+V and no injection follows.
+pub fn write_clip_to_clipboard_only(
+    item: &ClipItem,
+    transform: PasteTransform,
+) -> Result<ClipItem, String> {
+    let item_to_paste = transformed_item(item, transform)?;
+    let plain_text_only = transform != PasteTransform::Original;
+    write_item_to_clipboard(&item_to_paste, plain_text_only)?;
+    crate::clipboard_watcher::mark_paste(&item_to_paste);
+    Ok(item_to_paste)
+}
+
 pub fn refocus_blocking(target_isize: isize) {
     if target_isize == 0 {
         return;
@@ -876,14 +965,16 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform) -> Result<(), Stri
             ));
 
             let mut focus_confirmed = false;
-            for attempt in 1..=20 {
+            // C2 budget: 10 x 15ms = 150ms max. A longer loop only delays a
+            // paste that was already going to miss its target.
+            for attempt in 1..=10 {
                 log_diag(&format!("[PASTE_THREAD] Focus confirmation attempt {}...", attempt));
                 if try_bring_to_foreground(target) {
                     focus_confirmed = true;
                     log_diag(&format!("[PASTE_THREAD] Focus confirmed on attempt {}!", attempt));
                     break;
                 }
-                thread::sleep(Duration::from_millis(20));
+                thread::sleep(Duration::from_millis(15));
             }
 
             let settle_ms = if focus_confirmed { 40 } else { 80 };
@@ -897,7 +988,23 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform) -> Result<(), Stri
             thread::sleep(Duration::from_millis(60));
         }
 
-        // 4. Inject Ctrl+V into focused control
+        // 4. Send-time foreground proof: the injected Ctrl+V lands wherever
+        // focus REALLY is. A mismatch is a logged violation, never silent.
+        let fg_at_send = unsafe { GetForegroundWindow() };
+        log_diag(&format!(
+            "[PASTE_THREAD] send-time foreground hwnd={:?} (target=0x{:X?})",
+            fg_at_send.0 as usize, target_hwnd
+        ));
+        if let Some(want) = target_hwnd {
+            if fg_at_send.0 as isize != want {
+                log_diag(&format!(
+                    "[PASTE_THREAD] VIOLATION: foreground mismatch at send time — want 0x{:X?}, have {} (proceeding best-effort)",
+                    want,
+                    get_window_diag_info(fg_at_send)
+                ));
+            }
+        }
+        // Inject Ctrl+V into focused control
         inject_ctrl_v();
 
         // Paste fully carried out — allow the next (legitimate) request.

@@ -549,6 +549,10 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   }, []);
 
   const [hotkeys, setHotkeys] = useState<{ overlay: string; enlarged: string }>({ overlay: 'Ctrl+Shift+Z', enlarged: 'Ctrl+Alt+X' });
+  // Elevation fallback notice (v28-C): the target needed admin rights, so
+  // the clip was staged to the clipboard instead of injected. Transient.
+  const [pasteNotice, setPasteNotice] = useState<string | null>(null);
+  const pasteNoticeTimerRef = useRef<number | null>(null);
 
   // Show/hide Snippets section & hotkeys sync
   useEffect(() => {
@@ -571,6 +575,15 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     invoke<AppSettings>('get_settings').then(apply).catch(() => {});
     let unlisten: (() => void) | undefined;
     let unlistenStatus: (() => void) | undefined;
+    let unlistenPasteNotice: (() => void) | undefined;
+    listen<{ target_app?: string | null }>('paste-elevation-fallback', (e) => {
+      const app = e.payload?.target_app || 'that app';
+      if (pasteNoticeTimerRef.current) window.clearTimeout(pasteNoticeTimerRef.current);
+      setPasteNotice(`${app} needs admin rights — clip is on your clipboard, press Ctrl+V there.`);
+      pasteNoticeTimerRef.current = window.setTimeout(() => setPasteNotice(null), 6000);
+    }).then((fn) => {
+      unlistenPasteNotice = fn;
+    });
     listen<AppSettings>('settings-updated', (e) => apply(e.payload)).then((fn) => {
       unlisten = fn;
     });
@@ -587,6 +600,8 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     return () => {
       unlisten?.();
       unlistenStatus?.();
+      unlistenPasteNotice?.();
+      if (pasteNoticeTimerRef.current) window.clearTimeout(pasteNoticeTimerRef.current);
     };
   }, []);
 
@@ -3177,6 +3192,11 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
               <span className="cm-ic"><DeleteIcon /></span> Delete Collection
             </button>
           </div>
+        </div>
+      )}
+      {pasteNotice && (
+        <div className="sn-confirm-pill">
+          <span className="sn-pill-check">ⓘ</span> {pasteNotice}
         </div>
       )}
     </div>

@@ -292,6 +292,28 @@ fn paste_clip(
             state.db.bump_entry(&id).ok();
         }
 
+        // C3 elevation gate (v28-C): an elevated target cannot receive our
+        // injected Ctrl+V. The clipboard-first design means content is
+        // already stageable — write it, surface a hint, and STOP before
+        // hiding so the notice stays visible. Never a silent dead keypress.
+        if let Some(target) = paste::peek_target_hwnd() {
+            if paste::target_needs_elevation_fallback(target) {
+                let label = paste::describe_target(target).unwrap_or_else(|| "that app".to_string());
+                paste::log_diag(&format!(
+                    "[PASTE_CLIP] elevation fallback: target 0x{:X?} ({}) is elevated; staged to clipboard, injection skipped",
+                    target, label
+                ));
+                paste::write_clip_to_clipboard_only(&item, transform)?;
+                let _ = app_handle.emit(
+                    "paste-elevation-fallback",
+                    serde_json::json!({ "target_app": label }),
+                );
+                let _ = app_handle.emit("paste-queue-updated", ());
+                let _ = app_handle.emit("clipboard-updated", ());
+                return Ok(());
+            }
+        }
+
         paste::log_diag(&format!(
             "[PASTE_CLIP] Hiding window '{}' before initiating paste...",
             window.label()

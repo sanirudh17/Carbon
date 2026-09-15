@@ -216,6 +216,10 @@ export const QuickOverlay: React.FC = () => {
     return true;
   });
   const [targetApp, setTargetApp] = useState<string | null>(null);
+  // Elevation fallback notice (v28-C): the target needed admin rights, so
+  // the clip was staged to the clipboard instead of injected. Transient.
+  const [pasteNotice, setPasteNotice] = useState<string | null>(null);
+  const pasteNoticeTimerRef = useRef<number | null>(null);
 
   // ── Snippets tab state ────────────────────────────────────────────
   const [snSnippets, setSnSnippets] = useState<Snippet[]>(() => (typeof window !== 'undefined' && window.__carbonInitialSnippets) || []);
@@ -855,6 +859,11 @@ export const QuickOverlay: React.FC = () => {
 
       lastHideAtRef.current = performance.now();
 
+      setPasteNotice(null);
+      if (pasteNoticeTimerRef.current) {
+        window.clearTimeout(pasteNoticeTimerRef.current);
+        pasteNoticeTimerRef.current = null;
+      }
       if (searchRef.current.trim() !== '') {
         skipSearchFetchRef.current = true;
       }
@@ -960,6 +969,16 @@ export const QuickOverlay: React.FC = () => {
       window.addEventListener('focus', onWindowFocus);
     }
 
+    const unlistenPasteNotice = safeListen<{ target_app?: string | null }>(
+      'paste-elevation-fallback',
+      (e) => {
+        const app = e?.payload?.target_app || 'that app';
+        if (pasteNoticeTimerRef.current) window.clearTimeout(pasteNoticeTimerRef.current);
+        setPasteNotice(`${app} needs admin rights — clip is on your clipboard, press Ctrl+V there.`);
+        pasteNoticeTimerRef.current = window.setTimeout(() => setPasteNotice(null), 6000);
+      }
+    );
+
     const unlistenQueue = safeListen('paste-queue-updated', () => {
       fetchQueue();
     });
@@ -975,6 +994,7 @@ export const QuickOverlay: React.FC = () => {
       unlistenSettings.then((fn) => fn());
       unlistenCycle.then((fn) => fn());
       unlistenStatus.then((fn) => fn());
+      unlistenPasteNotice.then((fn) => fn());
       unlistenQueue.then((fn) => fn());
       unlistenFocus?.();
       document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -2134,6 +2154,11 @@ export const QuickOverlay: React.FC = () => {
         {snPill && (
           <div className={`sn-confirm-pill ${snPill.error ? 'error' : ''}`}>
             {snPill.error ? <span className="sn-pill-x">✕</span> : <span className="sn-pill-check">✓</span>} {snPill.text}
+          </div>
+        )}
+        {pasteNotice && (
+          <div className="sn-confirm-pill">
+            <span className="sn-pill-check">ⓘ</span> {pasteNotice}
           </div>
         )}
 
