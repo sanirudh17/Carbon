@@ -2679,6 +2679,16 @@ section:last-child {
   object-fit: contain;
 }
 
+/* Overlay render container hugs content: the shared .preview-render rule
+   flex-grows (library sizing), which stretched short content boxes — e.g.
+   the white rich-text card — into tall voids with content pinned at top.
+   In the overlay the media area already fills the pane, so the container
+   sizes to content and any remaining space shows pane background. */
+.overlay-preview .preview-render {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
 /* Information block: hugs its content (no internal gaps) up to the 175px
    cap, then scrolls — Source / Type / Dimensions / Size / Copied live
    here. It stays bottom-anchored because the media above flex-grows to

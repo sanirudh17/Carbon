@@ -332,6 +332,12 @@ test('Unified Frame - permanent preview pane with media cap and info block', () 
     css.includes('.overlay-preview .ov-preview-media'),
     'overlay media wrapper must be namespaced'
   );
+  // Render container hugs content: the shared flex-grow stretched short
+  // boxes (white rich card) into tall voids.
+  assert.ok(
+    css.includes('.overlay-preview .preview-render'),
+    'overlay render container must hug content'
+  );
   // Info pinned at the bottom: the media absorbs free space (flex-grow,
   // capped) so small images/texts can't drag the info block up.
   assert.ok(
