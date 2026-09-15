@@ -4,6 +4,7 @@ mod db;
 mod expansion;
 mod history;
 mod hotkey;
+mod native_drag;
 mod ocr;
 mod paste;
 mod sensitive;
@@ -1351,6 +1352,7 @@ pub fn run() {
             set_snippet_expansion_enabled,
             set_show_snippets,
             set_overlay_animation,
+            native_drag::begin_native_drag,
             submit_arg_prompt,
             get_pending_arg_request,
             get_hotkey_status,
