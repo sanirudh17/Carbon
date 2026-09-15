@@ -91,31 +91,6 @@ test('ADDENDUM v15 - Invariant I1: Window becomes visible ONLY after paint gate 
   }
 });
 
-test('ADDENDUM v15 - Invariant I2 & F2.2: Sizing changes synchronously in same task as opacity-0', () => {
-  const choreoTsPath = path.join(SRC_DIR, 'lib', 'choreo.ts');
-  const content = fs.readFileSync(choreoTsPath, 'utf-8');
-
-  // Verify collapse path: 60ms timeout -> synchronous setWindowPreviewSize(false)
-  assert.ok(
-    content.includes('setWindowPreviewSize(next, snapId);'),
-    'Snap must synchronously request the native resize with its generation'
-  );
-  assert.ok(
-    content.includes('}, 60);'),
-    'Collapse path must wait 60ms content-out before setSize'
-  );
-
-  // Verify expand path: veil added -> synchronous setWindowPreviewSize(true)
-  assert.ok(
-    content.includes('options.previewPaneRef.current?.classList.add(\'snap-veil\');'),
-    'Expand path must add snap-veil synchronously'
-  );
-  assert.ok(
-    content.includes('setWindowPreviewSize(true, snapGen)'),
-    'Finalize path must pass the generation to native resizes'
-  );
-});
-
 test('ADDENDUM v15 - Invariant I4: Fade target per mode (Glass -> html, Solid -> #root)', () => {
   const cssPath = path.join(SRC_DIR, 'index.css');
   const cssContent = fs.readFileSync(cssPath, 'utf-8');
@@ -134,20 +109,6 @@ test('ADDENDUM v15 - Invariant I4: Fade target per mode (Glass -> html, Solid ->
   );
 });
 
-test('ADDENDUM v15 - Invariant I5: Cold gate applies ONLY to first-ever expand, never collapse', () => {
-  const choreoTsPath = path.join(SRC_DIR, 'lib', 'choreo.ts');
-  const content = fs.readFileSync(choreoTsPath, 'utf-8');
-
-  assert.ok(
-    content.includes('data-painted-expanded'),
-    'choreo.ts must use data-painted-expanded cold gate attribute'
-  );
-  assert.ok(
-    content.includes('isColdExpand'),
-    'choreo.ts must check isColdExpand only on expand path'
-  );
-});
-
 test('ADDENDUM v15 - Invariant I6: Footer hints, keys and labels swap instantly with zero opacity/transform transition', () => {
   const cssPath = path.join(SRC_DIR, 'index.css');
   const cssContent = fs.readFileSync(cssPath, 'utf-8');
@@ -159,26 +120,6 @@ test('ADDENDUM v15 - Invariant I6: Footer hints, keys and labels swap instantly 
   assert.ok(
     cssContent.includes('transition-property: background-color, border-color, color !important;'),
     'CSS must restrict footer transitions to background-color, border-color, and color only'
-  );
-});
-
-test('ADDENDUM v15 - Invariant I7: 400ms watchdog and Canary alerts on violation', () => {
-  const choreoTsPath = path.join(SRC_DIR, 'lib', 'choreo.ts');
-  const content = fs.readFileSync(choreoTsPath, 'utf-8');
-
-  assert.ok(
-    content.includes('carbon-choreo-canary'),
-    'choreo.ts must create/flash carbon-choreo-canary badge on violation'
-  );
-  assert.ok(
-    content.includes('reportViolation'),
-    'choreo.ts must have reportViolation function'
-  );
-  // Budget must clear the real transition (60ms out + layout frame + native
-  // ack + 100ms in ≈ 275ms), otherwise the watchdog force-finalizes mid-fade.
-  assert.ok(
-    content.includes('WATCHDOG_MS = 400'),
-    'choreo.ts must have the 400ms watchdog timer (ack-loss fallback)'
   );
 });
 
@@ -217,39 +158,6 @@ test('ADDENDUM v16 - F1: Flash-safe hide (DWM cloak before hide, cloak-only fall
     'choreo.ts must listen to choreo-hide-fallback to flash canary'
   );
 });
-
-test('ADDENDUM v16 - F2: Single-Layout Tab with continuous rAF sampling', () => {
-  const choreoTsPath = path.join(SRC_DIR, 'lib', 'choreo.ts');
-  const choreoContent = fs.readFileSync(choreoTsPath, 'utf-8');
-
-  // assertLayoutRoot strictly enforces exactly 1 root
-  assert.ok(
-    choreoContent.includes('roots.length !== 1'),
-    'assertLayoutRoot must strictly check roots.length !== 1'
-  );
-
-  // startLayoutRootSampling samples every rAF during transitions
-  assert.ok(
-    choreoContent.includes('startLayoutRootSampling'),
-    'choreo.ts must implement startLayoutRootSampling'
-  );
-  assert.ok(
-    choreoContent.includes('sampleRafId = requestAnimationFrame(sample);'),
-    'choreo.ts must sample layout roots every rAF'
-  );
-
-  // Unified 60ms content-out -> sync setSize -> 2 rAF -> 100ms content-in
-  assert.ok(
-    choreoContent.includes('}, 60);'),
-    'choreo.ts must wait 60ms content-out before setSize'
-  );
-  assert.ok(
-    choreoContent.includes('}, 100);'),
-    'choreo.ts must wait 100ms content-in settle'
-  );
-});
-
-
 
 test('FLASHFIX - Open: snap-unhide before uncloak + forced present while cloaked', () => {
   const choreoTsPath = path.join(SRC_DIR, 'lib', 'choreo.ts');
@@ -302,35 +210,6 @@ test('FLASHFIX - Close: cloak-first hide so the fade plays invisibly', () => {
   assert.ok(cancelIdx !== -1 && showingIdx > cancelIdx, 'cancel-hide must enter Showing before re-show gate');
 });
 
-test('FLASHFIX - Tab: veil lifts on native present-ack (gen-guarded), never on frame count', () => {
-  const choreoTsPath = path.join(SRC_DIR, 'lib', 'choreo.ts');
-  const content = fs.readFileSync(choreoTsPath, 'utf-8');
-  assert.ok(content.includes('notifySnapPresented'), 'controller must expose notifySnapPresented');
-  assert.ok(content.includes('snapGen'), 'snaps must carry a monotonic generation');
-  assert.ok(content.includes('gen !== snapGen'), 'stale acks must be ignored');
-  assert.ok(
-    content.includes("invoke('set_overlay_preview', { enabled: expanded, gen })"),
-    'resize invoke must carry the snap generation'
-  );
-  assert.ok(!content.includes('waitSnapTicks'), 'fixed 2-rAF unveil must be gone');
-
-  const choreoRsPath = path.join(SRC_TAURI_DIR, 'choreo.rs');
-  const choreoRs = fs.readFileSync(choreoRsPath, 'utf-8');
-  assert.ok(choreoRs.includes('struct PreviewToggled'), 'ack payload must carry enabled+gen');
-  assert.ok(
-    choreoRs.includes('Duration::from_millis(60)'),
-    'resize must settle 60ms before presenting'
-  );
-  assert.ok(choreoRs.includes('RedrawWindow'), 'resize must force a synchronous present pre-ack');
-
-  const qoPath = path.join(SRC_DIR, 'components', 'QuickOverlay.tsx');
-  const qo = fs.readFileSync(qoPath, 'utf-8');
-  assert.ok(
-    qo.includes('notifySnapPresented(e.payload.gen)'),
-    'preview-toggled listener must complete the snap from the ack'
-  );
-});
-
 test('FLASHFIX2 - Main open: cloaked settle for the heavy tree', () => {
   const choreoTsPath = path.join(SRC_DIR, 'lib', 'choreo.ts');
   const content = fs.readFileSync(choreoTsPath, 'utf-8');
@@ -341,29 +220,6 @@ test('FLASHFIX2 - Main open: cloaked settle for the heavy tree', () => {
   assert.ok(
     app.includes("executeWindowShow('main', undefined, 150)"),
     'main open must settle 150ms cloaked for rows/images'
-  );
-});
-
-test('FLASHFIX2 - Tab expand: layout commits a frame before native resize', () => {
-  const choreoTsPath = path.join(SRC_DIR, 'lib', 'choreo.ts');
-  const content = fs.readFileSync(choreoTsPath, 'utf-8');
-  const snapIdx = content.indexOf('options.setPreviewOpen(next);');
-  const rafIdx = content.indexOf('rafId = requestAnimationFrame(() => {', snapIdx);
-  const sizeIdx = content.indexOf('setWindowPreviewSize(next, snapId);');
-  assert.ok(snapIdx !== -1 && rafIdx > snapIdx, 'snap must set React state first');
-  assert.ok(sizeIdx > rafIdx, 'native resize must follow on the next frame');
-});
-
-test('FLASHFIX2 - Tab expand: single content fade, no pane-level double animation', () => {
-  const cssPath = path.join(SRC_DIR, 'index.css');
-  const css = fs.readFileSync(cssPath, 'utf-8');
-  const baseIdx = css.indexOf('.overlay-preview {');
-  assert.ok(baseIdx !== -1, 'pane base rule exists');
-  const baseBlock = css.slice(baseIdx, css.indexOf('}', css.indexOf('}', baseIdx) + 1) + 1);
-  assert.ok(baseBlock.includes('transition: none;'), 'pane base must not animate (children fade once)');
-  assert.ok(
-    css.includes('.overlay-preview:not(.collapsed) > *'),
-    'children keep their own fade-in rules'
   );
 });
 
@@ -386,22 +242,6 @@ test('MAIN-NOSHOW - Show/hide milestones are terminal-visible', () => {
   assert.ok(
     fs.readFileSync(libRsPath, 'utf-8').includes('[HIDE_MAIN] hide_enlarged invoked'),
     'native hide must log its invocation'
-  );
-});
-
-test('TAB-NEAT - Kids-veil closes the unveil pop-blip synchronously', () => {
-  const cssPath = path.join(SRC_DIR, 'index.css');
-  const css = fs.readFileSync(cssPath, 'utf-8');
-  assert.ok(css.includes('#content.kids-veil .overlay-preview > *'), 'kids-veil rule must exist');
-  const choreoTsPath = path.join(SRC_DIR, 'lib', 'choreo.ts');
-  const content = fs.readFileSync(choreoTsPath, 'utf-8');
-  assert.ok(
-    content.includes("classList.add('kids-veil')"),
-    'unveil must apply the kids-veil synchronously'
-  );
-  assert.ok(
-    content.includes("classList.remove('kids-veil')"),
-    'kids-veil must be released and cleaned up'
   );
 });
 

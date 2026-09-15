@@ -27,8 +27,9 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetCaretPos, GetCursorPos, GetForegroundWindow, GetGUIThreadInfo,
     GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindow,
-    PostThreadMessageW, SendMessageW, SetWindowsHookExW, UnhookWindowsHookEx, GUI_CARETBLINKING,
+    PostThreadMessageW, SendMessageTimeoutW, SetWindowsHookExW, UnhookWindowsHookEx, GUI_CARETBLINKING,
     GUITHREADINFO, HHOOK, KBDLLHOOKSTRUCT, KBDLLHOOKSTRUCT_FLAGS, WH_KEYBOARD_LL, WH_MOUSE_LL,
+    SMTO_ABORTIFHUNG, SMTO_BLOCK,
     WM_KEYDOWN, WM_LBUTTONUP, WM_QUIT, WM_SYSKEYDOWN, GetMessageW, TranslateMessage,
     DispatchMessageW, MSG, HC_ACTION, LLKHF_INJECTED,
 };
@@ -1586,11 +1587,19 @@ pub fn try_get_uia_selection() -> Option<String> {
             if GetGUIThreadInfo(tid, &mut info).is_ok() && !info.hwndFocus.0.is_null() {
                 let mut start = 0u32;
                 let mut end = 0u32;
-                SendMessageW(
+                // Bounded send: a plain SendMessageW blocks the shortcut thread
+                // until the target app pumps it — a hung/busy target stalled
+                // every picker AND main open with no upper bound. On timeout
+                // this falls through to None (no selection), same as a UIA miss.
+                let mut sm_res = 0usize;
+                SendMessageTimeoutW(
                     info.hwndFocus,
                     0x00B0, // EM_GETSEL
                     WPARAM(&mut start as *mut _ as usize),
                     LPARAM(&mut end as *mut _ as isize),
+                    SMTO_ABORTIFHUNG | SMTO_BLOCK,
+                    100,
+                    Some(&mut sm_res as *mut usize),
                 );
                 if end > start && (end - start) < 100_000 {
                     let len = GetWindowTextLengthW(info.hwndFocus);

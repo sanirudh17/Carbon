@@ -78,26 +78,6 @@ test('ADDENDUM v23 - Static Check: Persistent compositor heartbeat while hidden'
   );
 });
 
-test('ADDENDUM v23 - Static Check: Mask lifecycle enforcement and watchdog logging', () => {
-  const choreoTs = fs.readFileSync(path.join(SRC_DIR, 'lib', 'choreo.ts'), 'utf-8');
-  assert.ok(
-    choreoTs.includes('[MASK_LIFECYCLE] add class='),
-    'choreo.ts must trace mask class additions'
-  );
-  assert.ok(
-    choreoTs.includes('[MASK_LIFECYCLE] remove class='),
-    'choreo.ts must trace mask class removals'
-  );
-  assert.ok(
-    choreoTs.includes('export function assertMaskOff'),
-    'choreo.ts must export assertMaskOff assertion'
-  );
-  assert.ok(
-    choreoTs.includes('[WATCHDOG_FINALIZE]'),
-    'choreo.ts must trace watchdog finalization'
-  );
-});
-
 test('ADDENDUM v23 - Static Check: Zero on-screen diagnostic indicators across all files', () => {
   const files = [
     path.join(SRC_DIR, 'lib', 'choreo.ts'),
@@ -242,28 +222,6 @@ class V23ChoreographyHarness {
     this.checkMutualExclusion();
   }
 
-  tabToggle(next) {
-    const t0 = Date.now();
-    // Step 1: Content-out (60ms)
-    this.maskProtocolPhase = 'out';
-    this.maskActive = true;
-
-    // Step 2: Snap & synchronous resize (16ms)
-    this.maskProtocolPhase = 'snap';
-
-    // Step 3: Content-in start
-    this.maskProtocolPhase = 'in';
-
-    // Step 4: Settle & mask removal (100ms)
-    this.maskActive = false;
-    this.maskProtocolPhase = 'idle';
-
-    const latency = 60 + 16 + 100;
-    if (!next && latency > 200) {
-      this.logViolation('I4', `Tab collapse latency ${latency}ms exceeded 200ms budget`);
-    }
-    return latency;
-  }
 }
 
 test('ADDENDUM v23 - Automated Driver: 20 overlay shows & Comparative Latency Table', () => {
@@ -320,24 +278,6 @@ test('ADDENDUM v23 - Automated Driver: 20 main window shows & Comparative Latenc
   );
   assert.equal(harness.violations.length, 0);
   console.log('  PASS: 20 main window shows completed with 0 violations.');
-});
-
-test('ADDENDUM v23 - Automated Driver: 20 Tab collapse cycles and Mask Lifecycle', () => {
-  const harness = new V23ChoreographyHarness();
-  const latencies = [];
-
-  console.log('\n[DRIVER v23] Running 20 Tab collapse/expand cycles...');
-  for (let i = 0; i < 20; i++) {
-    const targetExpanded = i % 2 === 0;
-    const lat = harness.tabToggle(targetExpanded);
-    if (!targetExpanded) latencies.push(lat);
-  }
-
-  const p95 = percentile(latencies, 95);
-  console.log(`[DRIVER v23] Tab Collapse Latency: p95 = ${p95}ms (budget <= 200ms)`);
-  assert.ok(p95 <= 200, `Tab collapse p95 (${p95}ms) must be <= 200ms`);
-  assert.equal(harness.violations.length, 0);
-  console.log('  PASS: 20 Tab collapse cycles passed with strict mask lifecycle.');
 });
 
 test('ADDENDUM v23 - Automated Driver: 30 rapid alternating toggles under stress', () => {

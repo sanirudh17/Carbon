@@ -81,18 +81,14 @@ test('ADDENDUM v21 - Static Check: Instantaneous footer labels and target app in
     'OverlayOpenedPayload must include target_app'
   );
   assert.ok(
-    hotkeyRs.includes('preview_enabled: bool'),
-    'OverlayOpenedPayload must include preview_enabled'
+    !hotkeyRs.includes('preview_enabled: bool'),
+    'OverlayOpenedPayload must NOT include preview state (unified split frame: preview is permanent)'
   );
 
   const quickOverlayTsx = fs.readFileSync(path.join(SRC_DIR, 'components', 'QuickOverlay.tsx'), 'utf-8');
   assert.ok(
     quickOverlayTsx.includes('target_app') && quickOverlayTsx.includes('setTargetApp(appName)'),
     'QuickOverlay must set targetApp synchronously from overlay-opened payload'
-  );
-  assert.ok(
-    quickOverlayTsx.includes('preview_enabled') && quickOverlayTsx.includes('previewOpenRef.current = previewEnabled'),
-    'QuickOverlay must set preview state synchronously from overlay-opened payload'
   );
   assert.ok(
     quickOverlayTsx.includes('setTargetApp(null);'),
@@ -395,7 +391,7 @@ test('ADDENDUM v21 - Automated Driver: 30 rapid alternating inputs (stressing mu
     } else if (i % 3 === 1) {
       harness.invokeMain(true);
     } else {
-      harness.tabToggle(i % 2 === 0);
+      harness.dismissOverlay();
     }
   }
 

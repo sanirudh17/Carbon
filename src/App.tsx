@@ -93,9 +93,6 @@ export function App() {
       document.documentElement.removeAttribute('data-theme');
       try { localStorage.setItem('carbon_theme', 'dark'); } catch {}
     }
-    if (typeof settings.preview_enabled === 'boolean') {
-      try { localStorage.setItem('carbon_preview_enabled', String(settings.preview_enabled)); } catch {}
-    }
     if (settings.window_material) {
       const mat = settings.window_material === 'acrylic' ? 'glass' : settings.window_material;
       document.documentElement.setAttribute('data-material', mat);

@@ -21,8 +21,6 @@ import { SnippetArgPrompt } from './SnippetArgPrompt';
 import {
   executeWindowShow,
   executeWindowHide,
-  createPreviewLayoutController,
-  type LayoutTransitionController,
 } from '../lib/choreo';
 import {
   SearchIcon,
@@ -202,69 +200,9 @@ export const QuickOverlay: React.FC = () => {
   const [actionPanelOpen, setActionPanelOpen] = useState(false);
   const [actionIndex, setActionIndex] = useState(0);
   const [hotkeyStatus, setHotkeyStatus] = useState<HotkeyStatus | null>(null);
-  const [previewOpen, setPreviewOpen] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      if (window.__carbonSettings && typeof window.__carbonSettings.preview_enabled === 'boolean') {
-        return window.__carbonSettings.preview_enabled;
-      }
-      try {
-        const cached = localStorage.getItem('carbon_preview_enabled');
-        if (cached !== null) return cached === 'true';
-      } catch {}
-    }
-    return true;
-  });
-  const previewOpenRef = useRef(previewOpen);
-  previewOpenRef.current = previewOpen;
-  const targetPreviewOpenRef = useRef<boolean>(previewOpen);
-  const previewPaneRef = useRef<HTMLDivElement | null>(null);
-
-  // F3 Preview state machine: idle | out | snap | in
-  type PreviewPhase = 'idle' | 'out' | 'snap' | 'in';
-  const [previewPhase, setPreviewPhase] = useState<PreviewPhase>('idle');
-  const previewPhaseRef = useRef<PreviewPhase>('idle');
-  // F1 Single-Surface Guarantee & State Machine Transition Log
-  interface TransitionRecord {
-    time: number;
-    fromPhase: PreviewPhase;
-    toPhase: PreviewPhase;
-    previewOpen: boolean;
-    targetOpen: boolean;
-    trigger: string;
-  }
-  const transitionLogRef = useRef<TransitionRecord[]>([]);
-
-  const recordTransition = useCallback((fromPhase: PreviewPhase, toPhase: PreviewPhase, trigger: string) => {
-    if (!import.meta.env.DEV) return;
-    const log = transitionLogRef.current;
-    if (log.length >= 20) log.shift();
-    log.push({
-      time: Math.round(performance.now()),
-      fromPhase,
-      toPhase,
-      previewOpen: previewOpenRef.current,
-      targetOpen: targetPreviewOpenRef.current,
-      trigger,
-    });
-  }, []);
-
-  const previewLayoutRef = useRef<LayoutTransitionController | null>(null);
-  if (!previewLayoutRef.current) {
-    previewLayoutRef.current = createPreviewLayoutController({
-      previewPaneRef,
-      previewOpenRef,
-      targetPreviewOpenRef,
-      previewPhaseRef,
-      setPreviewOpen,
-      setPreviewPhase,
-      recordTransition,
-    });
-  }
-
-  // Finalize current phase (settle state to target)
-  const finalizeTransition = useCallback((targetState?: boolean) => {
-    previewLayoutRef.current?.finalize(targetState);
-  }, []);
+  // Unified split frame: the preview pane is permanent — there is no toggle
+  // state, no phase machine, and no layout controller. The list (left) and
+  // the preview (right) are always mounted inside the fixed 750x475 frame.
   const [showSnippets, setShowSnippets] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       if (window.__carbonSettings && typeof window.__carbonSettings.show_snippets === 'boolean') {
@@ -356,6 +294,10 @@ export const QuickOverlay: React.FC = () => {
   searchRef.current = search;
 
   useEffect(() => {
+    if (skipSearchFetchRef.current) {
+      skipSearchFetchRef.current = false;
+      return;
+    }
     fetchItems();
   }, [search]);
 
@@ -695,10 +637,8 @@ export const QuickOverlay: React.FC = () => {
   // "Overlay opens on" default has been removed.
   const applyOverlaySettings = useCallback((s: AppSettings) => {
     if (!s) return;
-    if (typeof s.preview_enabled === 'boolean') {
-      setPreviewOpen(s.preview_enabled);
-      try { localStorage.setItem('carbon_preview_enabled', String(s.preview_enabled)); } catch {}
-    }
+    // NOTE: the old preview_enabled toggle is gone — the split-frame preview
+    // is permanent. The persisted key is ignored if present.
     if (typeof s.show_snippets === 'boolean') {
       setShowSnippets(s.show_snippets);
       try { localStorage.setItem('carbon_show_snippets', String(s.show_snippets)); } catch {}
@@ -708,6 +648,12 @@ export const QuickOverlay: React.FC = () => {
         return;
       }
     }
+    // Cover-layer animation mode (reversible via set_overlay_animation):
+    // "soft" trims the extra hide zoom/fade, "full" restores it. Anything
+    // unknown falls back to "soft" (the shipped default). The attribute is
+    // always set so CSS never depends on a missing-attribute state.
+    const anim = (s as AppSettings).overlay_animation === 'full' ? 'full' : 'soft';
+    document.documentElement.dataset.anim = anim;
   }, []);
 
   // ── Show/hide choreography (state machine: hidden|showing|shown|hiding) ──
@@ -725,6 +671,22 @@ export const QuickOverlay: React.FC = () => {
   // Bumped on every overlay-opened; each show's rAF chain only lifts the mask
   // for its own epoch, so overlapping shows under hotkey spam can't fight.
   const showEpochRef = useRef(0);
+  // When the open path resets a non-empty search to '', the [search] effect
+  // below would fire a redundant get_all_clips invoke on the paint-gated
+  // critical path. Rust already pushed the full unfiltered list with the
+  // open (overlay-data), so skip that one fetch — the post-reveal refresh
+  // covers cold-start staleness. Guarded by searchRef so a no-op reset
+  // (search already '') never arms it and eats a later legitimate fetch.
+  const skipSearchFetchRef = useRef(false);
+  // Timestamp (performance.now) of the last overlay-opened / cancel-hide
+  // show. Window-focus events arriving within FOCUS_QUIET_MS of a show are
+  // part of the open itself (Rust focuses the window right after show()) —
+  // the open path already pushes fresh data and schedules a post-reveal
+  // refresh, so the focus handler must not fire another get_all_clips
+  // invoke mid-gate. The main window has no focus-triggered list fetch,
+  // which is part of why it feels faster.
+  const lastOpenedAtRef = useRef(0);
+  const FOCUS_QUIET_MS = 1000;
   // Last time a hide fully completed (finish()). The open path compares it
   // against now to detect cold opens after a long idle (see COLD_IDLE_MS).
   const lastHideAtRef = useRef(performance.now());
@@ -754,9 +716,6 @@ export const QuickOverlay: React.FC = () => {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         document.documentElement.dataset.painted = '1';
-        if (previewOpenRef.current) {
-          document.documentElement.setAttribute('data-painted-expanded', '1');
-        }
       });
     });
 
@@ -838,7 +797,6 @@ export const QuickOverlay: React.FC = () => {
 
     const unlistenOpened = safeListen<{
       token?: number;
-      preview_enabled?: boolean;
       target_app?: string | null;
       hide_gen?: number;
     } | number>('overlay-opened', (e) => {
@@ -847,36 +805,46 @@ export const QuickOverlay: React.FC = () => {
       const token = typeof payload === 'object' && payload !== null && typeof payload.token === 'number'
         ? payload.token
         : (typeof payload === 'number' ? payload : undefined);
-      const previewEnabled = typeof payload === 'object' && payload !== null && typeof payload.preview_enabled === 'boolean'
-        ? payload.preview_enabled
-        : undefined;
       const appName = typeof payload === 'object' && payload !== null && 'target_app' in payload
         ? payload.target_app
         : undefined;
 
       showEpochRef.current += 1;
+      lastOpenedAtRef.current = performance.now();
       if (pendingHideRef.current) pendingHideRef.current.cancel();
       overlayPhaseRef.current = 'showing';
       invoke('overlay_phase_ack', { phase: 'showing' }).catch(() => {});
 
-      if (typeof previewEnabled === 'boolean') {
-        previewOpenRef.current = previewEnabled;
-        setPreviewOpen(previewEnabled);
-        if (previewEnabled) {
-          document.documentElement.setAttribute('data-painted-expanded', '1');
-        }
-      }
       if (appName !== undefined) {
         setTargetApp(appName);
       }
-      finalizeTransition(previewOpenRef.current);
 
       executeWindowShow('overlay', () => {
         overlayPhaseRef.current = 'shown';
+        // Post-reveal refresh, deferred off the paint gate: Rust already
+        // pushed overlay-data + overlay-snippets with the open, so the first
+        // frame paints instantly with zero invoke round-trips — matching the
+        // main window's 0-invoke open. Refresh here for cold-start staleness
+        // (cache was None) and post-open updates.
+        fetchItems();
+        fetchSnippets();
+        // Re-sync live settings (snippets flags) without touching the
+        // tab — the overlay reopens on the last-used tab.
+        invoke<AppSettings>('get_settings')
+          .then((s) => {
+            if (s) applyOverlaySettings(s);
+            focusSearchInput();
+          })
+          .catch(() => {
+            focusSearchInput();
+          });
       }, 0, token);
 
       lastHideAtRef.current = performance.now();
 
+      if (searchRef.current.trim() !== '') {
+        skipSearchFetchRef.current = true;
+      }
       setSearch('');
       setActionPanelOpen(false);
       setActionIndex(0);
@@ -886,18 +854,6 @@ export const QuickOverlay: React.FC = () => {
       if (appName === undefined) {
         loadTargetApp();
       }
-      fetchItems();
-      fetchSnippets();
-      // Re-sync live settings (preview/snippets flags) without touching the
-      // tab — the overlay reopens on the last-used tab.
-      invoke<AppSettings>('get_settings')
-        .then((s) => {
-          if (s) applyOverlaySettings(s);
-          focusSearchInput();
-        })
-        .catch(() => {
-          focusSearchInput();
-        });
     });
 
     const unlistenCancelHide = safeListen<{ token?: number; hide_gen?: number } | number>(
@@ -908,6 +864,7 @@ export const QuickOverlay: React.FC = () => {
           pendingHideRef.current.cancel();
           pendingHideRef.current = null;
         }
+        lastOpenedAtRef.current = performance.now();
         overlayPhaseRef.current = 'showing';
         invoke('overlay_phase_ack', { phase: 'showing' }).catch(() => {});
         const payload = e?.payload;
@@ -956,6 +913,14 @@ export const QuickOverlay: React.FC = () => {
     let unlistenFocus: (() => void) | null = null;
     const onWindowFocus = () => {
       logClient('Webview onWindowFocus event.');
+      // Show-focus quiet period: this focus belongs to the open itself and
+      // the open path owns the refresh — skip the duplicate invokes so the
+      // paint gate stays clean. Genuine later focuses (alt-tab back) still
+      // refresh, but keep input focus in both cases for instant typing.
+      if (performance.now() - lastOpenedAtRef.current < FOCUS_QUIET_MS) {
+        focusSearchInput();
+        return;
+      }
       loadTargetApp();
       fetchItems();
       focusSearchInput();
@@ -982,16 +947,6 @@ export const QuickOverlay: React.FC = () => {
       window.addEventListener('focus', onWindowFocus);
     }
 
-    // Present-ack from Rust (set_overlay_preview settles + presents, then
-    // emits). Completes the snap onto real pixels; stale gens ignored.
-    const unlistenPreviewToggle = safeListen<{ enabled: boolean; gen: number }>(
-      'preview-toggled',
-      (e) => {
-        setPreviewOpen(e.payload.enabled);
-        previewLayoutRef.current?.notifySnapPresented(e.payload.gen);
-      }
-    );
-
     const unlistenQueue = safeListen('paste-queue-updated', () => {
       fetchQueue();
     });
@@ -1007,7 +962,6 @@ export const QuickOverlay: React.FC = () => {
       unlistenSettings.then((fn) => fn());
       unlistenCycle.then((fn) => fn());
       unlistenStatus.then((fn) => fn());
-      unlistenPreviewToggle.then((fn) => fn());
       unlistenQueue.then((fn) => fn());
       unlistenFocus?.();
       document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -1082,12 +1036,6 @@ export const QuickOverlay: React.FC = () => {
       }
     }
   };
-
-  // F1, F2 & F3 Preview Toggle via centralized Choreo module (Invariants I2, I5, I7, F2.2)
-  const togglePreview = useCallback(() => {
-    const next = !previewOpenRef.current;
-    previewLayoutRef.current?.toggle(next);
-  }, []);
 
   // The highlighted clip of the VISIBLE (possibly app-filtered) list — every
   // paste/queue/preview action must operate on this, not the unfiltered array.
@@ -1192,8 +1140,9 @@ export const QuickOverlay: React.FC = () => {
   const modalActions = selectedItem ? getActionsForClip(selectedItem, targetApp, actionHandlers, false) : [];
 
   // Snippets-tab keyboard handling: mirrors the clips tab's feel
-  // (Escape hides, Tab toggles preview, arrows navigate, Enter pastes,
-  // Ctrl+C copies, Ctrl+K opens the action panel).
+  // (Escape hides, arrows navigate, Enter pastes, Ctrl+C copies, Ctrl+K
+  // opens the action panel). Tab is intentionally unbound: the unified split
+  // frame has no preview toggle, so Tab keeps native focus traversal.
   const handleSnippetKeyDown = (e: React.KeyboardEvent | KeyboardEvent) => {
     // Sequential argument prompt owns all keys while open.
     if (snArgPrompt) {
@@ -1260,13 +1209,6 @@ export const QuickOverlay: React.FC = () => {
     if (e.key === 'Escape') {
       e.preventDefault();
       requestHide();
-      return;
-    }
-
-    // Tab / Ctrl+Shift+O toggles preview (same toggle as clips tab)
-    if (e.key === 'Tab' || ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'o')) {
-      e.preventDefault();
-      togglePreview();
       return;
     }
 
@@ -1480,12 +1422,8 @@ export const QuickOverlay: React.FC = () => {
       return;
     }
 
-    // Tab or Ctrl+Shift+O toggles preview
-    if (e.key === 'Tab' || ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'o')) {
-      e.preventDefault();
-      togglePreview();
-      return;
-    }
+    // Tab is intentionally unbound (no preview toggle in the unified split
+    // frame): it keeps native focus traversal and must never mutate layout.
 
     // Left/Right arrows: in the search bar they move the caret between
     // characters while there's text. With the bar empty there is no caret
@@ -1611,16 +1549,16 @@ export const QuickOverlay: React.FC = () => {
         e.dataTransfer.dropEffect = 'copy';
       }}
     >
-      <div className={`overlay ${!previewOpen ? 'no-preview' : ''} ${tab === 'snippets' ? 'sn-tab' : ''}`}>
+      <div className={`overlay overlay-split ${tab === 'snippets' ? 'sn-tab' : ''}`}>
         <div
           id="content"
           className="overlay-content"
           data-carbon-layout-layer="overlay"
         >
         {/* Top Search Bar — no tab switcher header: reopening restores the
-            view you left (clips or snippets, preview open or closed). The
-            placeholder announces the active tab; Left/Right in an empty
-            bar toggle focus to the other tab's bar. */}
+            view you left (clips or snippets). The unified split frame always
+            shows list + preview; the placeholder announces the active tab.
+            Left/Right in an empty bar toggle focus to the other tab's bar. */}
         <div className={`searchbar has-app-filter ${tab === 'snippets' ? 'inactive-tab' : ''}`}>
             <span className="search-ic">
               <SearchIcon />
@@ -1643,7 +1581,7 @@ export const QuickOverlay: React.FC = () => {
             <input
               ref={searchInputRef}
               className={sourceAppFilter ? 'has-filter-pill' : ''}
-              placeholder="Search clipboard..."
+              placeholder="Type to filter entries…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               autoFocus
@@ -1746,7 +1684,7 @@ export const QuickOverlay: React.FC = () => {
           </div>
         )}
 
-        {/* Master-Detail Layout */}
+        {/* Unified split frame: list (left) + permanent preview (right) */}
         <div className="overlay-body">
           <div className={`overlay-list ${tab === 'snippets' ? 'inactive-tab' : ''}`}>
             {displayItems.length === 0 ? (
@@ -1863,7 +1801,7 @@ export const QuickOverlay: React.FC = () => {
               ))
             )}
           </div>
-          <div ref={previewPaneRef} className={`overlay-preview ${!previewOpen ? 'collapsed' : ''} ${previewPhase === 'out' ? 'preview-out' : ''} ${previewPhase === 'snap' ? 'snap-veil' : ''}`}>
+          <div className="overlay-preview">
             {tab === 'snippets' ? (
               snSelected ? (
                 <>
@@ -1874,7 +1812,7 @@ export const QuickOverlay: React.FC = () => {
                       {snSelected.keyword && <span className="sn-keyword-badge">{snSelected.keyword}</span>}
                     </span>
                   </div>
-                  <div className="overlay-preview-content">
+                  <div className="overlay-preview-content preview-media">
                     <div className="sn-content-preview sn-overlay-content">
                       {snHighlighted.map((seg, i) =>
                         seg.cls === 'plain' ? (
@@ -1886,7 +1824,7 @@ export const QuickOverlay: React.FC = () => {
                       {snSelected.content.length === 0 && <span className="sn-content-empty">Empty snippet — add content in the full window.</span>}
                     </div>
                   </div>
-                  <div className="sn-overlay-meta">
+                  <div className="sn-overlay-meta preview-info">
                     {(snSelected.tags || []).length > 0 && (
                       <div className="sn-detail-tags">
                         {(snSelected.tags || []).map((t) => (
@@ -1902,8 +1840,8 @@ export const QuickOverlay: React.FC = () => {
               ) : (
                 <div className="sn-overlay-empty">Select a snippet to inspect it.</div>
               )
-            ) : (
-              selectedItem && (() => {
+            ) : selectedItem ? (
+              (() => {
                 const hasRenderedVersion =
                   selectedItem.content_type === 'rich_text' ||
                   (Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!));
@@ -1935,7 +1873,7 @@ export const QuickOverlay: React.FC = () => {
                         </div>
                       )}
                     </div>
-                    <div className="overlay-preview-content">
+                    <div className="overlay-preview-content preview-media">
                       {selectedItem.content_type === 'image' || selectedItem.content_type === 'file' ? (
                         <div
                           draggable
@@ -1967,10 +1905,17 @@ export const QuickOverlay: React.FC = () => {
                         </div>
                       )}
                     </div>
-                    <ClipMetaStrip item={selectedItem} onFilterByApp={(app) => setSourceAppFilter(app)} />
+                    <div className="preview-info">
+                      <ClipMetaStrip item={selectedItem} onFilterByApp={(app) => setSourceAppFilter(app)} />
+                    </div>
                   </>
                 );
               })()
+            ) : (
+              <div className="overlay-preview-empty">
+                <div className="big">Nothing selected</div>
+                <div className="sub">Select an entry to preview it here.</div>
+              </div>
             )}
           </div>
         </div>
@@ -1989,10 +1934,6 @@ export const QuickOverlay: React.FC = () => {
             >
               <span className="key">Enter</span>
               <b>{targetApp ? `Paste to ${targetApp}` : 'Paste'}</b>
-            </span>
-            <span className="hint" onClick={togglePreview}>
-              <span className="key">Tab</span>
-              <b>{previewOpen ? 'Hide Preview' : 'Show Preview'}</b>
             </span>
             <span
               className="hint"

@@ -44,6 +44,13 @@ fn default_show_snippets() -> bool {
     true
 }
 
+fn default_overlay_animation() -> String {
+    // "soft" trims the overlay cover layer's extra hide zoom/fade closer to
+    // the main window's plain fade. Reversible at runtime via the
+    // set_overlay_animation command ("full" restores the original).
+    "soft".to_string()
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppSettings {
     pub quick_hotkey: String,
@@ -68,9 +75,6 @@ pub struct AppSettings {
     pub accent_color: String,
     pub theme: String,
     pub ignore_apps: Vec<String>,
-    /// Quick Overlay: whether the preview pane is shown (persisted).
-    #[serde(default = "default_false")]
-    pub preview_enabled: bool,
     /// Quick Overlay: which tab opens by default ("clips" | "snippets").
     #[serde(default = "default_overlay_tab")]
     pub overlay_default_tab: String,
@@ -104,6 +108,12 @@ pub struct AppSettings {
     /// stop an already-enabled expansion hook.
     #[serde(default = "default_show_snippets")]
     pub show_snippets: bool,
+    /// Overlay cover-layer animation: "full" (original hide zoom + 90ms fade)
+    /// or "soft" (opacity-only 60ms fade, closer to the main window).
+    /// Show-path flash guards (cloak gate, paint gate, mask) are untouched by
+    /// either mode — this only trims the hide content-layer transition.
+    #[serde(default = "default_overlay_animation")]
+    pub overlay_animation: String,
     /// Window material blur-behind: "acrylic" | "mica" | "blur" | "solid".
     #[serde(default = "default_window_material")]
     pub window_material: String,
@@ -165,7 +175,6 @@ impl Default for AppSettings {
                 "Dashlane.exe".to_string(),
                 "LastPass.exe".to_string(),
             ],
-            preview_enabled: false,
             overlay_default_tab: "clips".to_string(),
             detect_sensitive_data: false,
             clip_merge_enabled: false,
@@ -174,6 +183,7 @@ impl Default for AppSettings {
             capture_rules: Vec::new(),
             snippet_expansion_enabled: false,
             show_snippets: true,
+            overlay_animation: default_overlay_animation(),
             dismissed_update_version: String::new(),
         }
     }

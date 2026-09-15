@@ -566,6 +566,30 @@ fn set_show_snippets(
     Ok(())
 }
 
+/// Reversible overlay cover-layer animation switch ("full" | "soft").
+/// "soft" drops the extra hide zoom-out and shortens the content fade so the
+/// picker closes like the main window; "full" restores the original.
+/// Safety: only the hide content-layer CSS transition changes — the show-path
+/// cloak gate, paint gate, mask classes and Tab-preview timings are untouched.
+/// Persists to settings.json and emits settings-updated so the overlay
+/// applies it live. Returns the applied mode.
+#[tauri::command]
+fn set_overlay_animation(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    mode: String,
+) -> Result<String, String> {
+    let mode = mode.to_lowercase();
+    if mode != "full" && mode != "soft" {
+        return Err("mode must be \"full\" or \"soft\"".to_string());
+    }
+    let mut s = state.settings.get();
+    s.overlay_animation = mode.clone();
+    state.settings.update(s)?;
+    let _ = app_handle.emit("settings-updated", &state.settings.get());
+    Ok(mode)
+}
+
 #[tauri::command]
 fn submit_arg_prompt(value: Option<String>) -> Result<(), String> {
     expansion::submit_arg_prompt_response(value)
@@ -610,20 +634,6 @@ fn set_overlay_default_tab(state: State<'_, AppState>, app_handle: AppHandle, ta
 #[tauri::command]
 fn get_target_app_name() -> Option<String> {
     paste::get_target_app_name()
-}
-
-/// Toggles the Quick Overlay preview pane. Persists the choice (so it
-/// survives restarts) and resizes the overlay window to match, anchoring
-/// the window's center so it doesn't jump.
-#[tauri::command]
-fn set_overlay_preview(
-    state: State<'_, AppState>,
-    app_handle: AppHandle,
-    window: WebviewWindow,
-    enabled: bool,
-    r#gen: u64,
-) -> Result<(), String> {
-    choreo::set_overlay_preview(&state, &app_handle, &window, enabled, r#gen)
 }
 
 /// Cloaks a window immediately without hiding it, so the hide fade plays
@@ -1077,6 +1087,12 @@ pub fn run() {
             // states.
             if let Some(win) = app.get_webview_window("main") {
                 hotkey::set_window_cloaked(&win, true);
+                // Same pre-show surface discipline as the hotkey path: a cold
+                // or idle-discarded surface must never composite white during
+                // the reveal ramp, and the wm-hidden mask must be on until the
+                // frontend paint gate lifts it.
+                hotkey::prepare_main_surface(app, &win);
+                let _ = win.eval("document.documentElement.classList.add('wm-hidden')");
                 if win.is_minimized().unwrap_or(false) {
                     let _ = win.unminimize();
                 }
@@ -1094,7 +1110,6 @@ pub fn run() {
                 let overlay_gen = hotkey::next_overlay_show_gen();
                 let _ = app.emit("overlay-opened", hotkey::OverlayOpenedPayload {
                     token: overlay_gen,
-                    preview_enabled: true,
                     target_app: None,
                     hide_gen: 0,
                 });
@@ -1335,6 +1350,7 @@ pub fn run() {
             get_expansion_status,
             set_snippet_expansion_enabled,
             set_show_snippets,
+            set_overlay_animation,
             submit_arg_prompt,
             get_pending_arg_request,
             get_hotkey_status,
@@ -1343,7 +1359,6 @@ pub fn run() {
             start_recording_hotkey,
             stop_recording_hotkey,
             get_target_app_name,
-            set_overlay_preview,
             cloak_window,
             set_overlay_default_tab,
             get_stats,
@@ -1387,7 +1402,6 @@ pub fn run() {
             set_window_material,
             clear_window_material,
             log_client_event,
-            choreo::choreo_set_overlay_preview,
             choreo::choreo_hide_overlay,
             choreo::choreo_hide_enlarged,
             choreo::choreo_notify_painted

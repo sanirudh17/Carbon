@@ -1,5 +1,16 @@
 /* ═══════════ Carbon Tokens & Base Styles ═══════════ */
 :root {
+  /* ── Unified overlay split-frame tokens (Tinycast-adapted geometry) ──
+     Single source of truth: the Rust window owns 750×475 (tauri.conf);
+     CSS lays out INSIDE that frame and never resizes it. */
+  --overlay-w: 750px;          /* Tinycast expanded palette width  */
+  --overlay-h: 475px;          /* Tinycast expanded palette height */
+  --row-h: 44px;               /* list row height                  */
+  --thumb: 32px;               /* list row thumbnail               */
+  --media-cap: 260px;          /* Tinycast clipboardMediaHeight cap */
+  --info-h: 175px;             /* Tinycast Information block        */
+  --hairline: rgba(255,255,255,.08);
+  --ui-scale: 1;               /* optional 1 / 1.1 / 1.2 multiplier */
   --bg0: #0C0D10;
   --surface: #101114;
   --elev: #15161B;
@@ -543,7 +554,8 @@ input, textarea, select, button {
 /* F5 Content Layer & Micro-Animations:
    - overlay show: instant unhide behind DWM cloak gate (zero scale animation)
    - overlay hide: opacity and scale down on hiding
-   - preview content-in: translateX(8px)->0 + opacity (100ms, 20ms delay) */
+   - unified split frame: selection swaps content instantly inside the
+     permanent preview pane (no pane animation — this kills the jank) */
 #content,
 .overlay-content {
   flex: 1;
@@ -566,6 +578,18 @@ html.wm-hiding .overlay-content {
   transform: scale(0.985) !important;
   transition: opacity 90ms cubic-bezier(0.16, 1, 0.3, 1),
               transform 90ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+/* Reduced cover-layer animation (html[data-anim="soft"], applied by the
+   overlay from settings.overlay_animation; reversible at runtime via the
+   set_overlay_animation command with mode "full"). The cover layer skips
+   the extra zoom-out and fades shorter — closer to the main window's plain
+   fade. Flash-safety is untouched: cloak gate, paint gate, mask classes and
+   Tab-preview timings live elsewhere and are not referenced here. */
+html[data-anim="soft"].wm-hiding #content,
+html[data-anim="soft"].wm-hiding .overlay-content {
+  transform: none !important;
+  transition: opacity 60ms linear !important;
 }
 
 #content.content-fading-out,
@@ -2565,25 +2589,31 @@ section:last-child {
 }
 
 /* ═══════════ OVERLAY: SPLIT LIST + PREVIEW PANE ═══════════ */
-/* The list must NOT grow when the preview collapses — that causes row text
-   to reflow ("text moves inside and comes out"). flex-shrink:0 + flex-grow:0
-   pins the list at its natural width; the preview pane absorbs all change. */
+/* Unified split frame: the list is pinned at 55% — it never grows, so row
+   text can never reflow ("text moves inside and comes out"). There is no
+   collapsed state; the preview pane is permanent. */
 .overlay-list {
-  /* Keep the list fraction fixed while the preview is present; the compact
-     geometry itself is restored by the single native snap behind the mask. */
-  flex: 0 0 auto;
-  width: 40.5%;
+  flex: 0 0 55%;
+  width: 55%;
   min-width: 0;
   contain: layout;
 }
 
-.overlay.no-preview .overlay-list {
-  width: 100%;
+/* Overlay density (scoped: .row is shared with the main window): single-line
+   labels with ellipsis, 32px thumbnails, 44px rows, date-group headers. */
+.overlay-list .row {
+  min-height: var(--row-h);
 }
 
-/* When preview is hidden, the list takes full width */
-.no-preview .overlay-list {
-  width: 100%;
+.overlay-list .row-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.overlay-list .type-icon {
+  width: var(--thumb);
+  height: var(--thumb);
 }
 
 .overlay-body {
@@ -2592,11 +2622,14 @@ section:last-child {
   min-height: 0;
 }
 
-/* F4 PREVIEW DRAWER: preview pane smoothly fades and slides into place;
-   when collapsed, width is 0 and list fills the compact window with zero reflow glitch. */
+/* UNIFIED SPLIT FRAME: the preview pane is permanent (right 45%, always
+   mounted). No collapse state, no veil/mask classes, no pane animation —
+   selection swaps content instantly inside the stable frame (this is what
+   kills the jank). Media is capped at --media-cap (260px, scale-to-fit);
+   the Information block is fixed at --info-h (175px) with its own scroll. */
 .overlay-preview {
-  flex: 0 0 auto;
-  width: 0;
+  flex: 0 0 45%;
+  width: 45%;
   min-width: 0;
   position: relative;
   display: flex;
@@ -2604,21 +2637,10 @@ section:last-child {
   background: var(--glass-preview);
   border-left: none;
   overflow: hidden;
-  opacity: 0;
-  transform: translateX(6px);
-  /* No pane-level fade/slide: unveiling snaps the pane while the children
-     fade once via the `> *` rules below. A pane slide stacked on the child
-     fade read as muddy/janky expansion; a single content fade is smooth. */
-  transition: none;
-}
-
-.overlay-preview:not(.collapsed) {
-  width: 59.5%;
   opacity: 1;
-  transform: translateX(0);
 }
 
-/* Divider hairline */
+/* Divider hairline — always on: the frame never changes. */
 .overlay-preview::before {
   content: "";
   position: absolute;
@@ -2627,55 +2649,58 @@ section:last-child {
   bottom: 0;
   width: 1px;
   background: var(--glass-hairline);
-  opacity: 0;
+  opacity: 1;
   pointer-events: none;
   z-index: 1;
 }
 
-.overlay-preview:not(.collapsed)::before {
-  opacity: 1;
+/* Media area: images scale-to-fit, text scrolls, never taller than the cap. */
+.overlay-preview .preview-media {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: var(--media-cap);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
-.overlay-preview > * {
-  opacity: 0;
-  transform: translateX(6px);
-  transition: opacity 100ms cubic-bezier(0.16, 1, 0.3, 1), transform 100ms cubic-bezier(0.16, 1, 0.3, 1);
+.overlay-preview .preview-media img {
+  max-width: 100%;
+  max-height: var(--media-cap);
+  object-fit: contain;
 }
 
-.overlay-preview:not(.collapsed) > * {
-  opacity: 1;
-  transform: translateX(0);
+/* Information block: fixed height, own scroll — Source / Type /
+   Dimensions / Size / Copied live here. */
+.overlay-preview .preview-info {
+  flex: 0 0 auto;
+  height: var(--info-h);
+  overflow-y: auto;
+  border-top: 1px solid var(--glass-hairline);
 }
 
-/* Must come after the :not(.collapsed) rules (equal specificity) so a
-   collapsed pane always lands at width 0. */
-.overlay-preview.collapsed {
-  width: 0 !important;
-  opacity: 0 !important;
-  transform: translateX(6px) !important;
-  pointer-events: none;
+/* Permanent-pane empty state: keeps the frame stable when nothing is
+   selected instead of unmounting the pane. */
+.overlay-preview-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+  text-align: center;
 }
 
-.overlay-preview.preview-out {
-  opacity: 0 !important;
-  transform: translateX(6px) !important;
-  transition: opacity 60ms linear, transform 60ms linear !important;
+.overlay-preview-empty .big {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
 }
 
-.overlay-preview.snap-veil {
-  opacity: 0 !important;
-  transition: none !important;
-  pointer-events: none !important;
-}
-
-/* Synchronous kids-veil: applied to #content in the SAME task the pane veil
-   lifts, hiding preview children instantly (transition none) so the
-   React-async #content fade can never expose a 1-frame full-content pop
-   (flash). Removed on the next frame; children then fade back via their own
-   `.overlay-preview > *` rules. Cleaned up defensively at idle/finalize. */
-#content.kids-veil .overlay-preview > * {
-  opacity: 0 !important;
-  transition: none !important;
+.overlay-preview-empty .sub {
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 /* Async media (images/video decode after layout) must never pop white while
@@ -5213,17 +5238,13 @@ section:last-child {
   .preview.open::before,
   .preview .preview-inner,
   .overlay-preview,
-  .overlay-preview:not(.collapsed),
-  .overlay-preview::before,
-  .overlay-preview:not(.collapsed)::before,
-  .overlay-preview > * {
+  .overlay-preview::before {
     transition: none !important;
     animation: none !important;
   }
 
   .preview .preview-inner,
-  .overlay-preview,
-  .overlay-preview > * {
+  .overlay-preview {
     transform: none !important;
   }
 }
@@ -6295,10 +6316,8 @@ html[data-material="solid"] .sn-content-preview {
   color: var(--accent-text);
 }
 
-/* Hidden pane gets display:none so the visible one takes full space.
-   NOTE: the preview pane (.overlay-preview.collapsed) deliberately does NOT
-   use this — it must stay mounted with width:0 so the width transition can
-   animate (display:none would kill the transition and flash on Tab toggle). */
+/* Hidden tab panes get display:none so the visible one takes full space.
+   (The overlay preview pane is permanent and never uses this.) */
 .inactive-tab {
   display: none !important;
 }
