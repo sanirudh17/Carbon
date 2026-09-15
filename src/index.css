@@ -2955,6 +2955,15 @@ section:last-child {
 .rich-doc-light code { background: #f3f4f6; border-color: #e5e7eb; color: #111827; }
 .rich-doc-light pre { background: #f9fafb; border-color: #e5e7eb; color: #111827; }
 .rich-doc-light blockquote { border-left-color: #d1d5db; color: #4b5563; }
+/* Dark-source card: captures from black websites keep light ink on a dark
+   surface in BOTH app themes (the white card would erase them). All pairs
+   clear AA: body ~14:1, links ~7:1, quotes ~7:1. */
+.rich-doc-dark { color: #e8eaed; }
+.rich-doc-dark :is(h1, h2, h3, h4, h5, h6, p, li, td, th, div, span) { color: inherit; }
+.rich-doc-dark a { color: #8ab4f8; }
+.rich-doc-dark code { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.14); color: #e8eaed; }
+.rich-doc-dark pre { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.12); color: #e8eaed; }
+.rich-doc-dark blockquote { border-left-color: rgba(255,255,255,0.2); color: #9aa0a6; }
 .rich-doc > *:first-child { margin-top: 0; }
 .rich-img-placeholder {
   padding: 14px 16px;

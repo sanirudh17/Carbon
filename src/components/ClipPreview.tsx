@@ -98,6 +98,78 @@ function extractFragment(html: string): string {
   return cleanStr;
 }
 
+// ── Source-theme detection (dark pages) ────────────────────────────────
+// The preview wraps rich captures in a forced-white card so light-assuming
+// page HTML stays readable on the dark app surface. That breaks captures
+// from DARK sites: their light text (often with no explicit background —
+// the black came from the stripped <body>) turns invisible on white.
+// Detect a dark source from page-level signals (meta color-scheme, body
+// bgcolor/text attrs, html/body inline background, data-theme) and render
+// those on a dark card instead. Anything ambiguous stays on white (status
+// quo ante). Pure helper — no DOM side effects.
+function cssColorLuminance(color: string): number | null {
+  const c = color.trim().toLowerCase();
+  const named: Record<string, string> = {
+    black: '#000000', white: '#ffffff', dimgray: '#696969', gray: '#808080',
+    darkgray: '#a9a9a9', lightgray: '#d3d3d3', gainsboro: '#dcdcdc', red: '#ff0000',
+  };
+  let r = -1, g = -1, b = -1;
+  const hex = named[c] || (/^#[0-9a-f]{3,8}$/.test(c) ? c : null);
+  if (hex) {
+    let h = hex.slice(1);
+    if (h.length === 3 || h.length === 4) h = h.slice(0, 3).split('').map((x) => x + x).join('');
+    if (h.length >= 6) {
+      r = parseInt(h.slice(0, 2), 16); g = parseInt(h.slice(2, 4), 16); b = parseInt(h.slice(4, 6), 16);
+    }
+  } else {
+    const m = c.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/);
+    if (m) { r = Number(m[1]); g = Number(m[2]); b = Number(m[3]); }
+  }
+  if (r < 0 || g < 0 || b < 0 || r > 255 || g > 255 || b > 255) return null;
+  const f = (v: number) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+}
+
+function detectSourceTheme(html: string): 'dark' | 'light' {
+  try {
+    const doc = new DOMParser().parseFromString((html || '').replace(/\0/g, ''), 'text/html');
+    const htmlEl = doc.documentElement;
+    const body = doc.body;
+    const isDark = (c: string) => { const l = cssColorLuminance(c); return l !== null && l < 0.35; };
+    const isLight = (c: string) => { const l = cssColorLuminance(c); return l !== null && l > 0.65; };
+    // <meta name="color-scheme" content="dark"> — strongest signal.
+    const meta = doc.querySelector('meta[name="color-scheme"]');
+    const metaContent = (meta?.getAttribute('content') || '').toLowerCase();
+    if (metaContent.includes('dark')) return 'dark';
+    if (metaContent.includes('light')) return 'light';
+    // Legacy body bgcolor/text attributes.
+    const bgAttr = body?.getAttribute('bgcolor') || '';
+    if (bgAttr && isDark(bgAttr)) return 'dark';
+    // Inline backgrounds / color-scheme on <html> / <body>.
+    for (const el of [htmlEl, body]) {
+      const st = (el?.getAttribute('style') || '').toLowerCase();
+      const bgm = st.match(/background(?:-color)?\s*:\s*([^;}]+)/);
+      if (bgm && isDark(bgm[1].trim())) return 'dark';
+      if (bgm && isLight(bgm[1].trim())) return 'light';
+      if (/color-scheme\s*:\s*[^;}]*dark/.test(st)) return 'dark';
+    }
+    // Explicit theme markers.
+    const themed = htmlEl?.getAttribute('data-theme') || body?.getAttribute('data-theme') || '';
+    if (themed.toLowerCase() === 'dark') return 'dark';
+    if (themed.toLowerCase() === 'light') return 'light';
+    const cls = `${htmlEl?.getAttribute('class') || ''} ${body?.getAttribute('class') || ''}`.toLowerCase();
+    if (/\bdark\b/.test(cls) && !/\blight\b/.test(cls)) return 'dark';
+    // Light default text with no dark background signals anywhere implies
+    // the page itself was dark (its body backdrop was stripped with it).
+    const textAttr = body?.getAttribute('text') || '';
+    if (textAttr && isLight(textAttr)) return 'dark';
+  } catch { /* fall through to light */ }
+  return 'light';
+}
+
 function sanitizeRichHtml(html: string): string {
   try {
     const doc = new DOMParser().parseFromString(extractFragment(html), 'text/html');
@@ -750,6 +822,13 @@ export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ 
     [item.html_content]
   );
 
+  // Dark-source pages render on a dark card (their light text would vanish
+  // on the forced-white card); everything else keeps the white card.
+  const sourceTheme = useMemo(
+    () => (item.html_content ? detectSourceTheme(item.html_content) : 'light'),
+    [item.html_content]
+  );
+
   // Sensitive data masking check
   if (item.is_sensitive && !revealed) {
     return (
@@ -833,7 +912,12 @@ export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ 
       // source app. Plain Notepad stays dark because it is `text`, not
       // `rich_text`.
       if (item.content_type === 'rich_text' && sanitizedHtml) {
-        const richHtml = <div className="rich-doc rich-doc-light" dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />;
+        const richHtml =
+          sourceTheme === 'dark' ? (
+            <div className="rich-doc rich-doc-dark" dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />
+          ) : (
+            <div className="rich-doc rich-doc-light" dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />
+          );
         // If this rich capture also has a DIB fallback image (because its
         // HTML contained <img> with blob: or auth-gated https:), show that
         // captured image below the HTML so the images from sites like
@@ -845,15 +929,26 @@ export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ 
         ) : null;
         return (
           <div
-            style={{
-              background: '#ffffff',
-              color: '#1f2937',
-              padding: '14px 16px',
-              borderRadius: '8px',
-              border: '1px solid #e5e7eb',
-              overflow: 'hidden',
-              backgroundClip: 'padding-box',
-            }}
+            style={
+              sourceTheme === 'dark'
+                ? {
+                    background: '#14161a',
+                    padding: '14px 16px',
+                    borderRadius: '8px',
+                    border: '1px solid #2a2e35',
+                    overflow: 'hidden',
+                    backgroundClip: 'padding-box',
+                  }
+                : {
+                    background: '#ffffff',
+                    color: '#1f2937',
+                    padding: '14px 16px',
+                    borderRadius: '8px',
+                    border: '1px solid #e5e7eb',
+                    overflow: 'hidden',
+                    backgroundClip: 'padding-box',
+                  }
+            }
           >
             {richHtml}
             {fallback}

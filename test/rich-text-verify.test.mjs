@@ -95,6 +95,30 @@ test('RichText VERIFY - paste restores formatting (CF_HTML + text fallback)', ()
   );
 });
 
+test('RichText VERIFY - dark sources render on a dark card (black sites)', () => {
+  const tsx = fs.readFileSync(path.join(SRC_DIR, 'components', 'ClipPreview.tsx'), 'utf8');
+  // Detection must read page-level dark signals (body is stripped later).
+  assert.ok(tsx.includes('function detectSourceTheme'), 'source-theme detector must exist');
+  for (const signal of ['bgcolor', 'color-scheme', 'data-theme']) {
+    assert.ok(tsx.includes(signal), `detector must read ${signal}`);
+  }
+  // Dark branch must use the dark card, never the white one.
+  assert.ok(tsx.includes('rich-doc-dark'), 'dark sources must render with the dark card');
+  assert.ok(tsx.includes("background: '#14161a'"), 'dark card surface must be dark in both themes');
+
+  const css = fs.readFileSync(path.join(SRC_DIR, 'index.css'), 'utf8');
+  const pairs = [
+    ['dark body ink', '#e8eaed', '#14161a'],
+    ['dark link', '#8ab4f8', '#14161a'],
+    ['dark blockquote', '#9aa0a6', '#14161a'],
+  ];
+  for (const [label, fg, bg] of pairs) {
+    assert.ok(css.includes(fg), `CSS must define ${label} ${fg}`);
+    const ratio = contrast(fg, bg);
+    assert.ok(ratio >= 4.5, `${label} contrast ${ratio.toFixed(1)}:1 must clear AA (4.5:1)`);
+  }
+});
+
 test('RichText VERIFY - capture stores HTML for fidelity', () => {
   const watcherRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'clipboard_watcher.rs'), 'utf8');
   assert.ok(
