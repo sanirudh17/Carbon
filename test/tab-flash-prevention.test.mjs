@@ -319,8 +319,8 @@ test('Unified Frame - fixed 750x475 geometry owned by the window', () => {
   for (const token of ['--overlay-w: 750px', '--overlay-h: 475px', '--media-cap: 260px', '--info-h: 175px']) {
     assert.ok(css.includes(token), `CSS must define the ${token} token`);
   }
-  assert.ok(css.includes('flex: 0 0 55%;'), 'list column must be pinned at 55%');
-  assert.ok(css.includes('flex: 0 0 45%;'), 'preview column must be pinned at 45%');
+  assert.ok(css.includes('flex: 0 0 52%;'), 'list column must be pinned at 52%');
+  assert.ok(css.includes('flex: 0 0 48%;'), 'preview column must be pinned at 48%');
 });
 
 test('Unified Frame - permanent preview pane with media cap and info block', () => {
@@ -344,6 +344,12 @@ test('Unified Frame - permanent preview pane with media cap and info block', () 
   assert.ok(
     css.includes('.overlay-preview-empty'),
     'permanent-pane empty state must exist'
+  );
+  // Compact overlay media box: no tall voids around small images, and the
+  // box stays inside the 260px cap (library sizing untouched — overlay scope).
+  assert.ok(
+    css.includes('.overlay-preview .preview-image-simple'),
+    'overlay must hug images instead of min-height voids'
   );
   // No collapse machinery: the pane can never reach width 0.
   assert.doesNotMatch(css, /\.overlay-preview\.collapsed/, 'collapsed pane rule must be gone');

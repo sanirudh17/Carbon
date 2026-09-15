@@ -11,8 +11,10 @@ toggle (compact 680×440 ↔ expanded 1020×560) is fully removed — no boolean
 no conditional rendering, no expand/collapse animation, no compatibility flag.
 
 - Top: filter input ("Type to filter entries…").
-- Left (55%): scrollable, date-grouped capture list (thumbnail + one-line label).
-- Right (45%): permanent preview — media area above the Information block.
+- Left (52%): scrollable, date-grouped capture list (thumbnail + one-line label).
+- Right (48%): permanent preview — media area above the Information block.
+  (Widened from 55/45: the 45% pane cramped preview text. The media box hugs
+  its content inside the 260px cap instead of a 200px min-height void.)
 - Footer: Paste + `Enter` keycap, Actions + `Ctrl+K` keycap, Close + `Esc`.
 - Selection contract: row click and `ArrowUp/ArrowDown` set the single
   `selectedIndex`; the right pane re-renders from it. First entry is
