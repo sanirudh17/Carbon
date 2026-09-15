@@ -1251,7 +1251,7 @@ pub fn run() {
                     let handle = handle.clone();
                     std::thread::spawn(move || {
                         // Small buffer so the first layout/paint has settled.
-                        std::thread::sleep(std::time::Duration::from_millis(350));
+                        std::thread::sleep(std::time::Duration::from_millis(100));
                         vibrancy::prewarm_first_paint(&handle);
                         hotkey::recloak_window(&handle, "overlay");
                         hotkey::recloak_window(&handle, "main");
@@ -1324,6 +1324,8 @@ pub fn run() {
                     if !hotkey::is_overlay_hiding() && window.is_visible().unwrap_or(false) {
                         if hotkey::get_overlay_phase() == hotkey::OverlayPhase::Showing {
                             paste::log_diag("[WINDOW_EVENT] Overlay lost focus while Showing — ignoring transient blur during show.");
+                        } else if native_drag::is_native_drag_active() {
+                            paste::log_diag("[WINDOW_EVENT] Overlay lost focus during native OLE drag — suppressing hide to prevent crash.");
                         } else {
                             paste::log_diag("[WINDOW_EVENT] Overlay lost focus while visible. Calling hide_overlay_window...");
                             hotkey::hide_overlay_window(&window.app_handle());

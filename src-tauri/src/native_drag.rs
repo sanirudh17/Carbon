@@ -58,6 +58,18 @@ use windows::{
 
 use crate::{paste::log_diag, AppState};
 
+use std::sync::atomic::AtomicBool;
+
+/// True while a native OLE drag is in progress. Checked by the overlay's
+/// focus-loss handler to suppress auto-hide — without this, DoDragDrop
+/// captures the mouse, the overlay loses focus, hide_overlay_window fires,
+/// and the window disappears from under the drag (crash / flash).
+static NATIVE_DRAG_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+pub fn is_native_drag_active() -> bool {
+    NATIVE_DRAG_ACTIVE.load(Ordering::SeqCst)
+}
+
 // Win32 clipboard format ids (constant across sessions).
 const CF_TEXT: u32 = 1;
 const CF_DIB: u32 = 8;
@@ -1041,6 +1053,7 @@ pub fn begin_clip_drag(state: &State<'_, AppState>, id: String) -> std::result::
         offers.len()
     ));
 
+    NATIVE_DRAG_ACTIVE.store(true, Ordering::SeqCst);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let outcome: windows::core::Result<String> = (|| unsafe {
@@ -1078,7 +1091,9 @@ pub fn begin_clip_drag(state: &State<'_, AppState>, id: String) -> std::result::
         let _ = tx.send(outcome);
     });
 
-    match rx.recv() {
+    let result = rx.recv();
+    NATIVE_DRAG_ACTIVE.store(false, Ordering::SeqCst);
+    match result {
         Ok(Ok(effect)) => {
             if effect != "copy" {
                 log_diag(&format!(

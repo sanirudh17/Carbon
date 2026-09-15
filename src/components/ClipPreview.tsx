@@ -604,12 +604,13 @@ export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ 
             style={
               sourceTheme === 'dark'
                 ? {
+                    // Edge-to-edge: negative margins cancel the parent's
+                    // padding so the dark surface fills the full preview
+                    // pane without glass bleed-through at the corners.
                     background: '#14161a',
                     padding: '14px 16px',
-                    borderRadius: '8px',
-                    border: '1px solid #2a2e35',
+                    margin: '-10px -12px',
                     overflow: 'hidden',
-                    backgroundClip: 'padding-box',
                   }
                 : {
                     background: '#ffffff',

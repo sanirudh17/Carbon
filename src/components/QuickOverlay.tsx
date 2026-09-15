@@ -577,12 +577,10 @@ export const QuickOverlay: React.FC = () => {
   };
 
   const focusSearchInput = () => {
-    setTimeout(() => {
-      const input =
-        tabRef.current === 'snippets' ? snSearchInputRef.current : searchInputRef.current;
-      input?.focus();
-      input?.select();
-    }, 40);
+    const input =
+      tabRef.current === 'snippets' ? snSearchInputRef.current : searchInputRef.current;
+    input?.focus();
+    input?.select();
   };
 
   // Empty search bar + Left/Right toggles focus between the two tabs'
@@ -838,6 +836,7 @@ export const QuickOverlay: React.FC = () => {
 
       executeWindowShow('overlay', () => {
         overlayPhaseRef.current = 'shown';
+        focusSearchInput();
         // Post-reveal refresh, deferred off the paint gate: Rust already
         // pushed overlay-data + overlay-snippets with the open, so the first
         // frame paints instantly with zero invoke round-trips — matching the
@@ -850,11 +849,8 @@ export const QuickOverlay: React.FC = () => {
         invoke<AppSettings>('get_settings')
           .then((s) => {
             if (s) applyOverlaySettings(s);
-            focusSearchInput();
           })
-          .catch(() => {
-            focusSearchInput();
-          });
+          .catch(() => {});
       }, 0, token);
 
       lastHideAtRef.current = performance.now();

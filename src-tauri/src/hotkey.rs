@@ -858,8 +858,7 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     // any hide-request older than this show (out-of-order delivery under
     // hotkey spam can otherwise run a stale fade after the open).
     let show_hide_gen = OVERLAY_HIDE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
-    // Capture selected text while target is still focused. UIA is instant; clipboard
-    // fallback (Ctrl+C + 120ms) is rare and only runs when UIA has no selection.
+    // Capture selected text while target is still focused (instant UIA-only query).
     crate::paste::capture_selection_snapshot();
     CURRENT_CYCLE_INDEX.store(0, Ordering::Relaxed);
 

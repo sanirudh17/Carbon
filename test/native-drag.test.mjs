@@ -94,3 +94,19 @@ test('v28-B - frontend gesture routing and hygiene (B4)', () => {
   const css = fs.readFileSync(path.join(SRC_DIR, 'index.css'), 'utf8');
   assert.ok(css.includes('html.native-dragging'), 'suppression CSS must exist');
 });
+
+test('v28-B - native drag suppresses overlay auto-hide on blur to prevent crash', () => {
+  const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'native_drag.rs'), 'utf8');
+  assert.ok(rs.includes('is_native_drag_active'), 'must expose is_native_drag_active');
+  assert.ok(rs.includes('NATIVE_DRAG_ACTIVE'), 'must track active drag state');
+
+  const libRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'lib.rs'), 'utf8');
+  assert.ok(
+    libRs.includes('native_drag::is_native_drag_active()'),
+    'focus-loss handler must check native_drag::is_native_drag_active'
+  );
+  assert.ok(
+    libRs.includes('suppressing hide to prevent crash'),
+    'focus-loss handler must log suppression rationale'
+  );
+});

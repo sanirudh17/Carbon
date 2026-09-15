@@ -336,7 +336,7 @@ pub fn prewarm_first_paint(app: &AppHandle) {
             unsafe {
                 let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
             }
-            std::thread::sleep(Duration::from_millis(250));
+            std::thread::sleep(Duration::from_millis(80));
             unsafe {
                 let _ = ShowWindow(h, SW_HIDE);
             }
