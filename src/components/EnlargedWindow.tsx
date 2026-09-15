@@ -2163,6 +2163,11 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
           </div>
         ) : selectedItem ? (
           <div className="preview-inner">
+            {/* Media types get the full pane: no kind/seg/action header, so
+                the image uses the freed space. Those actions stay on the
+                keyboard (Enter paste, Del delete, Ctrl+C copy, Shift+Enter
+                queue, Ctrl+Shift+T OCR). Text keeps the head. */}
+            {!['image', 'file'].includes(selectedItem.content_type) && (
             <div className="preview-head">
               <span className="preview-kind" style={{ color: activeTint }}>
                 {getTypeIcon(selectedItem.content_type)}
@@ -2244,6 +2249,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                 </button>
               </div>
             </div>
+            )}
 
             <div className="preview-body">
               {/* Image Preview */}

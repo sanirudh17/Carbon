@@ -394,6 +394,30 @@ test('Unified Frame - permanent preview pane with media cap and info block', () 
   );
 });
 
+test('Unified Frame - media types skip the preview header for image space', () => {
+  // Overlay: image/file render no kind/seg header so the image uses the
+  // freed space; text keeps the head (Render/Raw toggle lives there).
+  const qo = fs.readFileSync(path.join(ROOT_DIR, 'src', 'components', 'QuickOverlay.tsx'), 'utf8');
+  assert.ok(
+    qo.includes('Media types get the full pane'),
+    'overlay must gate the preview head on media type'
+  );
+  assert.ok(
+    qo.includes('<div className="overlay-preview-head">'),
+    'overlay must keep the head for text'
+  );
+  // Main window: same rule — actions stay keyboard-accessible.
+  const enlarged = fs.readFileSync(path.join(ROOT_DIR, 'src', 'components', 'EnlargedWindow.tsx'), 'utf8');
+  assert.ok(
+    enlarged.includes('Media types get the full pane'),
+    'main preview must gate the head on media type'
+  );
+  assert.ok(
+    enlarged.includes('<div className="preview-head">'),
+    'main preview must keep the head for text'
+  );
+});
+
 test('Unified Frame - selection contract without layout mutation', () => {
   const qo = fs.readFileSync(path.join(ROOT_DIR, 'src', 'components', 'QuickOverlay.tsx'), 'utf8');
   // Arrow keys drive the single selectedEntry source of truth.

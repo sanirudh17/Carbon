@@ -1848,6 +1848,10 @@ export const QuickOverlay: React.FC = () => {
 
                 return (
                   <>
+                    {/* Media types get the full pane: no kind/seg header, so
+                        the image uses the freed space. Text keeps the head
+                        (Render/Raw toggle lives there). */}
+                    {(selectedItem.content_type !== 'image' && selectedItem.content_type !== 'file') && (
                     <div className="overlay-preview-head">
                       <span
                         className="preview-kind"
@@ -1856,7 +1860,7 @@ export const QuickOverlay: React.FC = () => {
                         {getTypeIcon(selectedItem.content_type)}
                         {getSpecificTypeLabel(selectedItem)}
                       </span>
-                      {selectedItem.content_type !== 'image' && selectedItem.content_type !== 'file' && hasRenderedVersion && (
+                      {hasRenderedVersion && (
                         <div className="seg" style={{ marginLeft: 'auto' }}>
                           <button
                             className={`seg-btn ${renderMode ? 'active' : ''}`}
@@ -1873,6 +1877,7 @@ export const QuickOverlay: React.FC = () => {
                         </div>
                       )}
                     </div>
+                    )}
                     <div className="overlay-preview-content ov-preview-media">
                       {selectedItem.content_type === 'image' || selectedItem.content_type === 'file' ? (
                         <div
