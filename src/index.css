@@ -2679,11 +2679,14 @@ section:last-child {
   object-fit: contain;
 }
 
-/* Information block: fixed height, own scroll — Source / Type /
-   Dimensions / Size / Copied live here. */
+/* Information block: hugs its content (no internal gaps) up to the 175px
+   cap, then scrolls — Source / Type / Dimensions / Size / Copied live
+   here. It stays bottom-anchored because the media above flex-grows to
+   absorb all remaining space. */
 .overlay-preview .ov-preview-info {
   flex: 0 0 auto;
-  height: var(--info-h);
+  height: auto;
+  max-height: var(--info-h);
   overflow-y: auto;
   border-top: 1px solid var(--glass-hairline);
 }

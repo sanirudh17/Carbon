@@ -355,8 +355,13 @@ test('Unified Frame - permanent preview pane with media cap and info block', () 
     'Information block must exist'
   );
   assert.ok(
-    css.includes('height: var(--info-h);'),
-    'Information block must be fixed at 175px'
+    css.includes('max-height: var(--info-h);'),
+    'Information block must cap at 175px and hug content below that (no gaps)'
+  );
+  assert.doesNotMatch(
+    css,
+    /\.overlay-preview \.ov-preview-info \{[\s\S]*?height: var\(--info-h\);/,
+    'Information block must not force a fixed height'
   );
   assert.ok(
     css.includes('.overlay-preview-empty'),

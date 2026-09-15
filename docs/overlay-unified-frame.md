@@ -15,9 +15,8 @@ no conditional rendering, no expand/collapse animation, no compatibility flag.
 - Right (60%): permanent preview — media area above the Information block.
   (Tinycast-like: the preview is deliberately larger than the capture list.
   The media box hugs its content inside the 260px cap instead of a 200px
-  min-height void; overlay wrappers are `ov-` namespaced so the library's
-  centered `.preview-media` can never shrink overlay text into a centered
-  box.)
+  min-height void; the info block hugs its rows up to the 175px cap with no
+  internal gaps, and stays bottom-anchored via the growing media area.)
 - Footer: Paste + `Enter` keycap, Actions + `Ctrl+K` keycap, Close + `Esc`.
 - Selection contract: row click and `ArrowUp/ArrowDown` set the single
   `selectedIndex`; the right pane re-renders from it. First entry is
