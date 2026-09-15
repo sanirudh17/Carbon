@@ -319,22 +319,33 @@ test('Unified Frame - fixed 750x475 geometry owned by the window', () => {
   for (const token of ['--overlay-w: 750px', '--overlay-h: 475px', '--media-cap: 260px', '--info-h: 175px']) {
     assert.ok(css.includes(token), `CSS must define the ${token} token`);
   }
-  assert.ok(css.includes('flex: 0 0 52%;'), 'list column must be pinned at 52%');
-  assert.ok(css.includes('flex: 0 0 48%;'), 'preview column must be pinned at 48%');
+  assert.ok(css.includes('flex: 0 0 40%;'), 'list column must be pinned at 40%');
+  assert.ok(css.includes('flex: 0 0 60%;'), 'preview column must be pinned at 60% (larger than the list)');
 });
 
 test('Unified Frame - permanent preview pane with media cap and info block', () => {
   const css = fs.readFileSync(path.join(ROOT_DIR, 'src', 'index.css'), 'utf8');
+  // Namespaced wrappers: bare .preview-media belongs to the library image
+  // wrapper (centered column) and must never match the overlay structure —
+  // that collision shrank overlay text into a small centered box.
   assert.ok(
-    css.includes('.overlay-preview .preview-media'),
-    'preview media area must exist'
+    css.includes('.overlay-preview .ov-preview-media'),
+    'overlay media wrapper must be namespaced'
+  );
+  assert.ok(
+    css.includes('.overlay-preview .ov-preview-info'),
+    'overlay info wrapper must be namespaced'
+  );
+  assert.ok(
+    css.includes('align-items: stretch;'),
+    'overlay media must stretch edge-to-edge'
   );
   assert.ok(
     css.includes('max-height: var(--media-cap);'),
     'media area must be capped at 260px'
   );
   assert.ok(
-    css.includes('.overlay-preview .preview-info'),
+    css.includes('.overlay-preview .ov-preview-info'),
     'Information block must exist'
   );
   assert.ok(

@@ -1812,7 +1812,7 @@ export const QuickOverlay: React.FC = () => {
                       {snSelected.keyword && <span className="sn-keyword-badge">{snSelected.keyword}</span>}
                     </span>
                   </div>
-                  <div className="overlay-preview-content preview-media">
+                  <div className="overlay-preview-content ov-preview-media">
                     <div className="sn-content-preview sn-overlay-content">
                       {snHighlighted.map((seg, i) =>
                         seg.cls === 'plain' ? (
@@ -1824,7 +1824,7 @@ export const QuickOverlay: React.FC = () => {
                       {snSelected.content.length === 0 && <span className="sn-content-empty">Empty snippet — add content in the full window.</span>}
                     </div>
                   </div>
-                  <div className="sn-overlay-meta preview-info">
+                  <div className="sn-overlay-meta ov-preview-info">
                     {(snSelected.tags || []).length > 0 && (
                       <div className="sn-detail-tags">
                         {(snSelected.tags || []).map((t) => (
@@ -1873,7 +1873,7 @@ export const QuickOverlay: React.FC = () => {
                         </div>
                       )}
                     </div>
-                    <div className="overlay-preview-content preview-media">
+                    <div className="overlay-preview-content ov-preview-media">
                       {selectedItem.content_type === 'image' || selectedItem.content_type === 'file' ? (
                         <div
                           draggable
@@ -1905,7 +1905,7 @@ export const QuickOverlay: React.FC = () => {
                         </div>
                       )}
                     </div>
-                    <div className="preview-info">
+                    <div className="ov-preview-info">
                       <ClipMetaStrip item={selectedItem} onFilterByApp={(app) => setSourceAppFilter(app)} />
                     </div>
                   </>

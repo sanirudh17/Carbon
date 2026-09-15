@@ -11,10 +11,13 @@ toggle (compact 680×440 ↔ expanded 1020×560) is fully removed — no boolean
 no conditional rendering, no expand/collapse animation, no compatibility flag.
 
 - Top: filter input ("Type to filter entries…").
-- Left (52%): scrollable, date-grouped capture list (thumbnail + one-line label).
-- Right (48%): permanent preview — media area above the Information block.
-  (Widened from 55/45: the 45% pane cramped preview text. The media box hugs
-  its content inside the 260px cap instead of a 200px min-height void.)
+- Left (40%): scrollable, date-grouped capture list (thumbnail + one-line label).
+- Right (60%): permanent preview — media area above the Information block.
+  (Tinycast-like: the preview is deliberately larger than the capture list.
+  The media box hugs its content inside the 260px cap instead of a 200px
+  min-height void; overlay wrappers are `ov-` namespaced so the library's
+  centered `.preview-media` can never shrink overlay text into a centered
+  box.)
 - Footer: Paste + `Enter` keycap, Actions + `Ctrl+K` keycap, Close + `Esc`.
 - Selection contract: row click and `ArrowUp/ArrowDown` set the single
   `selectedIndex`; the right pane re-renders from it. First entry is

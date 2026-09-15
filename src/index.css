@@ -2593,8 +2593,8 @@ section:last-child {
    text can never reflow ("text moves inside and comes out"). There is no
    collapsed state; the preview pane is permanent. */
 .overlay-list {
-  flex: 0 0 52%;
-  width: 52%;
+  flex: 0 0 40%;
+  width: 40%;
   min-width: 0;
   contain: layout;
 }
@@ -2628,8 +2628,8 @@ section:last-child {
    kills the jank). Media is capped at --media-cap (260px, scale-to-fit);
    the Information block is fixed at --info-h (175px) with its own scroll. */
 .overlay-preview {
-  flex: 0 0 48%;
-  width: 48%;
+  flex: 0 0 60%;
+  width: 60%;
   min-width: 0;
   position: relative;
   display: flex;
@@ -2655,16 +2655,21 @@ section:last-child {
 }
 
 /* Media area: images scale-to-fit, text scrolls, never taller than the cap. */
-.overlay-preview .preview-media {
+/* Media area: images scale-to-fit, text scrolls, never taller than the cap.
+   Namespaced (ov-*) on purpose: the bare .preview-media class belongs to
+   the library image wrapper (centered column) and must never match here —
+   that collision shrank overlay text into a small centered box. */
+.overlay-preview .ov-preview-media {
   flex: 0 1 auto;
   min-height: 0;
   max-height: var(--media-cap);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  align-items: stretch;
 }
 
-.overlay-preview .preview-media img {
+.overlay-preview .ov-preview-media img {
   max-width: 100%;
   max-height: var(--media-cap);
   object-fit: contain;
@@ -2672,7 +2677,7 @@ section:last-child {
 
 /* Information block: fixed height, own scroll — Source / Type /
    Dimensions / Size / Copied live here. */
-.overlay-preview .preview-info {
+.overlay-preview .ov-preview-info {
   flex: 0 0 auto;
   height: var(--info-h);
   overflow-y: auto;
