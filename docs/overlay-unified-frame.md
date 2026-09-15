@@ -84,3 +84,12 @@ Async media keeps the dark placeholder (`rgba(10,10,12,.35)`) — never white.
   `Unified Frame` static tests pin zero toggle surface, the 750×475 chain,
   the permanent pane, and the selection contract. Historical driver docs under
   `docs/diagnostics/` are kept as the record of the removed behavior.
+
+## Screenshots (this directory)
+
+- `shot-overlay-before-compact.png` — old compact frame (680×440, list only,
+  `Tab / Show Preview` footer hint).
+- `shot-overlay-before-expanded.png` — old Tab-expanded frame (1020×560).
+- `shot-overlay-after.png` — new unified split frame (750×475, list +
+  permanent preview + Information block), floating over the live desktop
+  through the acrylic surface. No `Tab` hint in the footer.
