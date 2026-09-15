@@ -354,14 +354,15 @@ test('Unified Frame - permanent preview pane with media cap and info block', () 
     css.includes('.overlay-preview .ov-preview-info'),
     'Information block must exist'
   );
+  // Information block hugs its rows up to the cap (no internal gaps) while
+  // the growing media area keeps it bottom-anchored.
+  const infoRuleIdx = css.indexOf('.overlay-preview .ov-preview-info {');
+  assert.ok(infoRuleIdx !== -1, 'Information block rule must exist');
+  const infoRule = css.slice(infoRuleIdx, css.indexOf('}', infoRuleIdx));
+  assert.ok(infoRule.includes('height: auto;'), 'info block must size to content');
   assert.ok(
-    css.includes('max-height: var(--info-h);'),
-    'Information block must cap at 175px and hug content below that (no gaps)'
-  );
-  assert.doesNotMatch(
-    css,
-    /\.overlay-preview \.ov-preview-info \{[\s\S]*?height: var\(--info-h\);/,
-    'Information block must not force a fixed height'
+    infoRule.includes('max-height: var(--info-h);'),
+    'info block must cap at 175px and scroll beyond'
   );
   assert.ok(
     css.includes('.overlay-preview-empty'),
