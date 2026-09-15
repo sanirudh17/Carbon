@@ -105,6 +105,10 @@ test('RichText VERIFY - dark sources render on a dark card (black sites)', () =>
   // Dark branch must use the dark card, never the white one.
   assert.ok(tsx.includes('rich-doc-dark'), 'dark sources must render with the dark card');
   assert.ok(tsx.includes("background: '#14161a'"), 'dark card surface must be dark in both themes');
+  // Content fallback: inline light-on-transparent text (backdrop stripped
+  // with <body>) must also flip, guarded by the dark-text majority rule.
+  assert.ok(tsx.includes('createTreeWalker'), 'detector must scan fragment content');
+  assert.ok(tsx.includes('lightText') && tsx.includes('darkBg'), 'detector must weigh light text vs dark backdrops');
 
   const css = fs.readFileSync(path.join(SRC_DIR, 'index.css'), 'utf8');
   const pairs = [

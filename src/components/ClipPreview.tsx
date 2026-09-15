@@ -166,6 +166,40 @@ function detectSourceTheme(html: string): 'dark' | 'light' {
     // the page itself was dark (its body backdrop was stripped with it).
     const textAttr = body?.getAttribute('text') || '';
     if (textAttr && isLight(textAttr)) return 'dark';
+    // Content scan (last resort): light INLINE text with no dark INLINE
+    // background anywhere in the fragment. Class-based colors can't apply
+    // here (no site stylesheet), so only inline styles affect rendering —
+    // and inline light-on-transparent text is exactly what the stripped
+    // page backdrop used to sit behind. Flip only when light text is not
+    // outnumbered by dark text (a light page stays light).
+    // NOTE: `color` is ;-anchored so `background-color` never matches.
+    let lightText = 0, darkText = 0, darkBg = 0, scanned = 0;
+    const walker = doc.createTreeWalker(body as Node, NodeFilter.SHOW_ELEMENT);
+    let node: Element | null;
+    while ((node = walker.nextNode() as Element | null) && scanned < 1000) {
+      scanned++;
+      const st = `;${(node.getAttribute('style') || '').toLowerCase()};`;
+      const cm = st.match(/;\s*color\s*:\s*([^;]+);/);
+      if (cm) {
+        const l = cssColorLuminance(cm[1].trim());
+        if (l !== null) {
+          if (l > 0.65) lightText++;
+          else if (l < 0.35) darkText++;
+        }
+      }
+      const bgm = st.match(/;\s*background(?:-color)?\s*:\s*([^;]+);/);
+      if (bgm) {
+        const v = bgm[1].trim();
+        if (v && v !== 'transparent' && v !== 'none' && v !== 'initial' && v !== 'inherit' && v !== 'unset') {
+          // Gradients and unparseable values (e.g. `url(...)`) count as
+          // "has a backdrop" (conservative: keep the white card). Only a
+          // provably-transparent background lets light text flip the card.
+          const l = /gradient/.test(v) ? null : cssColorLuminance(v);
+          if (l === null || l < 0.35) darkBg++;
+        }
+      }
+    }
+    if (lightText > 0 && darkBg === 0 && lightText >= darkText) return 'dark';
   } catch { /* fall through to light */ }
   return 'light';
 }
