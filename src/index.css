@@ -3696,13 +3696,9 @@ section:last-child {
   background: color-mix(in srgb, var(--accent) 4%, transparent);
 }
 
-/* Drag-and-Drop Styles: drag surfaces show the plain default arrow and let
-   the OS render native drag feedback (arrow for text drags, arrow +
-   document badge for file drags). Any explicit cursor here (grab hand,
-   copy plus) leaks into Blink's drag feedback and masks the drop
-   affordance over small inputs. */
+/* Drag-and-Drop Styles */
 .row[draggable='true'] {
-  cursor: default;
+  cursor: grab;
 }
 
 .row.is-dragging {
@@ -3719,7 +3715,7 @@ section:last-child {
   opacity: 0;
   transition: opacity 120ms ease;
   margin-right: 4px;
-  cursor: default;
+  cursor: grab;
 }
 
 .row:hover .drag-handle {
