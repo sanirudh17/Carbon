@@ -251,3 +251,43 @@ test('TAB-NEAT - Async preview media never pops white while decoding', () => {
   assert.ok(css.includes('.overlay-preview-content img'), 'preview images need a dark placeholder');
   assert.ok(css.includes('rgba(10, 10, 12, 0.35)'), 'placeholder must be dark, never white');
 });
+
+test('reveal animation - overlay fade-in is managed, gated, and reduced-motion safe', () => {
+  const choreo = fs.readFileSync(path.join(SRC_DIR, 'lib', 'choreo.ts'), 'utf8');
+  assert.ok(choreo.includes('armOverlayReveal'), 'reveal helper must exist');
+  assert.ok(choreo.includes("windowName === 'overlay'"), 'reveal must be overlay-only');
+  assert.ok(choreo.includes("classList.add('ov-reveal')"), 'reveal class must be added');
+  assert.ok(choreo.includes("classList.remove('ov-reveal')"), 'reveal class must be removed after play');
+  // Fires after gates/timeouts/interactable — never gates anything itself.
+  const armIdx = choreo.indexOf('armOverlayReveal();');
+  const gateIdx = choreo.indexOf('first user-interactable reached');
+  assert.ok(armIdx > gateIdx, 'reveal must arm after the show gate, never before');
+  const css = fs.readFileSync(path.join(SRC_DIR, 'index.css'), 'utf8');
+  assert.ok(css.includes('@keyframes ov-reveal-in'), 'reveal keyframes must exist');
+  assert.ok(css.includes('#root.ov-reveal'), 'reveal must target #root, never html');
+  assert.ok(css.includes('prefers-reduced-motion'), 'reveal must respect reduced motion');
+  // Hide machinery untouched: 90ms hide fades and wm-hidden discipline stay.
+  assert.ok(css.includes('opacity 90ms'), 'hide fades must stay at 90ms');
+});
+
+test('first-paint hardening - background application is verified and retried hidden-side', () => {
+  const vib = fs.readFileSync(path.join(SRC_TAURI_DIR, 'vibrancy.rs'), 'utf8');
+  assert.ok(
+    vib.includes('pub fn set_window_default_background(') && vib.includes('-> bool'),
+    'default-background fn must report success'
+  );
+  const bg = fs.readFileSync(path.join(SRC_TAURI_DIR, 'webview_bg.rs'), 'utf8');
+  assert.ok(
+    bg.includes('pub fn set_webview_transparent_background') && bg.includes('-> bool'),
+    'transparent-background fn must report success'
+  );
+  const hotkey = fs.readFileSync(path.join(SRC_TAURI_DIR, 'hotkey.rs'), 'utf8');
+  assert.ok(hotkey.includes('background retry attempt'), 'prepare_main_surface must retry on failure');
+  assert.ok(hotkey.includes('do not touch mid-show') || hotkey.includes('live surface now'), 'retry must skip visible windows');
+  assert.ok(hotkey.includes('1..=3'), 'retry must be bounded');
+  // Overlay reveal ramp untouched by this change (still 60ms).
+  assert.ok(
+    hotkey.includes('ramp_window_alpha(win.clone(), 0, 255, 60, expected_token, true);'),
+    'overlay ramp must stay 60ms'
+  );
+});

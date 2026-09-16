@@ -982,12 +982,44 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
 /// then the transparent controller background. Synchronous COM only — no
 /// resize, no material change, safe on the hotkey thread.
 pub(crate) fn prepare_main_surface(app_handle: &AppHandle, main_win: &tauri::WebviewWindow) {
+    let mut applied = true;
     if let Some(state) = app_handle.try_state::<crate::AppState>() {
         let settings = state.settings.get();
         let mat = crate::vibrancy::WindowMaterial::from_str(&settings.window_material);
-        crate::vibrancy::set_window_default_background(main_win, mat, &settings.theme);
+        applied = crate::vibrancy::set_window_default_background(main_win, mat, &settings.theme) && applied;
     }
-    crate::webview_bg::set_webview_transparent_background(main_win.as_ref());
+    applied = crate::webview_bg::set_webview_transparent_background(main_win.as_ref()) && applied;
+    if !applied {
+        // Rare cold-start race: the controller was not ready, so Chromium's
+        // white default stuck (first-open flash). Retry hidden-side only —
+        // bounded, never touching visibility, focus, or material.
+        let handle = app_handle.clone();
+        let label = main_win.label().to_string();
+        std::thread::spawn(move || {
+            for attempt in 1..=3u64 {
+                std::thread::sleep(std::time::Duration::from_millis(500 * attempt));
+                let win = match handle.get_webview_window(&label) {
+                    Some(w) => w,
+                    None => return,
+                };
+                if win.is_visible().unwrap_or(true) {
+                    return; // live surface now — do not touch mid-show
+                }
+                let mut ok = true;
+                if let Some(state) = handle.try_state::<crate::AppState>() {
+                    let s = state.settings.get();
+                    let m = crate::vibrancy::WindowMaterial::from_str(&s.window_material);
+                    ok = crate::vibrancy::set_window_default_background(&win, m, &s.theme) && ok;
+                }
+                ok = crate::webview_bg::set_webview_transparent_background(win.as_ref()) && ok;
+                if ok {
+                    crate::paste::log_diag(&format!("[MAIN_SURFACE] background retry attempt {attempt} applied."));
+                    return;
+                }
+            }
+            crate::paste::log_diag("[MAIN_SURFACE] background retry exhausted after 3 attempts (white-default risk remains).");
+        });
+    }
 }
 
 pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {

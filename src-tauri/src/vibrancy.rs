@@ -230,11 +230,14 @@ pub fn init_window_vibrancy(window: &WebviewWindow, app: &AppHandle) {
 /// Sets WebView2's default pre-paint surface. Glass remains transparent so
 /// acrylic can composite desktop blur; Solid must be an opaque theme match so
 /// a cold frame is indistinguishable from the actual Solid window.
+/// Returns whether the controller accepted it — a cold-start controller that
+/// is not ready yet fails SILENTLY and Chromium's white default sticks
+/// (rare first-present flash), so callers retry (see prepare_main_surface).
 pub fn set_window_default_background(
     window: &WebviewWindow,
     material: WindowMaterial,
     theme: &str,
-) {
+) -> bool {
     #[cfg(target_os = "windows")]
     {
         use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_COLOR;
@@ -245,6 +248,8 @@ pub fn set_window_default_background(
             WindowMaterial::Solid => COREWEBVIEW2_COLOR { A: 255, R: 14, G: 14, B: 16 },
             _ => COREWEBVIEW2_COLOR { A: 0, R: 0, G: 0, B: 0 },
         };
+        let applied_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let applied_flag_inner = applied_flag.clone();
         let _ = window.with_webview(move |platform_webview| {
             use windows_core::Interface;
             use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -257,13 +262,21 @@ pub fn set_window_default_background(
                 Ok(c) => c,
                 Err(_) => return,
             };
-            unsafe {
-                let _ = controller2.SetDefaultBackgroundColor(color);
+            if unsafe { controller2.SetDefaultBackgroundColor(color).is_ok() } {
+                applied_flag_inner.store(true, std::sync::atomic::Ordering::SeqCst);
             }
         });
+        let applied = applied_flag.load(std::sync::atomic::Ordering::SeqCst);
+        if !applied {
+            crate::paste::log_diag("[VIBRANCY] default background NOT applied (controller not ready) — retry will follow.");
+        }
+        applied
     }
     #[cfg(not(target_os = "windows"))]
-    let _ = (window, material, theme);
+    {
+        let _ = (window, material, theme);
+        true
+    }
 }
 
 /// The creation callback has a Webview rather than a WebviewWindow. It uses
