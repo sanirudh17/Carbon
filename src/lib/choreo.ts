@@ -162,7 +162,7 @@ export function armOverlayReveal(): void {
   revealTimer = window.setTimeout(() => {
     revealTimer = null;
     root.classList.remove('ov-reveal');
-  }, 170);
+  }, 120);
 }
 
 // ── Invariant I1: Window Show & Paint Gate ──

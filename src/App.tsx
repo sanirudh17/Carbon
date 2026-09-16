@@ -24,6 +24,9 @@ declare global {
   }
 }
 
+// Once-flag for carbon-ui-ready (module scope: survives StrictMode remounts).
+let uiReadySent = false;
+
 export function App() {
   const [updaterBanner, setUpdaterBanner] = useState<{ version: string; update: Update } | null>(null);
   const [updaterDownloading, setUpdaterDownloading] = useState(false);
@@ -76,6 +79,29 @@ export function App() {
   // paintable tree. Initialized via choreo module paint gate.
   useEffect(() => {
     return initPaintGate();
+  }, []);
+
+  // Readiness for first-present prewarm: emit carbon-ui-ready only AFTER
+  // first commit + paint (rAF x2), never at module evaluation — the old
+  // module-level emit fired before React committed, so under the dev
+  // server (slow transform waterfall + StrictMode double-mount) the
+  // backend prewarmed a blank surface and the first open flashed white.
+  // Module-scoped once-flag survives StrictMode remounts; Rust guards too.
+  useEffect(() => {
+    if (uiReadySent) return;
+    uiReadySent = true;
+    let cancelled = false;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (cancelled) return;
+        import('@tauri-apps/api/event').then(({ emit }) => {
+          emit('carbon-ui-ready').catch(() => {});
+        }).catch(() => {});
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const applySettingsData = (settings: Partial<AppSettings>) => {

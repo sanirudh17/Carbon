@@ -291,3 +291,17 @@ test('first-paint hardening - background application is verified and retried hid
     'overlay ramp must stay 60ms'
   );
 });
+
+test('ui-ready fires post-paint, never at module evaluation', () => {
+  const main = fs.readFileSync(path.join(SRC_DIR, 'main.tsx'), 'utf8');
+  assert.ok(!main.includes('carbon-ui-ready'), 'main.tsx must not emit readiness at module scope');
+  const app = fs.readFileSync(path.join(SRC_DIR, 'App.tsx'), 'utf8');
+  assert.ok(app.includes("emit('carbon-ui-ready')"), 'App must emit readiness');
+  assert.ok(app.includes('requestAnimationFrame'), 'readiness must wait for paint frames');
+  assert.ok(app.includes('uiReadySent'), 'readiness must be once-guarded for StrictMode');
+});
+
+test('reveal animation runs 100ms', () => {
+  const css = fs.readFileSync(path.join(SRC_DIR, 'index.css'), 'utf8');
+  assert.ok(css.includes('ov-reveal-in 100ms'), 'reveal must run 100ms');
+});
