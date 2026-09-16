@@ -1,4 +1,4 @@
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import type { ClipItem } from '../types';
 
 // Exact same drag-out payload as the main window (EnlargedWindow): plain
@@ -36,55 +36,3 @@ export const setClipDragData = (
     }
   }
 };
-
-/**
- * Image/file rows leave through native OLE (chat upload zones, Explorer,
- * editors need real HDROP/DIB/descriptor formats); text-like rows keep the
- * DOM drag (Chromium synthesizes text flavors, plus internal flavors).
- */
-export function shouldNativeDrag(item: ClipItem): boolean {
-  return item.content_type === 'image' || item.content_type === 'file';
-}
-
-/**
- * Starts a native OLE drag for an image/file clip. The browser fires
- * dragstart only after its own movement threshold, so calling this from
- * onDragStart preserves native threshold behavior. preventDefault cancels
- * the DOM drag (no dragend will fire — callers must clean up in `finally`).
- * Resolves with the negotiated drop effect ('copy' expected).
- *
- * Re-entrancy (v29-A): the backend rejects concurrent drags, but the
- * frontend also refuses to stack invokes — rapid drag-start spam resolves
- * immediately as 'busy' instead of piling modal loops.
- */
-let nativeDragInFlight = false;
-
-export async function beginNativeDrag(
-  e: React.DragEvent | DragEvent,
-  item: ClipItem
-): Promise<string> {
-  e.preventDefault();
-  e.stopPropagation();
-  console.debug(`[drag] threshold detected for '${item.id}' (${item.content_type}) — posting to main STA thread`);
-  if (nativeDragInFlight) {
-    console.warn('[drag] native drag already in flight — ignoring stacked dragstart (spam guard)');
-    return 'busy';
-  }
-  nativeDragInFlight = true;
-  // B4 gesture hygiene: no DOM selection bleed, no coexistence with a
-  // WebView text selection while the OS owns the gesture.
-  try {
-    document.getSelection()?.removeAllRanges();
-  } catch {}
-  document.documentElement.classList.add('native-dragging');
-  try {
-    const effect = await invoke<string>('begin_native_drag', { id: item.id });
-    if (effect !== 'copy') {
-      console.warn(`[drag] native drop settled with effect='${effect}' (expected 'copy')`);
-    }
-    return effect;
-  } finally {
-    nativeDragInFlight = false;
-    document.documentElement.classList.remove('native-dragging');
-  }
-}

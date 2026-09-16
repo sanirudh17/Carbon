@@ -453,6 +453,38 @@ pub fn log_diag(event: &str) {
     }
 }
 
+/// Process-global crash hook: log the panic message + backtrace to stderr
+/// AND an always-on `carbon_crash.log` before abort, so a future crash
+/// records WHICH thread died and where (pair with WER/Event Viewer + the
+/// .dmp for attribution). Idempotent — installs once. Called from `run()`
+/// before the Tauri builder starts.
+pub fn install_crash_hook() {
+    static INSTALLED: AtomicBool = AtomicBool::new(false);
+    if INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("<unnamed>");
+        let bt = std::backtrace::Backtrace::force_capture();
+        let line = format!("[CARBON_CRASH] thread='{name}' panic={info}\n{bt}");
+        eprintln!("{line}");
+        log_diag(&format!("[CARBON_CRASH] thread='{name}' panic={info}"));
+        // Backtraces are long — persist the full text to disk (best effort).
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("carbon_crash.log")
+        {
+            use std::io::Write as _;
+            let _ = writeln!(f, "{line}");
+        }
+        prev(info);
+    }));
+    log_diag("[CRASH_HOOK] installed (panic -> carbon_crash.log + backtrace)");
+}
+
 pub fn get_window_diag_info(hwnd: HWND) -> String {
     if hwnd.0.is_null() {
         return "HWND(NULL)".to_string();

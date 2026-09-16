@@ -7,7 +7,7 @@ import { collectionColorFor, normalizeCollectionColor } from '../utils/collectio
 import { ClipPreview, ClipMetaStrip, getQrCopyLabel, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
 import { getActionsForClip, getPasteActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
 import { matchesHotkeyCombo } from '../utils/hotkeys';
-import { setClipDragData, shouldNativeDrag, beginNativeDrag } from '../utils/clipDrag';
+import { setClipDragData } from '../utils/clipDrag';
 import { SnippetsView } from './SnippetsView';
 import {
   SearchIcon,
@@ -664,19 +664,6 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     const ids = selectedIds.size > 1 && selectedIds.has(item.id)
       ? Array.from(selectedIds)
       : [item.id];
-    // Images/files leave through native OLE (real files for upload zones).
-    // DOM drag is cancelled (no dragend fires) — state clears in `finally`.
-    // Window state keeps multi-select ids: same-window collection drops read
-    // it first, independent of the drag transport.
-    if (shouldNativeDrag(item)) {
-      setDraggingId(item.id);
-      window.__carbonDraggingClipIds = ids;
-      void beginNativeDrag(e, item).finally(() => {
-        setDraggingId(null);
-        window.__carbonDraggingClipIds = null;
-      });
-      return;
-    }
     setDraggingId(item.id);
     window.__carbonDraggingClipIds = ids;
 

@@ -551,13 +551,6 @@ input, textarea, select, button {
   flex-direction: column;
 }
 
-/* Native OLE drag in flight: the OS owns the gesture — suppress every DOM
-   selection so WebView text selection can neither bleed nor coexist. */
-html.native-dragging,
-html.native-dragging * {
-  user-select: none !important;
-}
-
 /* F5 Content Layer & Micro-Animations:
    - overlay show: instant unhide behind DWM cloak gate (zero scale animation)
    - overlay hide: opacity and scale down on hiding
