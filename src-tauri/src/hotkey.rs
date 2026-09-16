@@ -43,17 +43,28 @@ static OVERLAY_HIDE_ACK: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_os = "windows")]
 pub fn set_window_cloaked(window: &tauri::WebviewWindow, cloaked: bool) {
     use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+    // Audited result (was silent): a failed cloak at cold boot leaves DWM
+    // compositing the window — the rare first-open flash. Loud on failure.
+    let mut cloak_ok = false;
     if let Ok(hwnd) = window.hwnd() {
         unsafe {
             let native = HWND(hwnd.0 as *mut _);
             let v: i32 = if cloaked { 1 } else { 0 };
-            let _ = DwmSetWindowAttribute(
+            cloak_ok = DwmSetWindowAttribute(
                 native,
                 DWMWA_CLOAK,
                 &v as *const _ as *const std::ffi::c_void,
                 std::mem::size_of::<i32>() as u32,
-            );
+            )
+            .is_ok();
         }
+    }
+    if !cloak_ok {
+        crate::paste::log_diag(&format!(
+            "[DWM_CLOAK] FAILED window='{}' cloaked={} (cold-flash risk) — retry covers background; cloak re-asserted next show/hide.",
+            window.label(),
+            cloaked
+        ));
     }
     // Single choke point for the logical-visibility flags: every cloak and
     // every painted-ack/fallback uncloak flows through here, so

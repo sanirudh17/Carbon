@@ -304,3 +304,9 @@ test('ui-ready fires post-paint, never at module evaluation', () => {
   assert.ok(app.includes('requestAnimationFrame'), 'readiness must wait for paint frames');
   assert.ok(app.includes('uiReadySent'), 'readiness must be once-guarded for StrictMode');
 });
+
+test('cloak call reports failure loudly (cold-flash audit trail)', () => {
+  const hotkey = fs.readFileSync(path.join(SRC_TAURI_DIR, 'hotkey.rs'), 'utf8');
+  assert.ok(hotkey.includes('DWM_CLOAK] FAILED'), 'cloak failures must log loudly');
+  assert.ok(hotkey.includes('cloak_ok'), 'cloak result must be audited, not discarded');
+});
