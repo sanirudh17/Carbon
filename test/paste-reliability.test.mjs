@@ -123,11 +123,13 @@ test('paste deselect - browser-gated collapse exists and is scoped', () => {
   assert.ok(rs.includes('get_window_exe_name'), 'decision must key on the foreground exe');
   assert.ok(rs.includes('[DESELECT]'), 'decision must be logged either way');
   // Main item-paste path only: snippet expansion owns its caret already.
-  const callSites = rs.match(/collapse_pasted_selection\(\);/g) || [];
+  const callSites = rs.match(/collapse_pasted_selection\(target_hwnd\);/g) || [];
   assert.equal(callSites.length, 1, 'exactly one call site (main paste path)');
+  assert.ok(rs.includes('fn still_on_target'), 'taps must re-validate focus');
+  assert.ok(rs.includes('collapse_pasted_selection(target_hwnd)'), 'paste target must scope the taps');
   const mainPath = rs.indexOf('// Inject Ctrl+V into focused control');
   assert.ok(
-    mainPath !== -1 && rs.indexOf('collapse_pasted_selection();', mainPath) > mainPath,
+    mainPath !== -1 && rs.indexOf('collapse_pasted_selection(target_hwnd);', mainPath) > mainPath,
     'must run right after the main Ctrl+V inject'
   );
   assert.ok(
@@ -138,6 +140,6 @@ test('paste deselect - browser-gated collapse exists and is scoped', () => {
 
 test('paste deselect - double-tap covers async editor selection', () => {
   const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'paste.rs'), 'utf8');
-  assert.ok(rs.includes('tap 1/2'), 'first collapse tap must be logged');
-  assert.ok(rs.includes('tap 2/2'), 'second async-cover tap must be logged');
+  assert.ok(rs.includes('(tap {}/3)'), 'numbered collapse taps must be logged');
+  assert.ok(rs.includes('[0u64, 270, 550]'), 'three-tap schedule must exist');
 });

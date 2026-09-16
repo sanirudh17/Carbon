@@ -1043,7 +1043,7 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform) -> Result<(), Stri
         // text selected (highlighted) after a synthetic Ctrl+V. Collapse
         // it (browsers only — elsewhere a stray Right would nudge the
         // caret, so other targets are deliberately untouched).
-        collapse_pasted_selection();
+        collapse_pasted_selection(target_hwnd);
 
         // Paste fully carried out — allow the next (legitimate) request.
         PASTE_IN_FLIGHT.store(false, Ordering::SeqCst);
@@ -2228,31 +2228,64 @@ const DESELECT_BROWSERS: &[&str] = &[
 ];
 
 /// If the foreground window is a known browser, collapse any selection the
-/// just-injected paste left behind. Two taps: the first catches synchronous
-/// inserts, the second (~350ms) catches editors that apply selection
-/// asynchronously via framework renders. Each tap is a caret no-op at an
-/// unselected end-of-input; logs the decision either way for traceability.
-fn collapse_pasted_selection() {
+/// just-injected paste left behind. Three taps (+80/+350/+900ms): the first
+/// catches synchronous inserts, the later ones catch editors that render or
+/// focus-late (busy pages can process Ctrl+V long after injection). Every
+/// tap re-validates that focus never left the paste target — the sequence
+/// aborts otherwise, so a tap can never land in another window. At an
+/// unselected caret each tap is a no-op; logs every step for traceability.
+fn collapse_pasted_selection(target_hwnd: Option<isize>) {
     thread::sleep(Duration::from_millis(80));
-    let exe = unsafe {
-        get_window_exe_name(GetForegroundWindow())
-            .unwrap_or_default()
-            .to_lowercase()
-    };
-    if DESELECT_BROWSERS.iter().any(|b| exe == *b) {
-        log_diag(&format!(
-            "[DESELECT] browser target '{exe}' — collapsing post-paste selection (tap 1/2)"
-        ));
-        inject_right_arrow();
-        thread::sleep(Duration::from_millis(270));
-        log_diag(&format!(
-            "[DESELECT] browser target '{exe}' — second tap for async editors (tap 2/2)"
-        ));
-        inject_right_arrow();
-    } else {
+    let exe = foreground_exe();
+    if !DESELECT_BROWSERS.iter().any(|b| exe == *b) {
         log_diag(&format!(
             "[DESELECT] non-browser target '{exe}' — leaving caret alone"
         ));
+        return;
+    }
+    for (i, wait_ms) in [0u64, 270, 550].iter().enumerate() {
+        if *wait_ms > 0 {
+            thread::sleep(Duration::from_millis(*wait_ms));
+        }
+        if !still_on_target(target_hwnd, &exe) {
+            log_diag(&format!(
+                "[DESELECT] focus left the paste target — stopping after tap {i}/3"
+            ));
+            return;
+        }
+        log_diag(&format!(
+            "[DESELECT] browser target '{exe}' — collapsing (tap {}/3)",
+            i + 1
+        ));
+        inject_right_arrow();
+    }
+}
+
+/// Lowercased foreground exe name (empty when unreadable).
+fn foreground_exe() -> String {
+    unsafe {
+        get_window_exe_name(GetForegroundWindow())
+            .unwrap_or_default()
+            .to_lowercase()
+    }
+}
+
+/// True when focus is still where the paste landed: same hwnd when the
+/// target is known, else same exe family (target-less snippet/legacy
+/// paths). Any user Alt-Tab (or focus theft) aborts the tap sequence.
+fn still_on_target(target_hwnd: Option<isize>, exe: &str) -> bool {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.0.is_null() {
+            return false;
+        }
+        if let Some(want) = target_hwnd {
+            if fg.0 as isize != want {
+                return false;
+            }
+        }
+        let now = get_window_exe_name(fg).unwrap_or_default().to_lowercase();
+        now == exe
     }
 }
 
