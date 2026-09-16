@@ -4,6 +4,7 @@ mod db;
 mod expansion;
 mod history;
 mod hotkey;
+mod native_drag;
 mod ocr;
 mod paste;
 mod sensitive;
@@ -1327,6 +1328,11 @@ pub fn run() {
                     if !hotkey::is_overlay_hiding() && window.is_visible().unwrap_or(false) {
                         if hotkey::get_overlay_phase() == hotkey::OverlayPhase::Showing {
                             paste::log_diag("[WINDOW_EVENT] Overlay lost focus while Showing — ignoring transient blur during show.");
+                        } else if native_drag::is_native_drag_active() {
+                            // v30 lifeline (not choreography): the OS owns the
+                            // gesture — hiding now would tear the source
+                            // surface from under the modal loop.
+                            paste::log_diag("[WINDOW_EVENT] Overlay lost focus during native drag — suppressing hide.");
                         } else {
                             paste::log_diag("[WINDOW_EVENT] Overlay lost focus while visible. Calling hide_overlay_window...");
                             hotkey::hide_overlay_window(&window.app_handle());
@@ -1377,6 +1383,7 @@ pub fn run() {
             set_snippet_expansion_enabled,
             set_show_snippets,
             set_overlay_animation,
+            native_drag::begin_native_drag,
             submit_arg_prompt,
             get_pending_arg_request,
             get_hotkey_status,

@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "node --test test/*.test.mjs",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --lib",
     "canary": "node scripts/visual-canary.mjs"
   },
   "dependencies": {

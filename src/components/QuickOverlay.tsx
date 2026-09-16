@@ -6,7 +6,7 @@ import { ClipItem, HotkeyStatus, AppSettings, Collection, Snippet } from '../typ
 import { ClipPreview, ClipMetaStrip, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
 import { getActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
 import { matchesHotkeyCombo } from '../utils/hotkeys';
-import { setClipDragData } from '../utils/clipDrag';
+import { setClipDragData, shouldNativeDrag, beginNativeDrag } from '../utils/clipDrag';
 import { collectionColorFor, normalizeCollectionColor } from '../utils/collections';
 import {
   filterSnippets,
@@ -613,6 +613,18 @@ export const QuickOverlay: React.FC = () => {
       try {
         e.dataTransfer.setData('text/plain', 'Sensitive Clip');
       } catch {}
+      return;
+    }
+    // Covered types leave through the conformant native object (v30).
+    // The DOM drag is cancelled, so no dragend fires — state is cleared
+    // in `finally`. Window state keeps ids for same-window drops.
+    if (shouldNativeDrag(item)) {
+      setDraggingId(item.id);
+      window.__carbonDraggingClipIds = [item.id];
+      void beginNativeDrag(e, item).finally(() => {
+        setDraggingId(null);
+        window.__carbonDraggingClipIds = null;
+      });
       return;
     }
     setDraggingId(item.id);

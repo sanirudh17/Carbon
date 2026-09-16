@@ -1,4 +1,4 @@
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import type { ClipItem } from '../types';
 
 // Exact same drag-out payload as the main window (EnlargedWindow): plain
@@ -55,3 +55,44 @@ export const setClipDragData = (
     console.warn('[drag] drag payload setup failed partway, keeping partial transfer:', err);
   }
 };
+
+/* ═════════════════════════════════════════════════════════════════════
+ * Native OLE drag-out (v30 conformance contract).
+ * Covered types (text/code/link/email/image/file, non-sensitive) leave
+ * through the backend's contract-conformant DoDragDrop (real HDROP/HTML/
+ * unicode mediums); everything else keeps the DOM path above. The browser
+ * fires dragstart only after its own movement threshold; preventDefault
+ * cancels the DOM drag (no dragend fires — callers clean up in `finally`).
+ * Sensitive clips never leave natively (DOM decoy only).
+ * ═════════════════════════════════════════════════════════════════════ */
+
+const NATIVE_DRAG_TYPES = new Set(['text', 'code', 'link', 'email', 'image', 'file']);
+
+export function shouldNativeDrag(item: ClipItem): boolean {
+  return !item.is_sensitive && NATIVE_DRAG_TYPES.has(item.content_type);
+}
+
+export async function beginNativeDrag(
+  e: React.DragEvent | DragEvent,
+  item: ClipItem
+): Promise<string> {
+  e.preventDefault();
+  e.stopPropagation();
+  try {
+    document.getSelection()?.removeAllRanges();
+  } catch {}
+  try {
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy';
+  } catch {}
+  console.debug(`[drag] native threshold crossed for '${item.id}' (${item.content_type})`);
+  try {
+    const effect = await invoke<string>('begin_native_drag', { id: item.id });
+    if (effect !== 'copy') {
+      console.warn(`[drag] native drop settled with effect='${effect}' (expected 'copy')`);
+    }
+    return effect;
+  } catch (err) {
+    console.warn('[drag] native drag failed:', err);
+    return 'error';
+  }
+}

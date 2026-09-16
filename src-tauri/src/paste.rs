@@ -479,6 +479,14 @@ pub fn install_crash_hook() {
         {
             use std::io::Write as _;
             let _ = writeln!(f, "{line}");
+            // v30 DRAG LOG: last 50 drag lines ride along (try_lock —
+            // never blocks a panicking thread).
+            if let Some(entries) = crate::native_drag::drag_log_snapshot_try() {
+                let _ = writeln!(f, "[DRAG LOG — last {} lines]", entries.len());
+                for entry in entries {
+                    let _ = writeln!(f, "  {entry}");
+                }
+            }
         }
         prev(info);
     }));
