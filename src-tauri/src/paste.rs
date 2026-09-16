@@ -1039,14 +1039,19 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform) -> Result<(), Stri
         // Inject Ctrl+V into focused control
         inject_ctrl_v();
 
+        // Critical section ends here: clipboard content + keystrokes are
+        // delivered. Release the guard BEFORE the deselect tail so a fast
+        // consecutive paste is never dropped (the ~1s tap schedule used to
+        // hold the flag and eat repeat pastes). The taps below touch only
+        // the caret and abort the moment focus leaves this target, so they
+        // are safe to run unguarded alongside a following paste.
+        PASTE_IN_FLIGHT.store(false, Ordering::SeqCst);
+
         // Deselect-after-paste: some browser engines leave the inserted
         // text selected (highlighted) after a synthetic Ctrl+V. Collapse
         // it (browsers only — elsewhere a stray Right would nudge the
         // caret, so other targets are deliberately untouched).
         collapse_pasted_selection(target_hwnd);
-
-        // Paste fully carried out — allow the next (legitimate) request.
-        PASTE_IN_FLIGHT.store(false, Ordering::SeqCst);
     });
 
     Ok(())

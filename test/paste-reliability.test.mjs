@@ -143,3 +143,19 @@ test('paste deselect - double-tap covers async editor selection', () => {
   assert.ok(rs.includes('(tap {}/3)'), 'numbered collapse taps must be logged');
   assert.ok(rs.includes('[0u64, 270, 550]'), 'three-tap schedule must exist');
 });
+
+test('paste guard - flag releases before the deselect tail', () => {
+  const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'paste.rs'), 'utf8');
+  // The ~1s tap schedule must never hold the single-shot guard: a fast
+  // consecutive paste into another interface was silently dropped (read as
+  // a crash). Critical section ends at inject; taps run unguarded but
+  // focus-scoped (still_on_target aborts on focus change).
+  const threadStart = rs.indexOf('Focus confirmation attempt');
+  const clearIdx = rs.indexOf('PASTE_IN_FLIGHT.store(false, Ordering::SeqCst);', threadStart);
+  const collapseIdx = rs.indexOf('collapse_pasted_selection(target_hwnd);', threadStart);
+  assert.ok(threadStart !== -1 && clearIdx !== -1 && collapseIdx !== -1, 'anchors must exist');
+  assert.ok(
+    clearIdx < collapseIdx,
+    'guard must release before the deselect tail (consecutive pastes must not drop)'
+  );
+});
