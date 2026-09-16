@@ -7,7 +7,8 @@ import { collectionColorFor, normalizeCollectionColor } from '../utils/collectio
 import { ClipPreview, ClipMetaStrip, getQrCopyLabel, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
 import { getActionsForClip, getPasteActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
 import { matchesHotkeyCombo } from '../utils/hotkeys';
-import { setClipDragData } from '../utils/clipDrag';
+import { setClipDragData, shouldOsDrag, attachOsFileDrag } from '../utils/clipDrag';
+import type { OsGestureCleanup } from '../utils/clipDrag';
 import { SnippetsView } from './SnippetsView';
 import {
   SearchIcon,
@@ -108,6 +109,8 @@ const EnlargedRow = memo(function EnlargedRow({
   onRowClick,
   onDragStart,
   onDragEnd,
+  onOsDragStart,
+  onOsDragSettled,
 }: {
   item: ClipItem;
   index: number;
@@ -118,12 +121,32 @@ const EnlargedRow = memo(function EnlargedRow({
   onRowClick: (item: ClipItem, idx: number, e: React.MouseEvent) => void;
   onDragStart: (item: ClipItem, e: React.DragEvent) => void;
   onDragEnd: () => void;
+  onOsDragStart: (id: string) => void;
+  onOsDragSettled: () => void;
 }) {
+  // Same split as the overlay: real-file OS gesture for image/file,
+  // proven DOM path for text-like rows.
+  const osDrag = shouldOsDrag(item);
+  const osCleanup = useRef<OsGestureCleanup | null>(null);
+  const osRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      osCleanup.current?.();
+      osCleanup.current = null;
+      if (el && shouldOsDrag(item)) {
+        osCleanup.current = attachOsFileDrag(el, () => item, {
+          onStart: (id) => onOsDragStart(id),
+          onSettled: () => onOsDragSettled(),
+        });
+      }
+    },
+    [item, onOsDragStart, onOsDragSettled]
+  );
   return (
     <div
       id={`enlarged-row-${index}`}
-      draggable={true}
-      onDragStart={(e) => onDragStart(item, e)}
+      ref={osDrag ? osRef : undefined}
+      draggable={osDrag ? false : true}
+      onDragStart={osDrag ? undefined : (e) => onDragStart(item, e)}
       onDragEnd={onDragEnd}
       className={`row ${isSelected ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragging ? 'is-dragging' : ''} ${queueIdx >= 0 ? 'in-queue' : ''}`}
       onClick={(e) => onRowClick(item, index, e)}
@@ -681,6 +704,15 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   const handleDragEnd = useCallback(() => {
     setDraggingId(null);
     setDropTargetColId(null);
+    window.__carbonDraggingClipIds = null;
+  }, []);
+
+  // OS file-drag settlement (image/file rows): same highlight lifecycle.
+  const handleOsDragStart = useCallback((id: string) => {
+    setDraggingId(id);
+  }, []);
+  const handleOsDragSettled = useCallback(() => {
+    setDraggingId(null);
     window.__carbonDraggingClipIds = null;
   }, []);
 
@@ -2039,6 +2071,8 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                             onRowClick={handleRowClick}
                             onDragStart={handleDragStart}
                             onDragEnd={handleDragEnd}
+                            onOsDragStart={handleOsDragStart}
+                            onOsDragSettled={handleOsDragSettled}
                           />
                         );
                       })}

@@ -4,6 +4,7 @@
   "description": "Capability for the Quick Overlay popup window",
   "windows": ["overlay"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "drag:default"
   ]
 }

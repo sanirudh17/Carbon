@@ -6,7 +6,8 @@ import { ClipItem, HotkeyStatus, AppSettings, Collection, Snippet } from '../typ
 import { ClipPreview, ClipMetaStrip, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
 import { getActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
 import { matchesHotkeyCombo } from '../utils/hotkeys';
-import { setClipDragData } from '../utils/clipDrag';
+import { setClipDragData, shouldOsDrag, attachOsFileDrag } from '../utils/clipDrag';
+import type { OsGestureCleanup } from '../utils/clipDrag';
 import { collectionColorFor, normalizeCollectionColor } from '../utils/collections';
 import {
   filterSnippets,
@@ -107,6 +108,8 @@ const OverlayRow = memo(function OverlayRow({
   onSelect,
   onDragStart,
   onDragEnd,
+  onOsDragStart,
+  onOsDragSettled,
 }: {
   item: ClipItem;
   index: number;
@@ -116,12 +119,33 @@ const OverlayRow = memo(function OverlayRow({
   onSelect: (idx: number) => void;
   onDragStart: (item: ClipItem, e: React.DragEvent) => void;
   onDragEnd: () => void;
+  onOsDragStart: (id: string) => void;
+  onOsDragSettled: () => void;
 }) {
+  // Image/file rows leave as REAL files via the OS gesture (pointerdown +
+  // threshold -> plugin drag); the browser never starts a DOM drag for
+  // them. Text-like rows keep the proven DOM path.
+  const osDrag = shouldOsDrag(item);
+  const osCleanup = useRef<OsGestureCleanup | null>(null);
+  const osRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      osCleanup.current?.();
+      osCleanup.current = null;
+      if (el && shouldOsDrag(item)) {
+        osCleanup.current = attachOsFileDrag(el, () => item, {
+          onStart: (id) => onOsDragStart(id),
+          onSettled: () => onOsDragSettled(),
+        });
+      }
+    },
+    [item, onOsDragStart, onOsDragSettled]
+  );
   return (
     <div
       id={`overlay-row-${index}`}
-      draggable={true}
-      onDragStart={(e) => onDragStart(item, e)}
+      ref={osDrag ? osRef : undefined}
+      draggable={osDrag ? false : true}
+      onDragStart={osDrag ? undefined : (e) => onDragStart(item, e)}
       onDragEnd={onDragEnd}
       className={`row ${isSelected ? 'selected' : ''} ${isDragging ? 'is-dragging' : ''} ${queueIdx >= 0 ? 'in-queue' : ''}`}
       onClick={() => onSelect(index)}
@@ -632,6 +656,16 @@ export const QuickOverlay: React.FC = () => {
     window.__carbonDraggingClipIds = null;
   }, []);
 
+  // OS file-drag settlement (image/file rows): mirror the DOM highlight
+  // lifecycle so the row glows during the plugin gesture.
+  const handleOsDragStart = useCallback((id: string) => {
+    setDraggingId(id);
+  }, []);
+  const handleOsDragSettled = useCallback(() => {
+    setDraggingId(null);
+    window.__carbonDraggingClipIds = null;
+  }, []);
+
   // ── Settings-driven behavior ───────────────────────────────────────
   // Preview visibility and snippet availability sync live (settings-updated
   // fires in every window). The active TAB is never forced here: the overlay
@@ -1056,6 +1090,24 @@ export const QuickOverlay: React.FC = () => {
   // The highlighted clip of the VISIBLE (possibly app-filtered) list — every
   // paste/queue/preview action must operate on this, not the unfiltered array.
   const selectedItem = displayItems[selectedIndex];
+
+  // OS gesture for the preview-pane media wrapper (same split as rows).
+  // Placed after selectedItem: the ref callback closes over it.
+  const previewOsCleanup = useRef<OsGestureCleanup | null>(null);
+  const previewOsRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      previewOsCleanup.current?.();
+      previewOsCleanup.current = null;
+      if (el && selectedItem && shouldOsDrag(selectedItem)) {
+        const item = selectedItem;
+        previewOsCleanup.current = attachOsFileDrag(el, () => item, {
+          onStart: (id) => handleOsDragStart(id),
+          onSettled: () => handleOsDragSettled(),
+        });
+      }
+    },
+    [selectedItem, handleOsDragStart, handleOsDragSettled]
+  );
 
   // Keep editingContent synchronized with selectedItem so raw/edit mode never renders empty text
   useEffect(() => {
@@ -1750,6 +1802,8 @@ export const QuickOverlay: React.FC = () => {
                           onSelect={handleSelectRow}
                           onDragStart={handleOverlayDragStart}
                           onDragEnd={handleOverlayDragEnd}
+                          onOsDragStart={handleOsDragStart}
+                          onOsDragSettled={handleOsDragSettled}
                         />
                       );
                   })}
@@ -1896,15 +1950,25 @@ export const QuickOverlay: React.FC = () => {
                     )}
                     <div className="overlay-preview-content ov-preview-media">
                       {selectedItem.content_type === 'image' || selectedItem.content_type === 'file' ? (
-                        <div
-                          draggable
-                          title="Drag to drop into any app"
-                          style={{ display: 'contents' }}
-                          onDragStart={(e) => handleOverlayDragStart(selectedItem, e)}
-                          onDragEnd={handleOverlayDragEnd}
-                        >
-                          <ClipPreview item={selectedItem} />
-                        </div>
+                        shouldOsDrag(selectedItem) ? (
+                          <div
+                            ref={previewOsRef}
+                            title="Drag to drop into any app"
+                            style={{ display: 'contents' }}
+                          >
+                            <ClipPreview item={selectedItem} />
+                          </div>
+                        ) : (
+                          <div
+                            draggable
+                            title="Drag to drop into any app"
+                            style={{ display: 'contents' }}
+                            onDragStart={(e) => handleOverlayDragStart(selectedItem, e)}
+                            onDragEnd={handleOverlayDragEnd}
+                          >
+                            <ClipPreview item={selectedItem} />
+                          </div>
+                        )
                       ) : hasRenderedVersion && renderMode ? (
                         <div className="preview-render">
                           <ClipPreview item={selectedItem} forceRaw={false} />

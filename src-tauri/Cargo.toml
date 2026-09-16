@@ -55,6 +55,7 @@ url = "2.5"
 sha2 = "0.10"
 hex = "0.4"
 window-vibrancy = "0.8.0"
+tauri-plugin-drag = "2"
 
 # Direct handle on the WebView2 COM API: force the controller's
 # DefaultBackgroundColor to fully transparent at creation (white-flash fix,
