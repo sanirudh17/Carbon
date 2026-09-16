@@ -20,7 +20,12 @@ export const setClipDragData = (
   dt.setData('application/json', JSON.stringify({ ids: list, clipId: item.id }));
   dt.setData('carbon/clip-ids', JSON.stringify(list));
 
-  if (item.html_content) {
+  if (item.html_content && item.content_type !== 'rich_text') {
+    // Rich-text clips deliberately offer NO text/html: the stored fragment
+    // is full-page capture HTML (deep nesting, data-URL images, sliced
+    // tags) that crashes target tabs/editors on drop across browsers.
+    // Plain unformatted text drops universally; same-window Carbon drops
+    // resolve via the ids/json flavors above, never via HTML.
     dt.setData('text/html', item.html_content);
   }
 

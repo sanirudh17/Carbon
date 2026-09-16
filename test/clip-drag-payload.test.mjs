@@ -139,3 +139,36 @@ test('drag payload - no clip type may produce an empty transfer', () => {
     );
   }
 });
+
+/**
+ * Rich-text drag-out is PLAIN TEXT ONLY (no text/html). Full-page capture
+ * HTML (deep nesting, data-URL images, sliced tags) crashes target tabs on
+ * drop across browsers. Same-window drops resolve via ids/json flavors.
+ */
+
+const NASTY_HTML =
+  '<div><p>Real words here.</p>' +
+  '<table><tr><td><div><span style="color:red">deep</span></div></td></tr></table>' +
+  '<img src="data:image/png;base64,' + 'A'.repeat(5000) + '">' +
+  '<p>Unclosed slice <b>bold';
+
+test('drag payload - rich_text never offers text/html', () => {
+  const e = mockEvent();
+  setClipDragData(
+    e,
+    base({
+      content_type: 'rich_text',
+      text_content: 'Real words here. deep',
+      html_content: NASTY_HTML,
+    })
+  );
+  assert.ok(!('text/html' in e.dataTransfer.store), 'rich_text must not offer HTML');
+  assert.equal(e.dataTransfer.store['text/plain'], 'Real words here. deep');
+  assert.ok(e.dataTransfer.store['carbon/clip-ids'], 'internal flavors must survive');
+});
+
+test('drag payload - non-rich clips keep their HTML flavor', () => {
+  const e = mockEvent();
+  setClipDragData(e, base({ content_type: 'text', html_content: '<b>hi</b>' }));
+  assert.equal(e.dataTransfer.store['text/html'], '<b>hi</b>');
+});
