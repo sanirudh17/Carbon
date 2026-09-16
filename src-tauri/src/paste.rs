@@ -1059,8 +1059,27 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform, deselect_after: bo
             ));
             thread::sleep(Duration::from_millis(80));
         } else {
-            log_diag("[PASTE_THREAD] TARGET_HWND is None. Sleeping 60ms default before injection...");
-            thread::sleep(Duration::from_millis(60));
+            // v33-D2: same B2 settle without a saved hwnd (no focus loop
+            // possible) — an unsettled injection misses SPA composers the
+            // same way regardless of how the target was resolved.
+            let mut last_fg = unsafe { GetForegroundWindow() };
+            let mut stable_frames = 0u32;
+            for _ in 0..6 {
+                thread::sleep(Duration::from_millis(15));
+                let fg = unsafe { GetForegroundWindow() };
+                stable_frames += 1;
+                if fg.0 as usize == last_fg.0 as usize {
+                    stable_frames += 1;
+                    break;
+                }
+                last_fg = fg;
+            }
+            log_diag(&format!(
+                "[PASTE_THREAD] target=none stable_frames={} settling 80ms before injection (t+{}ms)...",
+                stable_frames,
+                paste_elapsed_ms()
+            ));
+            thread::sleep(Duration::from_millis(80));
         }
 
         // 4. Send-time foreground proof: the injected Ctrl+V lands wherever

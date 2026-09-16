@@ -163,3 +163,14 @@ test('paste guard - flag releases before any caret tail', () => {
   );
 });
 
+
+test('v33-D2 - hwnd-less path gets the same B2 settle', () => {
+  const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'paste.rs'), 'utf8');
+  // TARGET_HWND=None previously slept a flat 60ms with no stability gate:
+  // unsettled injections miss SPA composers identically. Both branches
+  // must count stability frames and settle 80ms (settle scope only).
+  assert.ok(rs.includes('target=none stable_frames='), 'None path must log stability+settle');
+  const noneIdx = rs.indexOf('target=none stable_frames=');
+  const settle80 = rs.indexOf('Duration::from_millis(80)', noneIdx);
+  assert.ok(settle80 !== -1 && settle80 - noneIdx < 600, 'None path must settle 80ms');
+});
