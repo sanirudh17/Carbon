@@ -2200,10 +2200,11 @@ fn inject_right_arrow() {
     }
 }
 
-/// Browser allowlist for deselect-after-paste: Chromium/Gecko inputs are
-/// the ones observed leaving synthetic Ctrl+V inserts selected. Everything
-/// else (terminals, editors, Office, IDEs) is left untouched — a stray
-/// Right there would move the caret for no benefit.
+/// Browser + chat-shell allowlist for deselect-after-paste: Chromium/Gecko
+/// inputs (and Electron chat shells built on them) are the ones observed
+/// leaving synthetic Ctrl+V inserts selected. Everything else (terminals,
+/// editors, Office, IDEs) is left untouched — a stray Right there would
+/// move the caret for no benefit. Tell us the exe and it gets added.
 const DESELECT_BROWSERS: &[&str] = &[
     "chrome.exe",
     "msedge.exe",
@@ -2217,6 +2218,13 @@ const DESELECT_BROWSERS: &[&str] = &[
     "thorium.exe",
     "floorp.exe",
     "librewolf.exe",
+    "slack.exe",
+    "discord.exe",
+    "msteams.exe",
+    "teams.exe",
+    "notion.exe",
+    "whatsapp.exe",
+    "telegram.exe",
 ];
 
 /// If the foreground window is a known browser, collapse any selection the

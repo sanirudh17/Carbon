@@ -116,7 +116,7 @@ test('paste deselect - browser-gated collapse exists and is scoped', () => {
   assert.ok(rs.includes('fn inject_right_arrow'), 'single Right-arrow injector must exist');
   assert.ok(rs.includes('VK_RIGHT'), 'must use the Right-arrow virtual key');
   assert.ok(rs.includes('DESELECT_BROWSERS'), 'browser allowlist must exist');
-  for (const exe of ['chrome.exe', 'msedge.exe', 'firefox.exe', 'comet.exe', 'brave.exe']) {
+  for (const exe of ['chrome.exe', 'msedge.exe', 'firefox.exe', 'comet.exe', 'brave.exe', 'slack.exe', 'discord.exe', 'msteams.exe', 'notion.exe']) {
     assert.ok(rs.includes(`"${exe}"`), `allowlist must cover ${exe}`);
   }
   assert.ok(rs.includes('fn collapse_pasted_selection'), 'gating decision fn must exist');
