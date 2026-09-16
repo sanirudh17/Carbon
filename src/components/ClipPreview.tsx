@@ -2,6 +2,9 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { ClipItem, ContentType } from '../types';
 import { getTypeColor, LockIcon, EyeIcon, EyeOffIcon } from './Icons';
+import {
+  prepareRichPreview,
+} from '../lib/richText';
 
 const ImagePreview: React.FC<{ item: ClipItem }> = ({ item }) => {
   const [src, setSrc] = useState<string>(() => (item.image_path ? convertFileSrc(item.image_path) : ''));
@@ -49,257 +52,6 @@ const ImagePreview: React.FC<{ item: ClipItem }> = ({ item }) => {
  * Shared read-only preview rendering (used by the Quick Overlay pane and
  * the Enlarged Window's render-mode toggle).
  * ═════════════════════════════════════════════════════════════════════ */
-
-// ── Rich text sanitization ─────────────────────────────────────────────
-// The HTML lives in the user's own clipboard; still strip anything
-// executable or window-escaping so a hostile snippet can't run.
-const BANNED_TAGS = new Set([
-  'script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'base',
-  'form', 'input', 'button', 'select', 'textarea', 'svg', 'math', 'head',
-]);
-const BANNED_PROTOCOLS = ['javascript:', 'vbscript:'];
-
-function extractFragment(html: string): string {
-  if (!html) return '';
-  const cleanStr = html.replace(/\0/g, '').trim();
-
-  const startMarker = '<!--StartFragment-->';
-  const endMarker = '<!--EndFragment-->';
-  const s = cleanStr.indexOf(startMarker);
-  const e = cleanStr.indexOf(endMarker);
-  if (s !== -1 && e !== -1 && e > s) {
-    return cleanStr.slice(s + startMarker.length, e).trim();
-  }
-
-  // Try parsing StartFragment: / EndFragment: offsets
-  const startMatch = cleanStr.match(/StartFragment:(\d+)/i);
-  const endMatch = cleanStr.match(/EndFragment:(\d+)/i);
-  if (startMatch && endMatch) {
-    const startOffset = parseInt(startMatch[1], 10);
-    const endOffset = parseInt(endMatch[1], 10);
-    if (!isNaN(startOffset) && !isNaN(endOffset) && endOffset > startOffset && endOffset <= cleanStr.length) {
-      const slice = cleanStr.slice(startOffset, endOffset).trim();
-      if (slice) return slice;
-    }
-  }
-
-  // If header exists without markers, strip header before <html> or <body>
-  if (cleanStr.startsWith('Version:')) {
-    const bodyIdx = cleanStr.indexOf('<body');
-    if (bodyIdx !== -1) {
-      const tagEnd = cleanStr.indexOf('>', bodyIdx);
-      if (tagEnd !== -1) {
-        const bodyEnd = cleanStr.indexOf('</body>', tagEnd);
-        return cleanStr.slice(tagEnd + 1, bodyEnd !== -1 ? bodyEnd : undefined).trim();
-      }
-    }
-  }
-
-  return cleanStr;
-}
-
-function sanitizeRichHtml(html: string): string {
-  try {
-    const doc = new DOMParser().parseFromString(extractFragment(html), 'text/html');
-    const clean = (node: Element) => {
-      for (const child of Array.from(node.children)) {
-        const tag = child.tagName.toLowerCase();
-        if (BANNED_TAGS.has(tag) || tag === 'head') {
-          child.remove();
-          continue;
-        }
-        if (tag === 'img') {
-          const src = child.getAttribute('src')?.trim() || '';
-          if (src) {
-            // For blob: or auth-gated https: that will 404 in file://, the
-            // Rust side now also captures the DIB rendering of the selection
-            // as a fallback `image_path` on the rich_text item. Keep the
-            // original src but let the fallback image below the HTML be the
-            // authoritative visual — don't dominate the layout with 5×
-            // "[Image not available]" spans.
-            if (src.toLowerCase().startsWith('blob:')) {
-              (child as HTMLElement).style.display = 'none';
-            } else {
-              child.setAttribute('referrerpolicy', 'no-referrer');
-              child.setAttribute('loading', 'lazy');
-              child.setAttribute(
-                'onerror',
-                "this.style.display='none'; var p=document.createElement('span'); p.className='rich-img-fallback'; p.textContent=' [Image] '; this.parentNode.insertBefore(p, this);"
-              );
-              (child as HTMLElement).style.maxWidth = '100%';
-              (child as HTMLElement).style.height = 'auto';
-              (child as HTMLElement).style.display = 'block';
-              (child as HTMLElement).style.margin = '8px 0';
-            }
-          }
-        }
-        // Keep the original background for genuine rich captures (e.g., a
-        // website's white question card). Stripping it was hiding the
-        // website's own white background that the user expects to see.
-        // The dark preview now shows the HTML as-is, with its original
-        // background, so a site's white card renders white and Notepad's
-        // plain wrapper (which has no background) stays dark.
-        for (const attr of Array.from(child.attributes)) {
-          const name = attr.name.toLowerCase();
-          const val = attr.value.trim().toLowerCase();
-          if (
-            name.startsWith('on') ||
-            ((name === 'href' || name === 'src') &&
-              BANNED_PROTOCOLS.some((p) => val.startsWith(p)))
-          ) {
-            // Keep the onerror we just set for img
-            if (tag === 'img' && name === 'onerror') continue;
-            child.removeAttribute(attr.name);
-          }
-        }
-        clean(child);
-      }
-    };
-    clean(doc.body);
-    renderMathInElement(doc.body);
-    return doc.body.innerHTML.replace(/<!--[\s\S]*?-->/g, '');
-  } catch {
-    return '';
-  }
-}
-
-// ── Lightweight LaTeX math prettifier ────────────────────────────────────
-// Clipboard HTML from study-note pages (e.g. Comet) carries raw `$...$`
-// delimiters. A full KaTeX dependency is overkill for a clipboard preview,
-// so we do a tiny conservative pass: `$...$`, `$$...$$`, `\(...\)` and
-// `\[...\]` become serif-italic math spans with common commands
-// (`\longrightarrow`/`\Longrightarrow`, `\sum`, `\wedge`, `\times`,
-// `\circ`, `\epsilon`/`\varepsilon`, set operators, `\frac{a}{b}`,
-// `^`/`_` super/subscripts, `\text{..}`, `\#`, Greek (incl. capitals), …)
-// replaced by their glyphs. The opening `$` must not be glued to a word
-// char (so "$5-$10" never matches) and pure numbers ($10$) stay literal —
-// everything else with valid delimiters converts.
-const MATH_GLYPHS: Record<string, string> = {
-  Longrightarrow: '⟹', Longleftarrow: '⟸', implies: '⟹', iff: '⟺', Leftrightarrow: '⇔',
-  to: '→', rightarrow: '→', longrightarrow: '⟶', leftarrow: '←', longleftarrow: '⟵',
-  Rightarrow: '⇒', Leftarrow: '⇐', leftrightarrow: '↔', mapsto: '↦',
-  times: '×', div: '÷', cdot: '·', circ: '∘', bullet: '•', ast: '∗', star: '★',
-  pm: '±', sim: '∼', simeq: '≃', cong: '≅', approx: '≈', equiv: '≡', propto: '∝',
-  leq: '≤', geq: '≥', le: '≤', ge: '≥', ll: '≪', gg: '≫',
-  neq: '≠', ne: '≠', infty: '∞',
-  sum: '∑', prod: '∏', int: '∫',
-  wedge: '∧', vee: '∨', land: '∧', lor: '∨', neg: '¬', lnot: '¬',
-  models: '⊨', vdash: '⊢', mid: '∣',
-  alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', varepsilon: 'ϵ',
-  zeta: 'ζ', eta: 'η', theta: 'θ', iota: 'ι', kappa: 'κ', lambda: 'λ', mu: 'μ',
-  nu: 'ν', xi: 'ξ', pi: 'π', rho: 'ρ', sigma: 'σ', tau: 'τ', upsilon: 'υ',
-  phi: 'φ', varphi: 'φ', chi: 'χ', psi: 'ψ', omega: 'ω',
-  Alpha: 'Α', Beta: 'Β', Gamma: 'Γ', Delta: 'Δ', Epsilon: 'Ε', Zeta: 'Ζ',
-  Eta: 'Η', Theta: 'Θ', Iota: 'Ι', Kappa: 'Κ', Lambda: 'Λ', Mu: 'Μ',
-  Nu: 'Ν', Xi: 'Ξ', Omicron: 'Ο', Pi: 'Π', Rho: 'Ρ', Sigma: 'Σ', Tau: 'Τ',
-  Upsilon: 'Υ', Phi: 'Φ', Chi: 'Χ', Psi: 'Ψ', Omega: 'Ω',
-  cap: '∩', cup: '∪', bigcap: '⋂', bigcup: '⋃', in: '∈', notin: '∉',
-  subset: '⊂', supset: '⊃', subseteq: '⊆', supseteq: '⊇',
-  forall: '∀', exists: '∃', nexists: '∄',
-  oplus: '⊕', ominus: '⊖', otimes: '⊗',
-  partial: '∂', nabla: '∇', prime: '′',
-  ldots: '…', dots: '…', cdots: '⋯', vdots: '⋮', ddots: '⋱',
-  lfloor: '⌊', rfloor: '⌋', floor: '⌊', lceil: '⌈', rceil: '⌉',
-  langle: '⟨', rangle: '⟩', emptyset: '∅', varnothing: '∅',
-  // Upright operators render as plain text (backslash dropped).
-  lim: 'lim', log: 'log', exp: 'exp', sin: 'sin', cos: 'cos', tan: 'tan',
-  max: 'max', min: 'min', argmax: 'argmax', argmin: 'argmin',
-  sup: 'sup', inf: 'inf', det: 'det', dim: 'dim',
-};
-
-function prettifyMathContent(s: string): string {
-  // Escape first so the <sup>/<sub> inserted below survive as markup.
-  let out = escapeHtml(s);
-  // LaTeX `\\` line break → space (must run before single-backslash rules).
-  out = out.replace(/\\\\/g, ' ');
-  // `^\circ` is the degree idiom (`18^\circ C` → 18°C); a bare `\circ`
-  // (function composition, `f \circ g`) renders as ∘.
-  out = out.replace(/\^\\circ/g, '°');
-  out = out.replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, '($1)/($2)');
-  out = out.replace(/\\sqrt\[[^\]]*\]\{([^}]*)\}/g, '√$1');
-  out = out.replace(/\\sqrt\{([^}]*)\}/g, '√$1');
-  out = out.replace(/\\(text|mathrm|mathbf|mathit|textbf|textit|mathcal|mathsf|boldsymbol|operatorname)\{([^}]*)\}/g, '$2');
-  // Accent/styling wrappers keep their argument: `\hat{x}` → x, `\bar{x}` → x.
-  out = out.replace(/\\(hat|bar|tilde|vec|dot|ddot|overline|underline)\{([^}]*)\}/g, '$2');
-  out = out.replace(/\\(hat|bar|tilde|vec)\s*([A-Za-z])/g, '$2');
-  // `\left(`/`\right)`, `\left|`/`\right.`, … are just delimiters.
-  // The lookahead keeps longer commands (`\rightarrow`, `\leftarrow`,
-  // `\leftrightarrow`) intact for the glyph lookup below.
-  out = out.replace(/\\(left|right)(?![A-Za-z])\s*([({\[|.)\]])?/g, (_m, _cmd: string, delim?: string) =>
-    !delim || delim === '.' ? '' : delim
-  );
-  // Sizing prefixes carry no meaning for a text preview — drop them, but
-  // not inside `\bigcap` / `\bigcup` (lookahead, same reason as above).
-  out = out.replace(/\\(bigg?|Bigg?)(?![A-Za-z])\s*/g, '');
-  out = out.replace(/\\(hspace|vspace)(\{[^}]*\}|\*?\s*\S+)?/g, ' ');
-  out = out.replace(/\\(quad|qquad)\b/g, ' ');
-  // Blackboard-bold sets common in AI notes: `\mathbb{N}` → ℕ (others unwrap).
-  out = out.replace(/\\mathbb\{([A-Z])\}/g, (_m, letter: string) =>
-    ({ N: 'ℕ', R: 'ℝ', Z: 'ℤ', Q: 'ℚ', C: 'ℂ' } as Record<string, string>)[letter] ?? letter
-  );
-  // Command lookup: longest letter-run after `\` (so `\sum_{…}` matches
-  // even though `_` is a word char, where `\b` would fail). Unknown
-  // commands (`\mathbb`, `\begin`, …) are left untouched.
-  out = out.replace(/\\([A-Za-z]+)/g, (m, cmd: string) => MATH_GLYPHS[cmd] ?? m);
-  // Superscripts / subscripts: $P^*$ → P*, $S_O$ → S with O subscript,
-  // $18^\circ C$ → 18°C (handled above), $O(b^{d/2})$ keeps its exponent.
-  out = out.replace(/\^\{([^}]*)\}|\^(\S)/g, '<sup>$1$2</sup>');
-  out = out.replace(/_\{([^}]*)\}|_([A-Za-z0-9])/g, '<sub>$1$2</sub>');
-  out = out.replace(/\\[ ,;:]/g, ' ').replace(/\\&amp;/g, '&amp;').replace(/\\%/g, '%').replace(/\\_/g, '&#95;').replace(/\\\$/g, '$').replace(/\\#/g, '#');
-  return out.trim();
-}
-
-// Single-$ pairs need a guarded opening `$` (not glued to a word char, `-`
-// or another `$`) so price ranges like "$5-$10" are never treated as math.
-// Everything else with valid delimiters converts — EXCEPT pure numbers
-// ($10$ stays literal), which is the only remaining price-like shape.
-const MATH_RE = /\\\[([\s\S]+?)\\\]|\\\((.+?)\\\)|\$\$([\s\S]+?)\$\$|(?<![\w$\-–—])\$([^\s$](?:[^$]*?[^\s$])?)\$/g;
-
-function mathifyTextContent(text: string): string {
-  let result = '';
-  let last = 0;
-  MATH_RE.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = MATH_RE.exec(text)) !== null) {
-    result += escapeHtml(text.slice(last, m.index));
-    const content = m[1] ?? m[2] ?? m[3] ?? m[4] ?? '';
-    const display = m[1] !== undefined || m[3] !== undefined;
-    if (/^[\d\s.,$–—-]+$/.test(content)) {
-      result += escapeHtml(m[0]);
-    } else {
-      result += `<span class="${display ? 'math-display' : 'math-inline'}">${prettifyMathContent(
-        content
-      )}</span>`;
-    }
-    last = m.index + m[0].length;
-  }
-  result += escapeHtml(text.slice(last));
-  return result;
-}
-
-function renderMathInElement(root: Element) {
-  const doc = root.ownerDocument;
-  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  const nodes: Text[] = [];
-  let node: Node | null = walker.nextNode();
-  while (node) {
-    const text = node.nodeValue || '';
-    if (text.includes('$') || text.includes('\\(') || text.includes('\\[')) {
-      const parent = (node as Text).parentElement;
-      const tag = parent?.tagName.toLowerCase() || '';
-      if (tag !== 'code' && tag !== 'pre' && tag !== 'script' && tag !== 'style' && tag !== 'textarea') {
-        nodes.push(node as Text);
-      }
-    }
-    node = walker.nextNode();
-  }
-  for (const textNode of nodes) {
-    const html = mathifyTextContent(textNode.nodeValue || '');
-    const tmp = doc.createElement('span');
-    tmp.innerHTML = html;
-    textNode.replaceWith(...Array.from(tmp.childNodes));
-  }
-}
 
 // ── Content-type labels, specific rather than generic ──────────────────
 
@@ -477,14 +229,7 @@ export function isMarkdownContent(text: string): boolean {
   );
 }
 
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
+import { escapeHtml } from '../lib/richText';
 
 function parseInlineMarkdown(str: string): string {
   if (!str) return '';
@@ -745,10 +490,16 @@ export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ 
     setRevealed(false);
   }, [item.id]);
 
-  const sanitizedHtml = useMemo(
-    () => (item.html_content ? sanitizeRichHtml(item.html_content) : ''),
+  // Full pipeline (v28-A): theme guess → sanitize → per-node AA enforcement.
+  const richPreview = useMemo(
+    () =>
+      item.html_content
+        ? prepareRichPreview(item.html_content)
+        : { html: '', theme: 'light' as const, overrides: 0 },
     [item.html_content]
   );
+  const sanitizedHtml = richPreview.html;
+  const sourceTheme = richPreview.theme;
 
   // Sensitive data masking check
   if (item.is_sensitive && !revealed) {
@@ -833,7 +584,12 @@ export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ 
       // source app. Plain Notepad stays dark because it is `text`, not
       // `rich_text`.
       if (item.content_type === 'rich_text' && sanitizedHtml) {
-        const richHtml = <div className="rich-doc rich-doc-light" dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />;
+        const richHtml =
+          sourceTheme === 'dark' ? (
+            <div className="rich-doc rich-doc-dark" dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />
+          ) : (
+            <div className="rich-doc rich-doc-light" dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />
+          );
         // If this rich capture also has a DIB fallback image (because its
         // HTML contained <img> with blob: or auth-gated https:), show that
         // captured image below the HTML so the images from sites like
@@ -845,15 +601,27 @@ export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ 
         ) : null;
         return (
           <div
-            style={{
-              background: '#ffffff',
-              color: '#1f2937',
-              padding: '14px 16px',
-              borderRadius: '8px',
-              border: '1px solid #e5e7eb',
-              overflow: 'hidden',
-              backgroundClip: 'padding-box',
-            }}
+            style={
+              sourceTheme === 'dark'
+                ? {
+                    // Edge-to-edge: negative margins cancel the parent's
+                    // padding so the dark surface fills the full preview
+                    // pane without glass bleed-through at the corners.
+                    background: '#14161a',
+                    padding: '14px 16px',
+                    margin: '-10px -12px',
+                    overflow: 'hidden',
+                  }
+                : {
+                    background: '#ffffff',
+                    color: '#1f2937',
+                    padding: '14px 16px',
+                    borderRadius: '8px',
+                    border: '1px solid #e5e7eb',
+                    overflow: 'hidden',
+                    backgroundClip: 'padding-box',
+                  }
+            }
           >
             {richHtml}
             {fallback}

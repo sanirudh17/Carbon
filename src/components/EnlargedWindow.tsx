@@ -7,7 +7,7 @@ import { collectionColorFor, normalizeCollectionColor } from '../utils/collectio
 import { ClipPreview, ClipMetaStrip, getQrCopyLabel, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
 import { getActionsForClip, getPasteActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
 import { matchesHotkeyCombo } from '../utils/hotkeys';
-import { setClipDragData } from '../utils/clipDrag';
+import { setClipDragData, shouldNativeDrag, beginNativeDrag } from '../utils/clipDrag';
 import { SnippetsView } from './SnippetsView';
 import {
   SearchIcon,
@@ -549,6 +549,10 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   }, []);
 
   const [hotkeys, setHotkeys] = useState<{ overlay: string; enlarged: string }>({ overlay: 'Ctrl+Shift+Z', enlarged: 'Ctrl+Alt+X' });
+  // Elevation fallback notice (v28-C): the target needed admin rights, so
+  // the clip was staged to the clipboard instead of injected. Transient.
+  const [pasteNotice, setPasteNotice] = useState<string | null>(null);
+  const pasteNoticeTimerRef = useRef<number | null>(null);
 
   // Show/hide Snippets section & hotkeys sync
   useEffect(() => {
@@ -571,6 +575,15 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     invoke<AppSettings>('get_settings').then(apply).catch(() => {});
     let unlisten: (() => void) | undefined;
     let unlistenStatus: (() => void) | undefined;
+    let unlistenPasteNotice: (() => void) | undefined;
+    listen<{ target_app?: string | null }>('paste-elevation-fallback', (e) => {
+      const app = e.payload?.target_app || 'that app';
+      if (pasteNoticeTimerRef.current) window.clearTimeout(pasteNoticeTimerRef.current);
+      setPasteNotice(`${app} needs admin rights — clip is on your clipboard, press Ctrl+V there.`);
+      pasteNoticeTimerRef.current = window.setTimeout(() => setPasteNotice(null), 6000);
+    }).then((fn) => {
+      unlistenPasteNotice = fn;
+    });
     listen<AppSettings>('settings-updated', (e) => apply(e.payload)).then((fn) => {
       unlisten = fn;
     });
@@ -587,6 +600,8 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     return () => {
       unlisten?.();
       unlistenStatus?.();
+      unlistenPasteNotice?.();
+      if (pasteNoticeTimerRef.current) window.clearTimeout(pasteNoticeTimerRef.current);
     };
   }, []);
 
@@ -649,6 +664,17 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     const ids = selectedIds.size > 1 && selectedIds.has(item.id)
       ? Array.from(selectedIds)
       : [item.id];
+    // Covered types leave through the conformant native object (v30).
+    // DOM drag is cancelled (no dragend fires) — state clears in `finally`.
+    if (shouldNativeDrag(item)) {
+      setDraggingId(item.id);
+      window.__carbonDraggingClipIds = ids;
+      void beginNativeDrag(e, item).finally(() => {
+        setDraggingId(null);
+        window.__carbonDraggingClipIds = null;
+      });
+      return;
+    }
     setDraggingId(item.id);
     window.__carbonDraggingClipIds = ids;
 
@@ -2163,7 +2189,12 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
           </div>
         ) : selectedItem ? (
           <div className="preview-inner">
+            {/* Media types skip the kind/seg heading so the image uses the
+                freed space — but the action buttons stay. Text keeps the
+                full header. */}
             <div className="preview-head">
+              {!['image', 'file'].includes(selectedItem.content_type) && (
+              <>
               <span className="preview-kind" style={{ color: activeTint }}>
                 {getTypeIcon(selectedItem.content_type)}
                 {getSpecificTypeLabel(selectedItem)}
@@ -2186,7 +2217,9 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   </button>
                 </div>
               )}
-              <div className="preview-actions">
+              </>
+              )}
+              <div className="preview-actions" style={['image', 'file'].includes(selectedItem.content_type) ? { marginLeft: 'auto' } : undefined}>
                 <div className="paste-dropdown-wrapper">
                   <button
                     className="act"
@@ -3157,6 +3190,11 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
               <span className="cm-ic"><DeleteIcon /></span> Delete Collection
             </button>
           </div>
+        </div>
+      )}
+      {pasteNotice && (
+        <div className="sn-confirm-pill">
+          <span className="sn-pill-check">ⓘ</span> {pasteNotice}
         </div>
       )}
     </div>

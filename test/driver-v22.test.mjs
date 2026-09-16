@@ -369,19 +369,6 @@ class V22ChoreographyHarness {
     this.checkMutualExclusion();
   }
 
-  // ── Tab Toggle ──
-  tabToggle(targetExpanded) {
-    const step60 = 60;
-    this.previewOpen = targetExpanded;
-    this.windows.overlay.size = targetExpanded ? { w: 1020, h: 560 } : { w: 680, h: 440 };
-    const settle = 100;
-    const latency = step60 + 16 + 2 + settle;
-
-    if (!targetExpanded && latency > 200) {
-      this.logViolation('I5', `Tab collapse latency ${latency}ms exceeded 200ms budget`);
-    }
-    return latency;
-  }
 }
 
 // ── Automated Test Execution ──
@@ -500,24 +487,6 @@ test('ADDENDUM v22 - Automated Driver: 5 tray opens', () => {
   console.log('  PASS: 5 tray opens completed with zero violations.');
 });
 
-test('ADDENDUM v22 - Automated Driver: 20 Tab collapse/expand cycles', () => {
-  const harness = new V22ChoreographyHarness();
-  harness.invokeOverlay({ previewEnabled: false });
-
-  console.log('\n[DRIVER v22] Running 20 Tab cycles...');
-  for (let i = 0; i < 20; i++) {
-    const expand = i % 2 === 0;
-    const lat = harness.tabToggle(expand);
-    if (!expand) {
-      assert.ok(lat <= 200, `Tab collapse latency ${lat}ms must be <= 200ms`);
-    }
-  }
-
-  harness.dismissOverlay();
-  assert.equal(harness.violations.length, 0);
-  console.log('  PASS: 20 Tab cycles completed with zero violations.');
-});
-
 test('ADDENDUM v22 - Automated Driver: 30 rapid alternating toggles under stress', () => {
   const harness = new V22ChoreographyHarness();
 
@@ -528,7 +497,7 @@ test('ADDENDUM v22 - Automated Driver: 30 rapid alternating toggles under stress
     } else if (i % 3 === 1) {
       harness.invokeMain({ apiDelayMs: 10, isWarm: true });
     } else {
-      harness.tabToggle(i % 2 === 0);
+      harness.dismissOverlay();
     }
   }
 

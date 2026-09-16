@@ -91,49 +91,6 @@ class ChoreographyHarness {
     this.checkMutualExclusion();
   }
 
-  // ── Tab Collapse / Expand Simulation ──
-  tabToggle(targetExpanded) {
-    const t0 = Date.now();
-    this.transitionStartMs = t0;
-
-    // If an in-flight transition exists, finalize immediately
-    if (this.previewPhase !== 'idle') {
-      this.previewPhase = 'idle';
-      this.previewPaneVeiled = false;
-    }
-
-    const snapId = ++this.snapGen;
-    this.previewPhase = 'out';
-    this.previewPaneVeiled = true; // Veiled on preview pane only, never on #content!
-    this.overlayContentOpacity = 1.0; // #content remains 1.0!
-
-    this.checkContentBackdrop();
-
-    // 60ms content-out -> synchronous setSize
-    const step60Time = 60;
-
-    // React layout + native SetWindowPos + DwmFlush
-    this.previewOpen = targetExpanded;
-    this.previewPhase = 'snap';
-
-    // Native resize + present ack (no thread sleep, instant DwmFlush)
-    const ipcTime = 2;
-
-    // Content-in settle (100ms)
-    this.previewPhase = 'in';
-    this.previewPaneVeiled = false;
-    const settleTime = 100;
-
-    this.previewPhase = 'idle';
-
-    const latency = step60Time + 16 + ipcTime + settleTime;
-    if (!targetExpanded && latency > 200) {
-      this.logViolation('I6', `Tab collapse latency ${latency}ms exceeded 200ms budget`);
-    }
-
-    this.checkContentBackdrop();
-    return latency;
-  }
 }
 
 test('PHASE 4 - No on-screen indicators present in source code', () => {
@@ -151,28 +108,6 @@ test('PHASE 4 - No on-screen indicators present in source code', () => {
       `${file} must not create/append visual canary DOM elements`
     );
   }
-});
-
-test('PHASE 4 - Automated Driver: 20 rapid Tab collapse/expand cycles', () => {
-  const harness = new ChoreographyHarness();
-  const latencies = [];
-
-  console.log('\n[DRIVER] Running 20 Tab collapse/expand cycles...');
-  for (let i = 0; i < 20; i++) {
-    const expand = i % 2 === 0;
-    const lat = harness.tabToggle(expand);
-    if (!expand) {
-      latencies.push(lat);
-    }
-  }
-
-  const maxCollapse = Math.max(...latencies);
-  const avgCollapse = latencies.reduce((a, b) => a + b, 0) / latencies.length;
-  console.log(`[DRIVER] Tab Collapse Latency: max=${maxCollapse}ms, avg=${avgCollapse.toFixed(1)}ms (budget <= 200ms)`);
-
-  assert.ok(maxCollapse <= 200, `Max collapse latency ${maxCollapse}ms must be <= 200ms`);
-  assert.equal(harness.violations.length, 0, `Expected 0 violations, found: ${JSON.stringify(harness.violations)}`);
-  console.log('  PASS: 20 Tab collapse/expand cycles completed with 0 violations.');
 });
 
 test('PHASE 4 - Automated Driver: 20 main window invocations and dismissals', () => {
@@ -202,8 +137,8 @@ test('PHASE 4 - Automated Driver: 30 rapid alternating inputs (stressing S5)', (
   for (let i = 0; i < 30; i++) {
     const action = i % 3;
     if (action === 0) {
-      // Tab press
-      harness.tabToggle(i % 2 === 0);
+      // Main window hotkey (alternate warm/cold opens)
+      harness.invokeMain(i % 2 === 0);
     } else if (action === 1) {
       // Main window hotkey
       harness.invokeMain(true);

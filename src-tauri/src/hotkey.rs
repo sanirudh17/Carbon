@@ -43,17 +43,28 @@ static OVERLAY_HIDE_ACK: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_os = "windows")]
 pub fn set_window_cloaked(window: &tauri::WebviewWindow, cloaked: bool) {
     use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+    // Audited result (was silent): a failed cloak at cold boot leaves DWM
+    // compositing the window — the rare first-open flash. Loud on failure.
+    let mut cloak_ok = false;
     if let Ok(hwnd) = window.hwnd() {
         unsafe {
             let native = HWND(hwnd.0 as *mut _);
             let v: i32 = if cloaked { 1 } else { 0 };
-            let _ = DwmSetWindowAttribute(
+            cloak_ok = DwmSetWindowAttribute(
                 native,
                 DWMWA_CLOAK,
                 &v as *const _ as *const std::ffi::c_void,
                 std::mem::size_of::<i32>() as u32,
-            );
+            )
+            .is_ok();
         }
+    }
+    if !cloak_ok {
+        crate::paste::log_diag(&format!(
+            "[DWM_CLOAK] FAILED window='{}' cloaked={} (cold-flash risk) — retry covers background; cloak re-asserted next show/hide.",
+            window.label(),
+            cloaked
+        ));
     }
     // Single choke point for the logical-visibility flags: every cloak and
     // every painted-ack/fallback uncloak flows through here, so
@@ -89,10 +100,15 @@ static ENLARGED_SHOW_GEN: AtomicU64 = AtomicU64::new(0);
 #[derive(Serialize, Clone, Debug)]
 pub struct OverlayOpenedPayload {
     pub token: u64,
-    pub preview_enabled: bool,
     pub target_app: Option<String>,
     pub hide_gen: u64,
 }
+
+/// Unified overlay split-frame geometry (logical px, Tinycast-adapted): the
+/// window owns this fixed frame — sized once at prewarm, never resized by
+/// content, toggle, or the show path.
+pub const OVERLAY_WIDTH: i32 = 750;
+pub const OVERLAY_HEIGHT: i32 = 475;
 
 #[derive(Serialize, Clone, Debug)]
 pub struct EnlargedOpenedPayload {
@@ -425,7 +441,9 @@ pub fn set_recording_target(target: Option<String>) {
 
 #[cfg(windows)]
 pub fn disable_window_dwm_transitions(win: &tauri::WebviewWindow) {
-    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED};
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_TRANSITIONS_FORCEDISABLED,
+    };
     if let Ok(hwnd) = win.hwnd() {
         let disable: i32 = 1;
         unsafe {
@@ -435,6 +453,13 @@ pub fn disable_window_dwm_transitions(win: &tauri::WebviewWindow) {
                 DWMWA_TRANSITIONS_FORCEDISABLED,
                 &disable as *const _ as *const std::ffi::c_void,
                 std::mem::size_of::<i32>() as u32,
+            );
+            let no_border: u32 = 0xFFFFFFFE;
+            let _ = DwmSetWindowAttribute(
+                native,
+                DWMWA_BORDER_COLOR,
+                &no_border as *const _ as *const std::ffi::c_void,
+                std::mem::size_of::<u32>() as u32,
             );
         }
     }
@@ -450,11 +475,8 @@ fn ensure_overlay_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     // something destroyed the window unexpectedly (e.g. first launch before
     // prewarm). Recreate from config as a safety net.
     crate::paste::log_diag("[HOTKEY] Overlay window not found — recreating (safety net).");
-    let preview_on = app
-        .try_state::<crate::AppState>()
-        .map(|s| s.settings.get().preview_enabled)
-        .unwrap_or(true);
-    let (win_w, win_h) = if preview_on { (1020.0, 560.0) } else { (680.0, 440.0) };
+    // Unified split frame: fixed geometry from tauri.conf (750x475).
+    let (win_w, win_h) = (OVERLAY_WIDTH as f64, OVERLAY_HEIGHT as f64);
     if let Some(mut cfg) = app
         .config()
         .app
@@ -536,6 +558,9 @@ fn ensure_main_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
                 Ok(w) => {
                     crate::paste::log_diag("[HOTKEY] Recreated main from tauri.conf");
                     crate::vibrancy::init_window_vibrancy(&w, app);
+                    // Parity with the overlay recreate path: a recreated controller
+                    // starts at Chromium's white default until this is set.
+                    crate::webview_bg::set_webview_transparent_background(w.as_ref());
                     return Some(w);
                 }
                 Err(e) => crate::paste::log_diag(&format!(
@@ -566,6 +591,9 @@ fn ensure_main_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
         Ok(w) => {
             crate::paste::log_diag("[HOTKEY] Recreated main via manual builder");
             crate::vibrancy::init_window_vibrancy(&w, app);
+            // Parity with the overlay recreate path: a recreated controller
+            // starts at Chromium's white default until this is set.
+            crate::webview_bg::set_webview_transparent_background(w.as_ref());
             Some(w)
         }
         Err(e) => {
@@ -595,7 +623,7 @@ pub fn prewarm_windows(app: &AppHandle) {
     let _ = ensure_overlay_window(app);
     let _ = ensure_main_window(app);
 
-    // Pre-size the overlay to match preview_enabled NOW, while hidden: if the
+    // Pre-size the fixed unified frame NOW, while hidden: if the size were
     // size were only fixed at show time, the hidden WebView2 surface would be
     // reallocated on every open whose size differed — the first present after
     // show() then comes out unpainted (white). Pre-sizing makes the show-path
@@ -603,9 +631,11 @@ pub fn prewarm_windows(app: &AppHandle) {
     if let Some(state) = app.try_state::<crate::AppState>() {
         let settings = state.settings.get();
 
-        // Ensure overlay window is pre-sized to match preview_enabled and has vibrancy applied across full bounds
+        // Unified split frame: pre-size the fixed 750x475 frame NOW, while
+        // hidden, and apply vibrancy across full bounds. The show path never
+        // resizes, so no fresh WebView2 surface appears before `show()`.
         if let Some(win) = app.get_webview_window("overlay") {
-            let (win_w, win_h) = if settings.preview_enabled { (1020, 560) } else { (680, 440) };
+            let (win_w, win_h) = (OVERLAY_WIDTH, OVERLAY_HEIGHT);
             let scale_factor = win.scale_factor().unwrap_or(1.0);
             let phys_w = (win_w as f64 * scale_factor).round() as u32;
             let phys_h = (win_h as f64 * scale_factor).round() as u32;
@@ -839,37 +869,23 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     // any hide-request older than this show (out-of-order delivery under
     // hotkey spam can otherwise run a stale fade after the open).
     let show_hide_gen = OVERLAY_HIDE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
-    // Capture selected text while target is still focused. UIA is instant; clipboard
-    // fallback (Ctrl+C + 120ms) is rare and only runs when UIA has no selection.
+    // Capture selected text while target is still focused (instant UIA-only query).
     crate::paste::capture_selection_snapshot();
     CURRENT_CYCLE_INDEX.store(0, Ordering::Relaxed);
 
     let (cx, cy) = get_cursor_position();
-    // The hidden prewarm path sizes this window before its first invocation.
-    // This show path therefore normally performs no resize at all, avoiding a
-    // fresh WebView2 composition surface immediately before `show()`.
-    let preview_on = app_handle
-        .try_state::<crate::AppState>()
-        .map(|s| s.settings.get().preview_enabled)
-        .unwrap_or(false);
-    let (win_w, win_h) = if preview_on { (1020, 560) } else { (680, 440) };
+    // Unified split frame: fixed 750x475 geometry owned by the window (set
+    // once at prewarm). This show path never resizes — content can never
+    // resize the window, so no fresh WebView2 composition surface (and no
+    // unpainted first present) appears immediately before `show()`.
+    let (win_w, win_h) = (OVERLAY_WIDTH, OVERLAY_HEIGHT);
     let scale_factor = overlay_win.scale_factor().unwrap_or(1.0);
     let phys_w = (win_w as f64 * scale_factor).round() as u32;
     let phys_h = (win_h as f64 * scale_factor).round() as u32;
-    // Resize ONLY when target size actually differs: resizing a hidden WebView2
-    // reallocates its composition surface, and the next present after show()
-    // comes out white until the renderer catches up (the white flash).
-    let want = tauri::PhysicalSize {
-        width: phys_w,
-        height: phys_h,
-    };
-    if overlay_win.outer_size().ok() != Some(want) {
-        let _ = overlay_win.set_size(tauri::Size::Physical(want));
-        // No material re-apply here: acrylic is applied ONCE at creation
-        // (prewarm/recreate) and on preview-toggle geometry changes — never
-        // on show. Re-driving the DWM backdrop per show caused resume churn.
-    }
-    crate::vibrancy::set_round_corners(&overlay_win);
+    // No set_round_corners here: DWMWA_WINDOW_CORNER_PREFERENCE is persistent
+    // per-window (applied at prewarm/create), and the main-window show path
+    // doesn't re-assert it either. Keeping this off the hotkey thread saves a
+    // DWM round-trip on every picker open.
 
     let (pos_x, pos_y) = calculate_overlay_position(cx, cy, win_w, win_h, scale_factor);
     crate::paste::log_diag(&format!(
@@ -881,9 +897,9 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     //  - Cloak FIRST (fresh generation) so DWM composites nothing for this
     //    window; the cloak lifts only after the renderer confirms paint
     //    (overlay_painted).
-    //  - Atomically position/show while cloaked, never re-issuing a size that
-    //    prewarm already applied (SWP_NOSIZE): re-sizing reallocates the
-    //    DirectComposition surface and the next present comes out white.
+    //  - Position (never resize) while cloaked: SWP_NOSIZE keeps the warm
+    //    DirectComposition surface so the first present can't come out white.
+    //    The fixed frame size was applied once at prewarm.
     //  - No synchronous present here: RedrawWindow(RDW_UPDATENOW) blocks the
     //    shortcut thread on a cross-process paint round-trip (slow first
     //    open, queued/dropped taps under spam). The cloak + paint-gate ack
@@ -895,21 +911,13 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
 
     if let Ok(hwnd) = overlay_win.hwnd() {
         let native = HWND(hwnd.0 as *mut _);
-        let cur_size = overlay_win.outer_size().ok();
         unsafe {
             use windows::Win32::UI::WindowsAndMessaging::{
                 SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOSIZE,
             };
-            let size_flag = match cur_size {
-                Some(s) => {
-                    if s.width == phys_w && s.height == phys_h {
-                        SWP_NOSIZE
-                    } else {
-                        Default::default()
-                    }
-                }
-                _ => Default::default(),
-            };
+            // Position-only: the fixed frame size is owned by prewarm/tauri.conf.
+            // SWP_NOSIZE keeps the warm composition surface so the first
+            // present can't come out white.
             let _ = SetWindowPos(
                 native,
                 HWND_TOPMOST,
@@ -917,7 +925,7 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
                 pos_y,
                 phys_w as i32,
                 phys_h as i32,
-                SWP_NOACTIVATE | size_flag,
+                SWP_NOACTIVATE | SWP_NOSIZE,
             );
         }
     }
@@ -942,22 +950,16 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     let target_app = crate::paste::get_target_app_name();
     let opened_payload = OverlayOpenedPayload {
         token: overlay_gen,
-        preview_enabled: preview_on,
         target_app,
         hide_gen: show_hide_gen,
     };
     let _ = app_handle.emit("overlay-opened", &opened_payload);
-    let cached_opt = {
-        let mut cache = OVERLAY_PREWARM_CACHE.lock().unwrap();
-        if cache.is_none() {
-            if let Some(state) = app_handle.try_state::<crate::AppState>() {
-                if let Ok(entries) = state.db.get_overlay_entries(250) {
-                    *cache = Some(entries);
-                }
-            }
-        }
-        cache.clone()
-    };
+    // Fast path only: emit the cached snapshot if one exists and NEVER query
+    // SQLite on the hotkey thread. The main-window show path does zero DB
+    // work before show(); a synchronous get_overlay_entries here blocked the
+    // picker open on disk I/O. Cold start (cache None) is covered by the
+    // background refresh below plus the frontend's post-reveal refetch.
+    let cached_opt = OVERLAY_PREWARM_CACHE.lock().unwrap().clone();
     if let Some(cached) = cached_opt {
         let _ = app_handle.emit("overlay-data", &cached);
         crate::paste::log_diag("[HOTKEY] overlay-data served (instant)");
@@ -979,6 +981,57 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     });
 }
 
+/// Re-asserts the main window's non-white surface immediately before show, on
+/// EVERY open (not just prewarm/recreate). The prewarm background calls can
+/// land before the WebView2 controller finishes initializing — the cast then
+/// fails silently and Chromium's white default sticks. The first present on a
+/// fresh surface (first boot, or after the OS discards the hidden window's
+/// surface during idle) then composites white during the alpha ramp, while
+/// warm repeat opens have real pixels and never flash. Same two calls, same
+/// order as prewarm and the overlay Tab path: material-aware default first,
+/// then the transparent controller background. Synchronous COM only — no
+/// resize, no material change, safe on the hotkey thread.
+pub(crate) fn prepare_main_surface(app_handle: &AppHandle, main_win: &tauri::WebviewWindow) {
+    let mut applied = true;
+    if let Some(state) = app_handle.try_state::<crate::AppState>() {
+        let settings = state.settings.get();
+        let mat = crate::vibrancy::WindowMaterial::from_str(&settings.window_material);
+        applied = crate::vibrancy::set_window_default_background(main_win, mat, &settings.theme) && applied;
+    }
+    applied = crate::webview_bg::set_webview_transparent_background(main_win.as_ref()) && applied;
+    if !applied {
+        // Rare cold-start race: the controller was not ready, so Chromium's
+        // white default stuck (first-open flash). Retry hidden-side only —
+        // bounded, never touching visibility, focus, or material.
+        let handle = app_handle.clone();
+        let label = main_win.label().to_string();
+        std::thread::spawn(move || {
+            for attempt in 1..=3u64 {
+                std::thread::sleep(std::time::Duration::from_millis(500 * attempt));
+                let win = match handle.get_webview_window(&label) {
+                    Some(w) => w,
+                    None => return,
+                };
+                if win.is_visible().unwrap_or(true) {
+                    return; // live surface now — do not touch mid-show
+                }
+                let mut ok = true;
+                if let Some(state) = handle.try_state::<crate::AppState>() {
+                    let s = state.settings.get();
+                    let m = crate::vibrancy::WindowMaterial::from_str(&s.window_material);
+                    ok = crate::vibrancy::set_window_default_background(&win, m, &s.theme) && ok;
+                }
+                ok = crate::webview_bg::set_webview_transparent_background(win.as_ref()) && ok;
+                if ok {
+                    crate::paste::log_diag(&format!("[MAIN_SURFACE] background retry attempt {attempt} applied."));
+                    return;
+                }
+            }
+            crate::paste::log_diag("[MAIN_SURFACE] background retry exhausted after 3 attempts (white-default risk remains).");
+        });
+    }
+}
+
 pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
     crate::paste::log_diag("[HOTKEY] handle_enlarged_hotkey triggered.");
     // Normalized behavior: if the overlay is open, this press only swaps to
@@ -998,6 +1051,7 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
     if overlay_was_visible {
         crate::paste::log_diag("[HOTKEY] Overlay was open — showing main instead of toggling.");
         save_target_window(app_handle);
+        prepare_main_surface(app_handle, &main_win);
         let _ = main_win.eval("document.documentElement.classList.add('wm-hidden')");
         let enlarged_gen = ENLARGED_SHOW_GEN.fetch_add(1, Ordering::SeqCst) + 1;
         set_window_cloaked(&main_win, true);
@@ -1019,6 +1073,7 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
     } else {
         save_target_window(app_handle);
         crate::paste::capture_selection_snapshot();
+        prepare_main_surface(app_handle, &main_win);
         let _ = main_win.eval("document.documentElement.classList.add('wm-hidden')");
         let enlarged_gen = ENLARGED_SHOW_GEN.fetch_add(1, Ordering::SeqCst) + 1;
         set_window_cloaked(&main_win, true);

@@ -1,9 +1,7 @@
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Manager};
 
-use crate::hotkey::{self, calculate_overlay_position};
+use crate::hotkey;
 use crate::paste;
-use crate::vibrancy;
-use crate::AppState;
 
 /// ADDENDUM v15: Rust Choreography Shim
 /// Consolidates all native window show/hide/resize/paint-gate handshakes for
@@ -11,102 +9,6 @@ use crate::AppState;
 /// Enforces invariants on the native side:
 ///   I1: Cloaked until frontend confirms paint (note_overlay_painted / note_enlarged_painted).
 ///   I2: Window size changes atomically without animating native composition surface.
-
-/// Payload for the preview-toggled ack: the resized size is live AND freshly
-/// presented. The generation lets the frontend ignore stale acks under Tab spam.
-#[derive(serde::Serialize, Clone)]
-struct PreviewToggled {
-    enabled: bool,
-    r#gen: u64,
-}
-
-/// Resizes the Quick Overlay window between compact (680x440) and expanded (1020x560) preview.
-/// Persists the setting and re-centers the window so it does not drift.
-/// After the native resize, settles briefly and forces a synchronous present
-/// while the renderer's snap veil holds, THEN emits the ack — so the veil
-/// always lifts onto real pixels, never an unpainted (black) surface.
-pub fn set_overlay_preview(
-    state: &State<'_, AppState>,
-    app_handle: &AppHandle,
-    window: &WebviewWindow,
-    enabled: bool,
-    r#gen: u64,
-) -> Result<(), String> {
-    let mut settings = state.settings.get();
-    settings.preview_enabled = enabled;
-    state.settings.update(settings.clone())?;
-
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let (w_log, h_log) = if enabled { (1020, 560) } else { (680, 440) };
-    let (w_phys, h_phys) = (
-        (w_log as f64 * scale).round() as u32,
-        (h_log as f64 * scale).round() as u32,
-    );
-    let pos_x: i32;
-    let pos_y: i32;
-    if let (Ok(old_pos), Ok(old_size)) = (window.outer_position(), window.outer_size()) {
-        pos_x = old_pos.x + old_size.width as i32 / 2 - w_phys as i32 / 2;
-        pos_y = old_pos.y + old_size.height as i32 / 2 - h_phys as i32 / 2;
-    } else {
-        let (cx, cy) = paste::get_cursor_position();
-        let (pos_x_l, pos_y_l) = calculate_overlay_position(cx, cy, w_log, h_log, scale);
-        pos_x = pos_x_l;
-        pos_y = pos_y_l;
-    }
-
-    // Instant centered snap behind renderer mask:
-    let mat = vibrancy::WindowMaterial::from_str(&settings.window_material);
-    vibrancy::set_window_default_background(window, mat, &settings.theme);
-    crate::webview_bg::set_webview_transparent_background(window.as_ref());
-
-    #[cfg(windows)]
-    {
-        use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
-        if let Ok(hwnd) = window.hwnd() {
-            unsafe {
-                let _ = SetWindowPos(
-                    HWND(hwnd.0 as *mut _),
-                    None,
-                    pos_x,
-                    pos_y,
-                    w_phys as i32,
-                    h_phys as i32,
-                    SWP_NOACTIVATE | SWP_NOZORDER,
-                );
-            }
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        window
-            .set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                width: w_phys,
-                height: h_phys,
-            }))
-            .map_err(|e| e.to_string())?;
-
-        window
-            .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                x: pos_x,
-                y: pos_y,
-            }))
-            .map_err(|e| e.to_string())?;
-    }
-
-    // Invariants I1, I2, I6 (ADDENDUM v20):
-    // Previously used std::thread::sleep(Duration::from_millis(60)) and RedrawWindow.
-    // That caused Symptom S1 (collapse exceeded 200ms budget) and Symptom S2 (GDI RedrawWindow
-    // erased the DirectComposition swapchain causing a white frame flash).
-    // Now we flush via DwmFlush to commit compositor state without GDI white erase, and emit preview-toggled immediately.
-    #[cfg(target_os = "windows")]
-    unsafe {
-        use windows::Win32::Graphics::Dwm::DwmFlush;
-        let _ = DwmFlush();
-    }
-    let _ = app_handle.emit("preview-toggled", PreviewToggled { enabled, r#gen });
-    Ok(())
-}
 
 /// Cloaks a window immediately WITHOUT hiding it, so a hide fade plays
 /// invisibly instead of exposing the bare acrylic slab (close flash).
@@ -155,17 +57,6 @@ pub fn note_window_painted(app_handle: &AppHandle, window_label: &str, token: Op
 // ── Tauri Commands ──
 
 #[tauri::command]
-pub fn choreo_set_overlay_preview(
-    state: State<'_, AppState>,
-    app_handle: AppHandle,
-    window: WebviewWindow,
-    enabled: bool,
-    r#gen: u64,
-) -> Result<(), String> {
-    set_overlay_preview(&state, &app_handle, &window, enabled, r#gen)
-}
-
-#[tauri::command]
 pub fn choreo_hide_overlay(app_handle: AppHandle) -> Result<(), String> {
     hide_overlay(&app_handle)
 }
@@ -182,13 +73,15 @@ pub fn choreo_notify_painted(app_handle: AppHandle, window_label: String, token:
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // Unified split frame: the overlay owns a FIXED 750x475 frame. There is
+    // no compact/expanded toggle anymore — content must never resize the
+    // window (a resize reallocates the WebView2 surface and the first present
+    // can come out unpainted).
+    use super::hotkey::{OVERLAY_HEIGHT, OVERLAY_WIDTH};
 
     #[test]
-    fn test_choreo_preview_dimensions() {
-        let (w_compact, h_compact) = (680, 440);
-        let (w_expanded, h_expanded) = (1020, 560);
-        assert!(w_expanded > w_compact);
-        assert!(h_expanded > h_compact);
+    fn test_overlay_fixed_frame() {
+        assert_eq!(OVERLAY_WIDTH, 750);
+        assert_eq!(OVERLAY_HEIGHT, 475);
     }
 }

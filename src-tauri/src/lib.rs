@@ -4,6 +4,7 @@ mod db;
 mod expansion;
 mod history;
 mod hotkey;
+mod native_drag;
 mod ocr;
 mod paste;
 mod sensitive;
@@ -223,7 +224,7 @@ fn queue_paste_next(
             window.hide().ok();
         }
 
-        paste::paste_item(&item, transform)?;
+        paste::paste_item(&item, transform, settings.paste_deselect_after)?;
 
         // If there are more items in queue, prepare the next one on the clipboard
         let queue = state.paste_queue.lock().map_err(|e| e.to_string())?;
@@ -291,6 +292,28 @@ fn paste_clip(
             state.db.bump_entry(&id).ok();
         }
 
+        // C3 elevation gate (v28-C): an elevated target cannot receive our
+        // injected Ctrl+V. The clipboard-first design means content is
+        // already stageable — write it, surface a hint, and STOP before
+        // hiding so the notice stays visible. Never a silent dead keypress.
+        if let Some(target) = paste::peek_target_hwnd() {
+            if paste::target_needs_elevation_fallback(target) {
+                let label = paste::describe_target(target).unwrap_or_else(|| "that app".to_string());
+                paste::log_diag(&format!(
+                    "[PASTE_CLIP] elevation fallback: target 0x{:X?} ({}) is elevated; staged to clipboard, injection skipped",
+                    target, label
+                ));
+                paste::write_clip_to_clipboard_only(&item, transform)?;
+                let _ = app_handle.emit(
+                    "paste-elevation-fallback",
+                    serde_json::json!({ "target_app": label }),
+                );
+                let _ = app_handle.emit("paste-queue-updated", ());
+                let _ = app_handle.emit("clipboard-updated", ());
+                return Ok(());
+            }
+        }
+
         paste::log_diag(&format!(
             "[PASTE_CLIP] Hiding window '{}' before initiating paste...",
             window.label()
@@ -307,7 +330,7 @@ fn paste_clip(
         }
 
         paste::log_diag("[PASTE_CLIP] Calling paste_item...");
-        paste::paste_item(&item, transform)?;
+        paste::paste_item(&item, transform, settings.paste_deselect_after)?;
 
         let _ = app_handle.emit("paste-queue-updated", ());
         let _ = app_handle.emit("clipboard-updated", ());
@@ -566,6 +589,30 @@ fn set_show_snippets(
     Ok(())
 }
 
+/// Reversible overlay cover-layer animation switch ("full" | "soft").
+/// "soft" drops the extra hide zoom-out and shortens the content fade so the
+/// picker closes like the main window; "full" restores the original.
+/// Safety: only the hide content-layer CSS transition changes — the show-path
+/// cloak gate, paint gate, mask classes and Tab-preview timings are untouched.
+/// Persists to settings.json and emits settings-updated so the overlay
+/// applies it live. Returns the applied mode.
+#[tauri::command]
+fn set_overlay_animation(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    mode: String,
+) -> Result<String, String> {
+    let mode = mode.to_lowercase();
+    if mode != "full" && mode != "soft" {
+        return Err("mode must be \"full\" or \"soft\"".to_string());
+    }
+    let mut s = state.settings.get();
+    s.overlay_animation = mode.clone();
+    state.settings.update(s)?;
+    let _ = app_handle.emit("settings-updated", &state.settings.get());
+    Ok(mode)
+}
+
 #[tauri::command]
 fn submit_arg_prompt(value: Option<String>) -> Result<(), String> {
     expansion::submit_arg_prompt_response(value)
@@ -610,20 +657,6 @@ fn set_overlay_default_tab(state: State<'_, AppState>, app_handle: AppHandle, ta
 #[tauri::command]
 fn get_target_app_name() -> Option<String> {
     paste::get_target_app_name()
-}
-
-/// Toggles the Quick Overlay preview pane. Persists the choice (so it
-/// survives restarts) and resizes the overlay window to match, anchoring
-/// the window's center so it doesn't jump.
-#[tauri::command]
-fn set_overlay_preview(
-    state: State<'_, AppState>,
-    app_handle: AppHandle,
-    window: WebviewWindow,
-    enabled: bool,
-    r#gen: u64,
-) -> Result<(), String> {
-    choreo::set_overlay_preview(&state, &app_handle, &window, enabled, r#gen)
 }
 
 /// Cloaks a window immediately without hiding it, so the hide fade plays
@@ -1045,6 +1078,10 @@ fn paste_snippet_text(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Crash attribution first: any panic anywhere logs message +
+    // backtrace to stderr and carbon_crash.log before abort.
+    paste::install_crash_hook();
+
     // Force the WebView2 loader's default background to fully transparent
     // BEFORE any webview environment is created: the first present of a
     // freshly (re)allocated surface is then transparent instead of white —
@@ -1077,6 +1114,12 @@ pub fn run() {
             // states.
             if let Some(win) = app.get_webview_window("main") {
                 hotkey::set_window_cloaked(&win, true);
+                // Same pre-show surface discipline as the hotkey path: a cold
+                // or idle-discarded surface must never composite white during
+                // the reveal ramp, and the wm-hidden mask must be on until the
+                // frontend paint gate lifts it.
+                hotkey::prepare_main_surface(app, &win);
+                let _ = win.eval("document.documentElement.classList.add('wm-hidden')");
                 if win.is_minimized().unwrap_or(false) {
                     let _ = win.unminimize();
                 }
@@ -1094,7 +1137,6 @@ pub fn run() {
                 let overlay_gen = hotkey::next_overlay_show_gen();
                 let _ = app.emit("overlay-opened", hotkey::OverlayOpenedPayload {
                     token: overlay_gen,
-                    preview_enabled: true,
                     target_app: None,
                     hide_gen: 0,
                 });
@@ -1213,7 +1255,7 @@ pub fn run() {
                     let handle = handle.clone();
                     std::thread::spawn(move || {
                         // Small buffer so the first layout/paint has settled.
-                        std::thread::sleep(std::time::Duration::from_millis(350));
+                        std::thread::sleep(std::time::Duration::from_millis(100));
                         vibrancy::prewarm_first_paint(&handle);
                         hotkey::recloak_window(&handle, "overlay");
                         hotkey::recloak_window(&handle, "main");
@@ -1286,6 +1328,11 @@ pub fn run() {
                     if !hotkey::is_overlay_hiding() && window.is_visible().unwrap_or(false) {
                         if hotkey::get_overlay_phase() == hotkey::OverlayPhase::Showing {
                             paste::log_diag("[WINDOW_EVENT] Overlay lost focus while Showing — ignoring transient blur during show.");
+                        } else if native_drag::is_native_drag_active() {
+                            // v30 lifeline (not choreography): the OS owns the
+                            // gesture — hiding now would tear the source
+                            // surface from under the modal loop.
+                            paste::log_diag("[WINDOW_EVENT] Overlay lost focus during native drag — suppressing hide.");
                         } else {
                             paste::log_diag("[WINDOW_EVENT] Overlay lost focus while visible. Calling hide_overlay_window...");
                             hotkey::hide_overlay_window(&window.app_handle());
@@ -1335,6 +1382,9 @@ pub fn run() {
             get_expansion_status,
             set_snippet_expansion_enabled,
             set_show_snippets,
+            set_overlay_animation,
+            native_drag::begin_native_drag,
+            native_drag::drag_selftest,
             submit_arg_prompt,
             get_pending_arg_request,
             get_hotkey_status,
@@ -1343,7 +1393,6 @@ pub fn run() {
             start_recording_hotkey,
             stop_recording_hotkey,
             get_target_app_name,
-            set_overlay_preview,
             cloak_window,
             set_overlay_default_tab,
             get_stats,
@@ -1387,7 +1436,6 @@ pub fn run() {
             set_window_material,
             clear_window_material,
             log_client_event,
-            choreo::choreo_set_overlay_preview,
             choreo::choreo_hide_overlay,
             choreo::choreo_hide_enlarged,
             choreo::choreo_notify_painted

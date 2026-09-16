@@ -44,11 +44,24 @@ fn default_show_snippets() -> bool {
     true
 }
 
+fn default_overlay_animation() -> String {
+    // "soft" trims the overlay cover layer's extra hide zoom/fade closer to
+    // the main window's plain fade. Reversible at runtime via the
+    // set_overlay_animation command ("full" restores the original).
+    "soft".to_string()
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppSettings {
     pub quick_hotkey: String,
     pub enlarged_hotkey: String,
     pub paste_plain_text: bool,
+    /// v32-C: optional post-paste deselect (ONE Right-arrow) for web-class
+    /// targets whose engines leave synthetic Ctrl+V inserts selected.
+    /// Default OFF per C2 — the default configuration sends NO post-paste
+    /// keystroke. serde(default) keeps older settings.json files parsing.
+    #[serde(default)]
+    pub paste_deselect_after: bool,
     /// Move-to-top for Carbon-initiated actions only: when the user pastes or
     /// copies a clip from Carbon (paste button, paste queue, right-click copy),
     /// move that entry to the top of history. It does NOT affect external
@@ -68,9 +81,6 @@ pub struct AppSettings {
     pub accent_color: String,
     pub theme: String,
     pub ignore_apps: Vec<String>,
-    /// Quick Overlay: whether the preview pane is shown (persisted).
-    #[serde(default = "default_false")]
-    pub preview_enabled: bool,
     /// Quick Overlay: which tab opens by default ("clips" | "snippets").
     #[serde(default = "default_overlay_tab")]
     pub overlay_default_tab: String,
@@ -104,6 +114,12 @@ pub struct AppSettings {
     /// stop an already-enabled expansion hook.
     #[serde(default = "default_show_snippets")]
     pub show_snippets: bool,
+    /// Overlay cover-layer animation: "full" (original hide zoom + 90ms fade)
+    /// or "soft" (opacity-only 60ms fade, closer to the main window).
+    /// Show-path flash guards (cloak gate, paint gate, mask) are untouched by
+    /// either mode — this only trims the hide content-layer transition.
+    #[serde(default = "default_overlay_animation")]
+    pub overlay_animation: String,
     /// Window material blur-behind: "acrylic" | "mica" | "blur" | "solid".
     #[serde(default = "default_window_material")]
     pub window_material: String,
@@ -148,6 +164,7 @@ impl Default for AppSettings {
             quick_hotkey: "Ctrl+Shift+Z".to_string(),
             enlarged_hotkey: "Ctrl+Alt+X".to_string(),
             paste_plain_text: false,
+            paste_deselect_after: false,
             move_to_top_on_paste: true,
             start_with_windows: true,
             retention_days: 30,
@@ -165,7 +182,6 @@ impl Default for AppSettings {
                 "Dashlane.exe".to_string(),
                 "LastPass.exe".to_string(),
             ],
-            preview_enabled: false,
             overlay_default_tab: "clips".to_string(),
             detect_sensitive_data: false,
             clip_merge_enabled: false,
@@ -174,6 +190,7 @@ impl Default for AppSettings {
             capture_rules: Vec::new(),
             snippet_expansion_enabled: false,
             show_snippets: true,
+            overlay_animation: default_overlay_animation(),
             dismissed_update_version: String::new(),
         }
     }
@@ -328,6 +345,28 @@ mod tests {
         let mut settings: AppSettings = serde_json::from_str(json).expect("should deserialize older settings JSON");
         sanitize_settings(&mut settings);
         assert_eq!(settings.window_material, "acrylic", "missing window_material must default to acrylic");
+    }
+
+    #[test]
+    fn test_paste_deselect_after_defaults_off_for_older_files() {
+        // v32-C: older settings.json has no paste_deselect_after — it must
+        // parse (serde default) and stay OFF (C2: no default keystroke).
+        let json = r##"{
+            "quick_hotkey": "Ctrl+Shift+Z",
+            "enlarged_hotkey": "Ctrl+Alt+X",
+            "paste_plain_text": false,
+            "move_to_top_on_paste": true,
+            "start_with_windows": true,
+            "retention_days": 30,
+            "max_entries": 5000,
+            "image_size_limit_mb": 20,
+            "accent_color": "#5B7CFA",
+            "theme": "dark",
+            "ignore_apps": []
+        }"##;
+
+        let settings: AppSettings = serde_json::from_str(json).expect("older settings JSON must still parse");
+        assert!(!settings.paste_deselect_after, "deselect must default OFF");
     }
 
     #[test]

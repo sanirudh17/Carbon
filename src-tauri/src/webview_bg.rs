@@ -6,10 +6,12 @@
 /// (controller-default white) frame — the white flash. A transparent
 /// controller default removes that frame: any not-yet-painted present
 /// composites as transparent instead of white.
-pub fn set_webview_transparent_background<W: tauri::Runtime>(webview: &tauri::Webview<W>) {
+pub fn set_webview_transparent_background<W: tauri::Runtime>(webview: &tauri::Webview<W>) -> bool {
     #[cfg(target_os = "windows")]
     {
-        let _ = webview.with_webview(|platform_webview| {
+        let applied_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let applied_flag_inner = applied_flag.clone();
+        let _ = webview.with_webview(move |platform_webview| {
             use windows_core::Interface;
             use webview2_com::Microsoft::Web::WebView2::Win32::{
                 ICoreWebView2Controller, ICoreWebView2Controller2, COREWEBVIEW2_COLOR,
@@ -24,10 +26,20 @@ pub fn set_webview_transparent_background<W: tauri::Runtime>(webview: &tauri::We
             unsafe {
                 // A = 0 -> fully transparent (the RGB bytes are don't-care).
                 let transparent = COREWEBVIEW2_COLOR { A: 0, R: 0, G: 0, B: 0 };
-                let _ = controller2.SetDefaultBackgroundColor(transparent);
+                if controller2.SetDefaultBackgroundColor(transparent).is_ok() {
+                    applied_flag_inner.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
             }
         });
+        let applied = applied_flag.load(std::sync::atomic::Ordering::SeqCst);
+        if !applied {
+            eprintln!("[WEBVIEW_BG] transparent background NOT applied (controller not ready) — retry will follow.");
+        }
+        applied
     }
     #[cfg(not(target_os = "windows"))]
-    let _ = webview;
+    {
+        let _ = webview;
+        true
+    }
 }

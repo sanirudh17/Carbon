@@ -44,6 +44,7 @@ export interface AppSettings {
   quick_hotkey: string;
   enlarged_hotkey: string;
   paste_plain_text: boolean;
+  paste_deselect_after: boolean;
   move_to_top_on_paste: boolean;
   start_with_windows: boolean;
   retention_days: number;
@@ -52,7 +53,9 @@ export interface AppSettings {
   accent_color: string;
   theme: string;
   ignore_apps: string[];
-  preview_enabled: boolean;
+  // Legacy preview-toggle key (toggle removed; split-frame preview is
+  // permanent). Optional so older settings payloads still parse.
+  preview_enabled?: boolean;
   overlay_default_tab: string;
   detect_sensitive_data: boolean;
   clip_merge_enabled: boolean;
@@ -61,6 +64,8 @@ export interface AppSettings {
   capture_rules: CaptureRule[];
   snippet_expansion_enabled: boolean;
   show_snippets: boolean;
+  /** Overlay cover-layer animation: "full" (original) | "soft" (reduced). Optional: older payloads omit it. */
+  overlay_animation?: 'full' | 'soft';
   window_material?: 'acrylic' | 'solid';
   dismissedUpdateVersion?: string;
 }

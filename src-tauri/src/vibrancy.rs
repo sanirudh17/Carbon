@@ -54,7 +54,9 @@ pub fn get_tint_color() -> window_vibrancy::Color {
 pub fn set_round_corners(window: &WebviewWindow) {
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE};
+        use windows::Win32::Graphics::Dwm::{
+            DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE,
+        };
 
         if let Ok(w_hwnd) = window.hwnd() {
             unsafe {
@@ -66,6 +68,34 @@ pub fn set_round_corners(window: &WebviewWindow) {
                     DWMWA_WINDOW_CORNER_PREFERENCE,
                     &preference as *const _ as *const std::ffi::c_void,
                     std::mem::size_of::<i32>() as u32,
+                );
+                // DWMWA_COLOR_NONE: suppress default Windows 11 window border
+                set_window_border_suppressed(window);
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = window;
+}
+
+/// Re-asserts DWMWA_COLOR_NONE for the DWM border.
+/// Called again immediately BEFORE any native resize: frame recalculation
+/// during SetWindowPos can otherwise let DWM paint its default (light) border
+/// for a frame on the exposed edge — the "white border" on Tab preview toggles.
+pub fn set_window_border_suppressed(window: &WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR};
+        if let Ok(w_hwnd) = window.hwnd() {
+            unsafe {
+                let hwnd = windows::Win32::Foundation::HWND(w_hwnd.0 as _);
+                // DWMWA_COLOR_NONE = 0xFFFFFFFE
+                let no_border = 0xFFFFFFFEu32;
+                let _ = DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_BORDER_COLOR,
+                    &no_border as *const _ as *const std::ffi::c_void,
+                    std::mem::size_of::<u32>() as u32,
                 );
             }
         }
@@ -200,11 +230,14 @@ pub fn init_window_vibrancy(window: &WebviewWindow, app: &AppHandle) {
 /// Sets WebView2's default pre-paint surface. Glass remains transparent so
 /// acrylic can composite desktop blur; Solid must be an opaque theme match so
 /// a cold frame is indistinguishable from the actual Solid window.
+/// Returns whether the controller accepted it — a cold-start controller that
+/// is not ready yet fails SILENTLY and Chromium's white default sticks
+/// (rare first-present flash), so callers retry (see prepare_main_surface).
 pub fn set_window_default_background(
     window: &WebviewWindow,
     material: WindowMaterial,
     theme: &str,
-) {
+) -> bool {
     #[cfg(target_os = "windows")]
     {
         use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_COLOR;
@@ -215,6 +248,8 @@ pub fn set_window_default_background(
             WindowMaterial::Solid => COREWEBVIEW2_COLOR { A: 255, R: 14, G: 14, B: 16 },
             _ => COREWEBVIEW2_COLOR { A: 0, R: 0, G: 0, B: 0 },
         };
+        let applied_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let applied_flag_inner = applied_flag.clone();
         let _ = window.with_webview(move |platform_webview| {
             use windows_core::Interface;
             use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -227,13 +262,21 @@ pub fn set_window_default_background(
                 Ok(c) => c,
                 Err(_) => return,
             };
-            unsafe {
-                let _ = controller2.SetDefaultBackgroundColor(color);
+            if unsafe { controller2.SetDefaultBackgroundColor(color).is_ok() } {
+                applied_flag_inner.store(true, std::sync::atomic::Ordering::SeqCst);
             }
         });
+        let applied = applied_flag.load(std::sync::atomic::Ordering::SeqCst);
+        if !applied {
+            crate::paste::log_diag("[VIBRANCY] default background NOT applied (controller not ready) — retry will follow.");
+        }
+        applied
     }
     #[cfg(not(target_os = "windows"))]
-    let _ = (window, material, theme);
+    {
+        let _ = (window, material, theme);
+        true
+    }
 }
 
 /// The creation callback has a Webview rather than a WebviewWindow. It uses
@@ -306,7 +349,7 @@ pub fn prewarm_first_paint(app: &AppHandle) {
             unsafe {
                 let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
             }
-            std::thread::sleep(Duration::from_millis(250));
+            std::thread::sleep(Duration::from_millis(80));
             unsafe {
                 let _ = ShowWindow(h, SW_HIDE);
             }

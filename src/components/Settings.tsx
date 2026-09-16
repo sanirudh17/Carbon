@@ -51,6 +51,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     quick_hotkey: 'Ctrl+Shift+Z',
     enlarged_hotkey: 'Ctrl+Alt+X',
     paste_plain_text: false,
+    paste_deselect_after: false,
     move_to_top_on_paste: true,
     start_with_windows: true,
     retention_days: 30,
@@ -60,7 +61,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     theme: 'dark',
     window_material: 'acrylic',
     ignore_apps: [],
-    preview_enabled: true,
+    // Legacy preview-toggle key (toggle removed; split-frame preview is permanent).
     overlay_default_tab: 'clips',
     detect_sensitive_data: false,
     clip_merge_enabled: false,
@@ -69,6 +70,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     capture_rules: [],
     snippet_expansion_enabled: false,
     show_snippets: true,
+    overlay_animation: 'soft' as 'full' | 'soft',
     dismissedUpdateVersion: '',
   });
 
@@ -413,6 +415,18 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       setSettings((prev) => ({ ...prev, show_snippets: next }));
     } catch (err) {
       console.error('Failed to toggle show_snippets:', err);
+    }
+  };
+
+  // Reversible cover-layer animation switch (set_overlay_animation command):
+  // "soft" trims the extra hide zoom/fade, "full" restores the original.
+  const handleSetOverlayAnimation = async (mode: 'full' | 'soft') => {
+    try {
+      const applied = await invoke<string>('set_overlay_animation', { mode });
+      const next = applied === 'full' ? 'full' : 'soft';
+      setSettings((prev) => ({ ...prev, overlay_animation: next }));
+    } catch (err) {
+      console.error('Failed to set overlay animation:', err);
     }
   };
 
@@ -810,6 +824,21 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               <button
                 className={`toggle ${settings.move_to_top_on_paste ? 'on' : ''}`}
                 onClick={() => updateSetting('move_to_top_on_paste', !settings.move_to_top_on_paste)}
+              >
+                <span className="knob" />
+              </button>
+            </div>
+          </div>
+
+          <div className="set-row">
+            <div className="set-label">
+              Deselect after paste (web chats)
+              <div className="set-hint">Send one Right-arrow after pasting into browser/chat inputs that leave text selected. Off by default.</div>
+            </div>
+            <div className="set-control">
+              <button
+                className={`toggle ${settings.paste_deselect_after ? 'on' : ''}`}
+                onClick={() => updateSetting('paste_deselect_after', !settings.paste_deselect_after)}
               >
                 <span className="knob" />
               </button>
@@ -1332,6 +1361,24 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
         {/* Appearance */}
         <section>
           <div className="sec-title">Appearance</div>
+          <div className="set-row">
+            <div className="set-label">
+              Reduced picker animation
+              <div className="set-hint">
+                Trims the picker&apos;s extra hide zoom/fade to match the main window. Turn off to restore the full animation.
+              </div>
+            </div>
+            <div className="set-control">
+              <button
+                className={`toggle ${(settings.overlay_animation ?? 'soft') !== 'full' ? 'on' : ''}`}
+                onClick={() =>
+                  handleSetOverlayAnimation((settings.overlay_animation ?? 'soft') === 'full' ? 'soft' : 'full')
+                }
+              >
+                <span className="knob" />
+              </button>
+            </div>
+          </div>
           <div className="set-row">
             <div className="set-label">
               Accent theme
