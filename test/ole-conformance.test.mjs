@@ -32,7 +32,6 @@ test('v30 - R6 agreed sets only, no exotic formats', () => {
   assert.ok(src.includes('CF_HDROP'), 'must offer HDROP');
   assert.ok(src.includes('wrap_in_cf_html'), 'must offer wrapped CF_HTML');
   for (const banned of [
-    'FileGroupDescriptorW',
     'FileContents',
     'CF_DIB',
     'IStream_Vtbl',
@@ -40,6 +39,16 @@ test('v30 - R6 agreed sets only, no exotic formats', () => {
     'bmp_file_bytes',
   ]) {
     assert.ok(!src.includes(banned), `R6 strictness: must not contain ${banned}`);
+  }
+  // v31-F1: FileGroupDescriptorW is REGISTERED (query signal for shell
+  // consumers) but never OFFERED — offers push only the agreed formats.
+  const pushes = [...src.matchAll(/offers\.push\(Offer \{[\s\S]*?cf_format: ([^,]+),/g)].map((m) => m[1].trim());
+  assert.ok(pushes.length > 0, 'must push offers');
+  for (const cf of pushes) {
+    assert.ok(
+      ['CF_UNICODETEXT', 'CF_TEXT', 'CF_HDROP', 'cf_html'].includes(cf),
+      `offered format must be agreed (got ${cf})`
+    );
   }
 });
 
@@ -114,9 +123,38 @@ test('v30 - conformance harness wired into CI', () => {
   for (const r of ['r1_enumeration_contract', 'r2_query_matrix', 'r2_qi_contract',
     'r3_r4_medium_ownership_and_terminators', 'r3_getdata_here_fills_caller_medium',
     'r5_cf_html_wellformed', 'r6_offer_sets_per_type', 'r6_image_hdrop_and_path',
-    'r6_file_hdrop_live_only', 'r7_graveyard_sweep', 'r8_drop_source_contract']) {
+    'r6_file_hdrop_live_only', 'r7_graveyard_sweep', 'r8_drop_source_contract', 'f1_text_gate_refusal', 'f2_html_validator']) {
     assert.ok(src.includes(`fn ${r}()`), `harness must drive ${r}`);
   }
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'));
   assert.ok(pkg.scripts['test:rust'], 'CI must expose the Rust harness (npm run test:rust)');
+});
+
+/**
+ * ADDENDUM v31: query-gated text (S1 double-insert) + web text reliability.
+ * Static pins; the refusal/validator/settle behavior is proven in-process
+ * (cargo test: f1_text_gate_refusal, f2_html_validator).
+ */
+
+test('v31-F1 - query-history text gate for image/file drags', () => {
+  const src = fs.readFileSync(path.join(SRC_TAURI_DIR, 'native_drag.rs'), 'utf8');
+  assert.ok(src.includes('queried:'), 'per-drag queried set must exist');
+  assert.ok(src.includes('note_queried'), 'queries must be recorded');
+  assert.ok(src.includes('file_capable_consumer'), 'file-capable detection must exist');
+  assert.ok(src.includes('Chromium Web Custom MIME Data Format'), 'chromium signal must be registered');
+  assert.ok(src.includes('REFUSED'), 'refusals must be logged');
+  assert.ok(src.includes('GetAsyncKeyState'), 'Shift hatch must read real key state');
+  assert.ok(src.includes('F1.4'), 'escape hatch must be documented');
+  assert.ok(src.includes('gate_text'), 'gate must apply to image/file objects');
+});
+
+test('v31-F2 - web text reliability (offers + validator + settle)', () => {
+  const src = fs.readFileSync(path.join(SRC_TAURI_DIR, 'native_drag.rs'), 'utf8');
+  assert.ok(src.includes('validate_cf_html_payload'), 'R5 validator must exist');
+  assert.ok(src.includes('F2.2'), 'validate-or-omit must be documented');
+  const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'paste.rs'), 'utf8');
+  assert.ok(rs.includes('stability frames') || rs.includes('stable='), 'two-frame stability gate must exist');
+  assert.ok(rs.includes('retry 1/1'), 'exactly one retry must exist');
+  assert.ok(rs.includes('clipboard unchanged'), 'retry must not rewrite the clipboard');
+  assert.ok(rs.includes('settling') || rs.includes('settle'), 'settle time must be logged');
 });

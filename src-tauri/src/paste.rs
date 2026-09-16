@@ -1017,10 +1017,25 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform) -> Result<(), Stri
                 thread::sleep(Duration::from_millis(15));
             }
 
-            let settle_ms = if focus_confirmed { 40 } else { 80 };
+            // v31-F2.3: stability frames — GetForegroundWindow must read
+            // identical twice in a row before injection (a focus still in
+            // flight eats the keystroke in SPA composers).
+            let mut last_fg = unsafe { GetForegroundWindow() };
+            let mut stable = false;
+            for _ in 0..6 {
+                thread::sleep(Duration::from_millis(15));
+                let fg = unsafe { GetForegroundWindow() };
+                if fg.0 as usize == last_fg.0 as usize {
+                    stable = true;
+                    break;
+                }
+                last_fg = fg;
+            }
+            // Bounded 50-100ms focus-settle delay (50 fast path confirmed).
+            let settle_ms = if focus_confirmed { 50 } else { 100 };
             log_diag(&format!(
-                "[PASTE_THREAD] Settling {}ms before injection (confirmed={})...",
-                settle_ms, focus_confirmed
+                "[PASTE_THREAD] target=0x{:X} stable={} settling {}ms before injection...",
+                hwnd_val, stable, settle_ms
             ));
             thread::sleep(Duration::from_millis(settle_ms));
         } else {
@@ -1035,8 +1050,10 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform) -> Result<(), Stri
             "[PASTE_THREAD] send-time foreground hwnd={:?} (target=0x{:X?})",
             fg_at_send.0 as usize, target_hwnd
         ));
+        let mut send_mismatch = false;
         if let Some(want) = target_hwnd {
             if fg_at_send.0 as isize != want {
+                send_mismatch = true;
                 log_diag(&format!(
                     "[PASTE_THREAD] VIOLATION: foreground mismatch at send time — want 0x{:X?}, have {} (proceeding best-effort)",
                     want,
@@ -1046,6 +1063,25 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform) -> Result<(), Stri
         }
         // Inject Ctrl+V into focused control
         inject_ctrl_v();
+
+        // v31-F2.3: retry ONCE on the mismatch signal. The clipboard
+        // sequence is untouched (no rewrite — 250ms+ old by now); only a
+        // bounded re-focus plus a second inject.
+        if send_mismatch {
+            log_diag("[PASTE_THREAD] retry 1/1 after mismatch: re-focusing...");
+            thread::sleep(Duration::from_millis(100));
+            if let Some(hwnd_val) = target_hwnd {
+                let target = HWND(hwnd_val as *mut _);
+                for _ in 0..3 {
+                    if try_bring_to_foreground(target) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
+            }
+            inject_ctrl_v();
+            log_diag("[PASTE_THREAD] retry 1/1 injected (clipboard unchanged).");
+        }
 
         // Critical section ends here: clipboard content + keystrokes are
         // delivered. Release the guard BEFORE the deselect tail so a fast

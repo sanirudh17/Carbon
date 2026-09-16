@@ -47,6 +47,7 @@ use std::{
 };
 
 use tauri::{AppHandle, State};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_SHIFT};
 use windows::{
     core::{GUID, HRESULT, IUnknown, IUnknown_Vtbl, Interface, PCWSTR},
     Win32::{
@@ -286,13 +287,44 @@ fn sweep_stale_staging() {
     }
 }
 
+/// v31-F2.2: structural CF_HTML validation (same checks as the R5 harness
+/// parse). Rich clips offer HTML only when the wrapped payload passes;
+/// otherwise it is omitted silently — a malformed header is why web zones
+/// ignore drops (R5).
+fn validate_cf_html_payload(payload: &[u8]) -> bool {
+    if payload.last() != Some(&0) {
+        return false;
+    }
+    let text = match std::str::from_utf8(&payload[..payload.len() - 1]) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    let num = |k: &str| -> Option<usize> {
+        text.lines()
+            .find(|l| l.starts_with(k))
+            .and_then(|l| l[k.len()..].trim().parse().ok())
+    };
+    let (sh, eh, sf, ef) = match (num("StartHTML:"), num("EndHTML:"), num("StartFragment:"), num("EndFragment:")) {
+        (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
+        _ => return false,
+    };
+    let raw = text.as_bytes();
+    if !(sh < sf && sf < ef && ef <= eh && eh <= raw.len()) {
+        return false;
+    }
+    std::str::from_utf8(&raw[sf..ef]).is_ok()
+}
+
 /// R6: the agreed format set per clip type — and nothing else. Returns the
 /// offers plus the staging guard (kept alive through DoDragDrop).
 fn build_offers(item: &crate::db::ClipItem, cf_html: u32) -> (Vec<Offer>, Option<StagedDrag>) {
     let mut offers = Vec::new();
     let kind = item.content_type.as_str();
 
-    // Text-like clips: UNICODETEXT (+TEXT), +HTML whenever HTML is stored.
+    // Text-like clips: UNICODETEXT (+TEXT). v31-F2.1: text/code/link offer
+    // NO HTML — web zones map unicode to text/plain and HTML only invites
+    // misparses. Email keeps HTML when stored (mail acceptance); rich_text
+    // offers HTML only when it passes the R5 validator (F2.2).
     if matches!(kind, "text" | "code" | "link" | "email" | "rich_text") {
         let text = item.text_content.clone().unwrap_or_else(|| item.title.clone());
         offers.push(Offer {
@@ -307,28 +339,41 @@ fn build_offers(item: &crate::db::ClipItem, cf_html: u32) -> (Vec<Offer>, Option
             lindex: -1,
             data: OfferData::Global(text.bytes().chain(std::iter::once(0)).collect()),
         });
-        if kind == "link" {
-            offers.push(Offer {
-                cf_format: cf_html,
-                tymed: TYMED_HGLOBAL.0 as u32,
-                lindex: -1,
-                data: OfferData::Global(
-                    crate::paste::wrap_in_cf_html(&format!("<a href=\"{text}\">{text}</a>"))
-                        .into_bytes(),
-                ),
-            });
-        } else if let Some(ref html) = item.html_content {
-            let cf = if html.starts_with("Version:") {
-                html.clone()
-            } else {
-                crate::paste::wrap_in_cf_html(html)
-            };
-            offers.push(Offer {
-                cf_format: cf_html,
-                tymed: TYMED_HGLOBAL.0 as u32,
-                lindex: -1,
-                data: OfferData::Global(cf.into_bytes()),
-            });
+        if kind == "email" {
+            if let Some(ref html) = item.html_content {
+                let cf = if html.starts_with("Version:") {
+                    html.clone()
+                } else {
+                    crate::paste::wrap_in_cf_html(html)
+                };
+                offers.push(Offer {
+                    cf_format: cf_html,
+                    tymed: TYMED_HGLOBAL.0 as u32,
+                    lindex: -1,
+                    data: OfferData::Global(cf.into_bytes()),
+                });
+            }
+        } else if kind == "rich_text" {
+            if let Some(ref html) = item.html_content {
+                let cf = if html.starts_with("Version:") {
+                    html.clone()
+                } else {
+                    crate::paste::wrap_in_cf_html(html)
+                };
+                if validate_cf_html_payload(cf.as_bytes()) {
+                    offers.push(Offer {
+                        cf_format: cf_html,
+                        tymed: TYMED_HGLOBAL.0 as u32,
+                        lindex: -1,
+                        data: OfferData::Global(cf.into_bytes()),
+                    });
+                } else {
+                    drag_log(&format!(
+                        "[NATIVE_DRAG] rich CF_HTML failed validation for id='{}' — omitted (F2.2)",
+                        item.id
+                    ));
+                }
+            }
         }
         return (offers, None);
     }
@@ -633,6 +678,16 @@ struct ClipDataObject {
     vtbl: *const IDataObject_Vtbl,
     refs: AtomicU32,
     offers: Vec<Offer>,
+    /// v31-F1: per-drag queried-format history (cfFormat values). Web /
+    /// shell consumers announce themselves by querying file-capable
+    /// formats first (CF_HTML, Chromium custom MIME, FileGroupDescriptorW).
+    queried: Mutex<std::collections::HashSet<u16>>,
+    /// v31-F1: true for image/file clips — their text payload is gated.
+    gate_text: bool,
+    /// Dynamic ids for the gate signals (registered per drag session).
+    cf_html: u32,
+    cf_chromium_mime: u32,
+    cf_file_group: u32,
 }
 
 com_unknown!(ClipDataObject, data_qi, data_add, data_rel, [IDataObject::IID]);
@@ -654,6 +709,34 @@ impl ClipDataObject {
         self.offers
             .iter()
             .any(|o| o.cf_format as u16 == fmt.cfFormat && o.lindex == fmt.lindex)
+    }
+
+    /// v31-F1: record a query in the per-drag history (best-effort).
+    fn note_queried(&self, cf: u16) {
+        if let Ok(mut q) = self.queried.lock() {
+            q.insert(cf);
+        }
+    }
+
+    /// v31-F1.2: a file-capable consumer announced itself when the history
+    /// already holds CF_HTML, the Chromium custom MIME format, or
+    /// FileGroupDescriptorW. Such targets consume HDROP and derive/attach
+    /// files — handing them path text double-inserts (S1).
+    fn file_capable_consumer(&self) -> bool {
+        match self.queried.lock() {
+            Err(_) => false,
+            Ok(q) => {
+                q.contains(&(self.cf_html as u16))
+                    || q.contains(&(self.cf_chromium_mime as u16))
+                    || q.contains(&(self.cf_file_group as u16))
+            }
+        }
+    }
+
+    /// v31-F1.4 escape hatch: Shift physically held forces the text
+    /// payload even for file-capable targets.
+    fn shift_forces_text() -> bool {
+        unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) < 0 }
     }
 
     fn list_kinds(&self) -> String {
@@ -689,6 +772,28 @@ unsafe extern "system" fn data_getdata(
         } else {
             let o = ClipDataObject::this(this);
             let fmt = &*pformatetcin;
+            o.note_queried(fmt.cfFormat);
+            // v31-F1.2: gated text refusal for image/file clips facing a
+            // file-capable consumer. Text-only targets and consoles never
+            // trigger the gate (F1.3): they query text first or derive the
+            // path from HDROP without touching CF_HTML.
+            if o.gate_text
+                && (fmt.cfFormat as u32 == CF_UNICODETEXT || fmt.cfFormat as u32 == CF_TEXT)
+                && o.file_capable_consumer()
+            {
+                if ClipDataObject::shift_forces_text() {
+                    drag_log(&format!(
+                        "[NATIVE_DRAG] GetData text FORCED by Shift hatch cf={} (gate bypassed, F1.4)",
+                        fmt.cfFormat
+                    ));
+                } else {
+                    drag_log(&format!(
+                        "[NATIVE_DRAG] GetData text REFUSED cf={} (query-history gate F1.2: consumer takes files)",
+                        fmt.cfFormat
+                    ));
+                    return DV_E_FORMATETC;
+                }
+            }
             match o.find(fmt) {
                 Some(offer) => match fill_medium(offer) {
                     Ok(medium) => {
@@ -776,6 +881,7 @@ unsafe extern "system" fn data_query(
         } else {
             let o = ClipDataObject::this(this);
             let fmt = &*pformatetc;
+            o.note_queried(fmt.cfFormat);
             let hr = if o.find(fmt).is_some() {
                 S_OK
             } else if o.find_format_only(fmt) {
@@ -876,11 +982,22 @@ static DATAOBJECT_VTBL: IDataObject_Vtbl = IDataObject_Vtbl {
     EnumDAdvise: data_notimpl_0out,
 };
 
-fn new_data_object(offers: Vec<Offer>) -> IDataObject {
+fn new_data_object(
+    offers: Vec<Offer>,
+    gate_text: bool,
+    cf_html: u32,
+    cf_chromium_mime: u32,
+    cf_file_group: u32,
+) -> IDataObject {
     let boxed = Box::new(ClipDataObject {
         vtbl: &DATAOBJECT_VTBL,
         refs: AtomicU32::new(1),
         offers,
+        queried: Mutex::new(std::collections::HashSet::new()),
+        gate_text,
+        cf_html,
+        cf_chromium_mime,
+        cf_file_group,
     });
     unsafe { IDataObject::from_raw(Box::into_raw(boxed) as *mut std::ffi::c_void) }
 }
@@ -944,7 +1061,11 @@ fn begin_clip_drag_inner(
         .ok_or_else(|| format!("clip not found: {id}"))?;
 
     let cf_html = register_format("HTML Format");
+    let cf_chromium_mime = register_format("Chromium Web Custom MIME Data Format");
+    let cf_file_group = register_format("FileGroupDescriptorW");
     let (offers, staged) = build_offers(&item, cf_html);
+    // v31-F1: text gating applies to image/file clips (HDROP carriers).
+    let gate_text = matches!(item.content_type.as_str(), "image" | "file");
     drag_log(&format!(
         "[NATIVE_DRAG] begin id='{}' type='{}' offering {} formats: {} (staged={})",
         item.id,
@@ -966,7 +1087,7 @@ fn begin_clip_drag_inner(
         // Contain OUR panics: unwinding through the wry event loop would
         // abort the process. COM callbacks carry their own per-entry guards.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-            run_modal_drag(offers, staged)
+            run_modal_drag(offers, staged, gate_text, cf_html, cf_chromium_mime, cf_file_group)
         }));
         let outcome = match result {
             Ok(r) => r,
@@ -1002,6 +1123,10 @@ fn begin_clip_drag_inner(
 unsafe fn run_modal_drag(
     offers: Vec<Offer>,
     staged: Option<StagedDrag>,
+    gate_text: bool,
+    cf_html: u32,
+    cf_chromium_mime: u32,
+    cf_file_group: u32,
 ) -> std::result::Result<String, String> {
     unsafe {
         drag_log("[NATIVE_DRAG] handler entered on main STA thread");
@@ -1025,7 +1150,7 @@ unsafe fn run_modal_drag(
         let _guard = OleGuard;
         // Keep the temp staging alive for the whole modal loop.
         let _staged = staged;
-        let dataobj = new_data_object(offers);
+        let dataobj = new_data_object(offers, gate_text, cf_html, cf_chromium_mime, cf_file_group);
         let source = new_drop_source();
         // COPY-only: supported targets always report COPY, so the
         // circle-slash cursor is unreachable for them.
@@ -1123,9 +1248,12 @@ mod conformance_tests {
 
     fn test_object(item: &ClipItem) -> IDataObject {
         let cf_html = register_format("HTML Format");
+        let cf_chromium_mime = register_format("Chromium Web Custom MIME Data Format");
+        let cf_file_group = register_format("FileGroupDescriptorW");
         let (offers, _staged) = build_offers(item, cf_html);
         assert!(!offers.is_empty(), "R6: every clip type must offer something");
-        new_data_object(offers)
+        let gate_text = matches!(item.content_type.as_str(), "image" | "file");
+        new_data_object(offers, gate_text, cf_html, cf_chromium_mime, cf_file_group)
     }
 
     fn read_hglobal(h: HGLOBAL) -> Vec<u8> {
@@ -1152,29 +1280,62 @@ mod conformance_tests {
         String::from_utf16_lossy(&words[..words.len() - 1])
     }
 
-    // R6: agreed format sets per clip type (and nothing else).
+    // R6 + v31-F2.1/F2.2: text/code/link offer unicode+text ONLY (no HTML);
+    // email keeps HTML when stored; rich validates-or-omits.
     #[test]
     fn r6_offer_sets_per_type() {
         let cf_html = register_format("HTML Format");
-        for kind in ["text", "code", "link", "email"] {
+        for kind in ["text", "code", "link"] {
             let mut item = clip(kind);
-            if kind == "email" {
-                item.html_content = Some("<p>hi</p>".to_string());
-            }
+            item.html_content = Some("<p>ignored</p>".to_string());
             let (offers, _) = build_offers(&item, cf_html);
             let cfs: Vec<u32> = offers.iter().map(|o| o.cf_format).collect();
+            assert_eq!(cfs.len(), 2, "F2.1: {kind} offers exactly unicode+text");
             assert!(cfs.contains(&CF_UNICODETEXT), "R6: {kind} offers UNICODETEXT");
             assert!(cfs.contains(&CF_TEXT), "R6: {kind} offers TEXT");
-            // Email-with-HTML and links always carry their HTML flavor.
-            let want_html = kind == "email" || kind == "link";
-            assert_eq!(cfs.contains(&cf_html), want_html, "R6: {kind} html membership");
-            let want_len = if want_html { 3 } else { 2 };
-            assert_eq!(cfs.len(), want_len, "R6: {kind} offers exactly the agreed set");
+            assert!(!cfs.contains(&cf_html), "F2.1: {kind} must not offer HTML");
             assert!(offers.iter().all(|o| o.tymed == HGLOBAL_TYMED), "R6: text mediums are HGLOBAL");
         }
-        // Email without HTML: no CF_HTML, still unicode+text.
+        // Email with HTML keeps the trio (mail acceptance).
+        let mut email = clip("email");
+        email.html_content = Some("<p>hi</p>".to_string());
+        let (offers, _) = build_offers(&email, cf_html);
+        let cfs: Vec<u32> = offers.iter().map(|o| o.cf_format).collect();
+        assert_eq!(cfs.len(), 3, "R6: email+html offers the trio");
+        assert!(cfs.contains(&cf_html), "R6: email+html offers CF_HTML");
+        // Email without HTML: unicode+text.
         let (offers, _) = build_offers(&clip("email"), cf_html);
         assert_eq!(offers.len(), 2, "R6: htmlless email offers exactly unicode+text");
+        // Rich with valid HTML: trio. Rich with broken HTML: duo, silent.
+        let mut rich = clip("rich_text");
+        rich.html_content = Some("<p>fine</p>".to_string());
+        let (offers, _) = build_offers(&rich, cf_html);
+        assert_eq!(
+            offers.iter().map(|o| o.cf_format).filter(|c| *c == cf_html).count(),
+            1,
+            "F2.2: valid rich HTML is offered"
+        );
+        let mut broken = clip("rich_text");
+        // Pre-wrapped but malformed payloads pass through unwrapped, so
+        // the validator (not the wrapper) is what saves the drop.
+        broken.html_content = Some("Version:0.9\r\nStartHTML:10\r\nEndHTML:5\r\nStartFragment:2\r\nEndFragment:3\r\n\0".to_string());
+        let (offers, _) = build_offers(&broken, cf_html);
+        assert!(
+            !offers.iter().any(|o| o.cf_format == cf_html),
+            "F2.2: malformed rich HTML must be omitted silently"
+        );
+        assert_eq!(offers.len(), 2, "F2.2: omitted rich still offers unicode+text");
+    }
+
+    // v31-F2.2: validator accepts well-formed, rejects malformed.
+    #[test]
+    fn f2_html_validator() {
+        let good = crate::paste::wrap_in_cf_html("<p>héllo</p>");
+        assert!(validate_cf_html_payload(good.as_bytes()), "F2.2: wrapped HTML must validate");
+        assert!(!validate_cf_html_payload(b"Version:0.9\r\nno-offsets\r\n"), "F2.2: missing fields rejected");
+        assert!(!validate_cf_html_payload(b"Version:0.9\r\nStartHTML:10\r\nEndHTML:5\r\nStartFragment:2\r\nEndFragment:3\r\n"), "F2.2: inverted offsets rejected");
+        assert!(!validate_cf_html_payload(b"not-utf8-\xff\xfe"), "F2.2: non-UTF8 rejected");
+        assert!(!validate_cf_html_payload(b"Version:0.9\r\nStartHTML:0\r\nEndHTML:10\r\nStartFragment:0\r\nEndFragment:10\r\nno-nul"), "F2.2: missing NUL rejected");
     }
 
     // R1: enumeration is exact, repeatable, DATADIR_GET-only, independently owned.
@@ -1383,7 +1544,13 @@ mod conformance_tests {
         assert_eq!(cfs.len(), 2, "R6: image offers exactly the agreed pair");
         let staged = staged.expect("R6: image drag stages a temp copy");
         assert!(staged.dir.starts_with(std::env::temp_dir()), "R7: staging lives in temp");
-        let obj = new_data_object(offers);
+        let obj = new_data_object(
+            offers,
+            true,
+            register_format("HTML Format"),
+            register_format("Chromium Web Custom MIME Data Format"),
+            register_format("FileGroupDescriptorW"),
+        );
         unsafe {
             let med = obj
                 .GetData(&fmtetc(CF_HDROP, HGLOBAL_TYMED, -1))
@@ -1497,6 +1664,69 @@ mod conformance_tests {
                 "R8: feedback is effect-independent"
             );
         }
+    }
+
+    // v31-F1: query-history gate refuses text to file-capable consumers,
+    // serves it to text-first targets (consoles/Notepad, F1.3).
+    #[test]
+    fn f1_text_gate_refusal() {
+        let dir = std::env::temp_dir();
+        let src = dir.join(format!("carbon-v31-gate-{}.png", std::process::id()));
+        std::fs::write(&src, b"x").expect("F1: fixture must stage");
+        let mut item = clip("image");
+        item.image_path = Some(src.to_string_lossy().into_owned());
+        let cf_html = register_format("HTML Format");
+        let cf_chromium = register_format("Chromium Web Custom MIME Data Format");
+        let cf_group = register_format("FileGroupDescriptorW");
+        let mk = || {
+            let (offers, staged) = build_offers(&item, cf_html);
+            let obj = new_data_object(offers, true, cf_html, cf_chromium, cf_group);
+            (obj, staged)
+        };
+        unsafe {
+            // No web signals yet: text served (F1.3 consoles/Notepad).
+            let (obj, staged) = mk();
+            let med = obj
+                .GetData(&fmtetc(CF_UNICODETEXT, HGLOBAL_TYMED, -1))
+                .expect("F1.3: text-first target must be served");
+            let mut med = med;
+            ReleaseStgMedium(&mut med);
+            if let Some(s) = staged {
+                std::fs::remove_dir_all(&s.dir).ok();
+            }
+            // Web consumer announces via CF_HTML (query fails — unoffered —
+            // but the announcement is recorded), then wants text: refused.
+            let (obj2, staged2) = mk();
+            assert_eq!(obj2.QueryGetData(&fmtetc(cf_html, HGLOBAL_TYMED, -1)), DV_E_FORMATETC);
+            let err = obj2
+                .GetData(&fmtetc(CF_UNICODETEXT, HGLOBAL_TYMED, -1))
+                .err()
+                .expect("F1.2: gated text must fail");
+            assert_eq!(err.code(), DV_E_FORMATETC, "F1.2: refusal must be DV_E_FORMATETC");
+            if let Some(s) = staged2 {
+                std::fs::remove_dir_all(&s.dir).ok();
+            }
+            // Shell signal (FileGroupDescriptorW) gates the same way.
+            let (obj3, staged3) = mk();
+            assert_eq!(obj3.QueryGetData(&fmtetc(cf_group, HGLOBAL_TYMED, -1)), DV_E_FORMATETC);
+            let err = obj3
+                .GetData(&fmtetc(CF_UNICODETEXT, HGLOBAL_TYMED, -1))
+                .err()
+                .expect("F1.2: shell-signalled text must fail");
+            assert_eq!(err.code(), DV_E_FORMATETC, "F1.2: shell refusal must be DV_E_FORMATETC");
+            if let Some(s) = staged3 {
+                std::fs::remove_dir_all(&s.dir).ok();
+            }
+            // Text-like clips never gate, even after HTML queries (F1.3).
+            let tobj = test_object(&clip("text"));
+            assert_eq!(tobj.QueryGetData(&fmtetc(cf_html, HGLOBAL_TYMED, -1)), DV_E_FORMATETC);
+            let med = tobj
+                .GetData(&fmtetc(CF_UNICODETEXT, HGLOBAL_TYMED, -1))
+                .expect("F1.3: text clips always serve text");
+            let mut med = med;
+            ReleaseStgMedium(&mut med);
+        }
+        std::fs::remove_file(&src).ok();
     }
 
     // R7: graveyard sweep reclaims dead staging dirs at next drag start.
