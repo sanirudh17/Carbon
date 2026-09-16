@@ -3696,9 +3696,11 @@ section:last-child {
   background: color-mix(in srgb, var(--accent) 4%, transparent);
 }
 
-/* Drag-and-Drop Styles */
+/* Drag-and-Drop Styles: COPY-only drags show the copy cursor (arrow+plus),
+   never a grab hand — Blink reuses the source cursor as drag feedback, and
+   a hand over small inputs reads as broken/blocks the drop affordance. */
 .row[draggable='true'] {
-  cursor: grab;
+  cursor: copy;
 }
 
 .row.is-dragging {
@@ -3715,7 +3717,7 @@ section:last-child {
   opacity: 0;
   transition: opacity 120ms ease;
   margin-right: 4px;
-  cursor: grab;
+  cursor: copy;
 }
 
 .row:hover .drag-handle {

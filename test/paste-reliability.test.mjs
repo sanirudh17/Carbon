@@ -135,3 +135,9 @@ test('paste deselect - browser-gated collapse exists and is scoped', () => {
     'snippet path must stay untouched'
   );
 });
+
+test('paste deselect - double-tap covers async editor selection', () => {
+  const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'paste.rs'), 'utf8');
+  assert.ok(rs.includes('tap 1/2'), 'first collapse tap must be logged');
+  assert.ok(rs.includes('tap 2/2'), 'second async-cover tap must be logged');
+});

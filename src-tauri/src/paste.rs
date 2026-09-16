@@ -2220,10 +2220,12 @@ const DESELECT_BROWSERS: &[&str] = &[
 ];
 
 /// If the foreground window is a known browser, collapse any selection the
-/// just-injected paste left behind. Waits briefly so the app processes
-/// Ctrl+V first; logs the decision either way for traceability.
+/// just-injected paste left behind. Two taps: the first catches synchronous
+/// inserts, the second (~350ms) catches editors that apply selection
+/// asynchronously via framework renders. Each tap is a caret no-op at an
+/// unselected end-of-input; logs the decision either way for traceability.
 fn collapse_pasted_selection() {
-    thread::sleep(Duration::from_millis(60));
+    thread::sleep(Duration::from_millis(80));
     let exe = unsafe {
         get_window_exe_name(GetForegroundWindow())
             .unwrap_or_default()
@@ -2231,7 +2233,12 @@ fn collapse_pasted_selection() {
     };
     if DESELECT_BROWSERS.iter().any(|b| exe == *b) {
         log_diag(&format!(
-            "[DESELECT] browser target '{exe}' — collapsing post-paste selection"
+            "[DESELECT] browser target '{exe}' — collapsing post-paste selection (tap 1/2)"
+        ));
+        inject_right_arrow();
+        thread::sleep(Duration::from_millis(270));
+        log_diag(&format!(
+            "[DESELECT] browser target '{exe}' — second tap for async editors (tap 2/2)"
         ));
         inject_right_arrow();
     } else {

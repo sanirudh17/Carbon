@@ -130,3 +130,15 @@ test('drag-guard - backend suppresses hide for ANY in-flight drag', () => {
   assert.ok(rs.includes('DRAG_ACTIVE'), 'unified in-flight flag must exist');
   assert.ok(!rs.includes('OS_DRAG_ACTIVE'), 'old OS-only flag must be gone');
 });
+
+test('drag-cursor - drag surfaces show copy cursor, never a grab hand', () => {
+  const css = fs.readFileSync(path.join(SRC_DIR, 'index.css'), 'utf8');
+  // Blink reuses the source cursor as drag feedback: a grab hand over
+  // small inputs masks the drop affordance and reads as broken.
+  const rowRule = css.match(/\.row\[draggable='true'\]\s*\{[^}]*\}/);
+  assert.ok(rowRule, 'row drag rule must exist');
+  assert.ok(rowRule[0].includes('cursor: copy'), 'draggable rows must show the copy cursor');
+  assert.ok(!rowRule[0].includes('grab'), 'draggable rows must not show a grab hand');
+  const handleRule = css.match(/\.drag-handle\s*\{[^}]*\}/);
+  assert.ok(handleRule && handleRule[0].includes('cursor: copy'), 'drag handle must show copy');
+});
