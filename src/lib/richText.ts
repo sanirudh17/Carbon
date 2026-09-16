@@ -34,15 +34,23 @@ export function extractFragment(html: string): string {
     return cleanStr.slice(s + startMarker.length, e).trim();
   }
 
-  // Try parsing StartFragment: / EndFragment: offsets
+  // Try parsing StartFragment: / EndFragment: byte offsets. CF_HTML
+  // offsets are BYTES from the payload start — slicing the UTF-16 JS
+  // string corrupts every non-ASCII fragment, so encode and slice bytes.
+  // (Offsets are relative to the raw payload, hence no pre-trim here.)
   const startMatch = cleanStr.match(/StartFragment:(\d+)/i);
   const endMatch = cleanStr.match(/EndFragment:(\d+)/i);
   if (startMatch && endMatch) {
     const startOffset = parseInt(startMatch[1], 10);
     const endOffset = parseInt(endMatch[1], 10);
-    if (!isNaN(startOffset) && !isNaN(endOffset) && endOffset > startOffset && endOffset <= cleanStr.length) {
-      const slice = cleanStr.slice(startOffset, endOffset).trim();
-      if (slice) return slice;
+    if (!isNaN(startOffset) && !isNaN(endOffset) && endOffset > startOffset) {
+      try {
+        const bytes = new TextEncoder().encode((html || '').replace(/\0/g, ''));
+        if (endOffset <= bytes.length) {
+          const slice = new TextDecoder().decode(bytes.slice(startOffset, endOffset)).trim();
+          if (slice) return slice;
+        }
+      } catch { /* fall through to body fallback */ }
     }
   }
 
@@ -74,7 +82,10 @@ export function cssColorLuminance(color: string): number | null {
   const c = color.trim().toLowerCase();
   const named: Record<string, string> = {
     black: '#000000', white: '#ffffff', dimgray: '#696969', gray: '#808080',
-    darkgray: '#a9a9a9', lightgray: '#d3d3d3', gainsboro: '#dcdcdc', red: '#ff0000',
+    darkgray: '#a9a9a9', lightgray: '#d3d3d3', gainsboro: '#dcdcdc', silver: '#c0c0c0',
+    red: '#ff0000', maroon: '#800000', orange: '#ffa500', yellow: '#ffff00', olive: '#808000',
+    lime: '#00ff00', green: '#008000', aqua: '#00ffff', teal: '#008080', blue: '#0000ff',
+    navy: '#000080', fuchsia: '#ff00ff', purple: '#800080',
   };
   let r = -1, g = -1, b = -1;
   const hex = named[c] || (/^#[0-9a-f]{3,8}$/.test(c) ? c : null);
@@ -87,6 +98,24 @@ export function cssColorLuminance(color: string): number | null {
   } else {
     const m = c.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/);
     if (m) { r = Number(m[1]); g = Number(m[2]); b = Number(m[3]); }
+    else {
+      // hsl()/hsla() (comma or space separated): convert to sRGB.
+      const hm = c.match(/^hsla?\(\s*([\d.]+)(deg|rad|grad|turn)?\s*[,\s]+\s*([\d.]+)%\s*[,\s]+\s*([\d.]+)%/);
+      if (hm) {
+        let h = Number(hm[1]);
+        const unit = hm[2] || 'deg';
+        if (unit === 'rad') h = (h * 180) / Math.PI;
+        else if (unit === 'grad') h = h * 0.9;
+        else if (unit === 'turn') h = h * 360;
+        h = ((h % 360) + 360) % 360;
+        const s = Math.min(1, Math.max(0, Number(hm[3]) / 100));
+        const l = Math.min(1, Math.max(0, Number(hm[4]) / 100));
+        const k = (n: number) => (n + h / 30) % 12;
+        const a = s * Math.min(l, 1 - l);
+        const f2 = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+        r = Math.round(f2(0) * 255); g = Math.round(f2(8) * 255); b = Math.round(f2(4) * 255);
+      }
+    }
   }
   if (r < 0 || g < 0 || b < 0 || r > 255 || g > 255 || b > 255) return null;
   const f = (v: number) => {
@@ -201,6 +230,27 @@ export function sanitizeRichHtml(html: string): string {
               (child as HTMLElement).style.margin = '8px 0';
             }
           }
+        }
+        // Legacy color attributes (<font color>, bgcolor) still render as
+        // engine presentation hints but are invisible to the contrast model
+        // (B1 loss point: model said "inherited ink", engine showed the
+        // attribute color). Fold them into inline style — single source of
+        // truth for engine and model — then drop the attribute.
+        const fontColor = tag === 'font' ? (child.getAttribute('color') || '').trim() : '';
+        if (fontColor) {
+          const existing = child.getAttribute('style') || '';
+          if (!/(^|;)\s*color\s*:/i.test(`;${existing};`)) {
+            child.setAttribute('style', `color: ${fontColor};${existing ? ` ${existing}` : ''}`);
+          }
+          child.removeAttribute('color');
+        }
+        const bgAttrColor = (child.getAttribute('bgcolor') || '').trim();
+        if (bgAttrColor) {
+          const existingBg = child.getAttribute('style') || '';
+          if (!/(^|;)\s*background(?:-color)?\s*:/i.test(`;${existingBg};`)) {
+            child.setAttribute('style', `background-color: ${bgAttrColor};${existingBg ? ` ${existingBg}` : ''}`);
+          }
+          child.removeAttribute('bgcolor');
         }
         // Keep the original background for genuine rich captures (e.g., a
         // website's white question card). Stripping it was hiding the
@@ -369,7 +419,7 @@ const CONTRAST_FALLBACKS = ['#111827', '#f5f5f5'];
 
 /** First color token of a shorthand value (background: <color> <image>…). */
 function firstColorToken(value: string): string | null {
-  const m = value.match(/#[0-9a-f]{3,8}\b|rgba?\([^)]*\)/i);
+  const m = value.match(/#[0-9a-f]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)/i);
   if (m) return m[0];
   const words = value.split(/[\s,()]+/);
   for (const w of words) {
@@ -435,10 +485,17 @@ export function enforceRichContrast(root: Element, card: RichCardTheme): number 
   let overrides = 0;
   const visit = (el: Element, inhFg: string, nearBg: string): void => {
     const styleAttr = el.getAttribute('style') || '';
-    const ownFg = parseInlineColor(inlineDecl(styleAttr, 'color')) ?? inhFg;
+    // Attribute backstop: sanitize folds color/bgcolor into style, but
+    // fragments arriving via other paths (markdown, tests) may still carry
+    // them — the engine renders them, so the model must see them too.
+    const ownFg =
+      parseInlineColor(inlineDecl(styleAttr, 'color')) ??
+      parseInlineColor(el.getAttribute('color')) ??
+      inhFg;
     const ownBg =
       parseInlineBackground(inlineDecl(styleAttr, 'background-color')) ??
       parseInlineBackground(inlineDecl(styleAttr, 'background')) ??
+      parseInlineBackground(el.getAttribute('bgcolor')) ??
       nearBg;
     let effFg = ownFg;
     const ratio = contrastRatio(ownFg, ownBg);

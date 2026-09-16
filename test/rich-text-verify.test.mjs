@@ -38,12 +38,16 @@ test('RichText VERIFY - preview card forces a light document surface', () => {
 
 test('RichText VERIFY - preview pairs clear AA (4.5:1)', () => {
   const css = fs.readFileSync(path.join(SRC_DIR, 'index.css'), 'utf8');
+  // v29-B: code/pre/quote inherit the card ink (author inline colors pass
+  // through, colorless text takes body ink) — pairs are computed against
+  // the inherited ink, not a forced element color.
   const pairs = [
     ['body ink', '#1f2937', '#ffffff'],
-    ['code block', '#111827', '#f3f4f6'],
-    ['pre block', '#111827', '#f9fafb'],
+    ['code block (inherited ink)', '#1f2937', '#f3f4f6'],
+    ['pre block (inherited ink)', '#1f2937', '#f9fafb'],
     ['link', '#1d4ed8', '#ffffff'],
-    ['blockquote', '#4b5563', '#ffffff'],
+    ['blockquote (inherited ink)', '#1f2937', '#ffffff'],
+    ['table header', '#1f2937', '#f3f4f6'],
   ];
   for (const [label, fg, bg] of pairs) {
     assert.ok(css.includes(fg), `CSS must define ${label} ink ${fg}`);
@@ -115,7 +119,8 @@ test('RichText VERIFY - dark sources render on a dark card (black sites)', () =>
   const pairs = [
     ['dark body ink', '#e8eaed', '#14161a'],
     ['dark link', '#8ab4f8', '#14161a'],
-    ['dark blockquote', '#9aa0a6', '#14161a'],
+    // v29-B: dark quote inherits body ink (author colors pass through).
+    ['dark blockquote (inherited ink)', '#e8eaed', '#14161a'],
   ];
   for (const [label, fg, bg] of pairs) {
     assert.ok(css.includes(fg), `CSS must define ${label} ${fg}`);

@@ -2959,20 +2959,37 @@ section:last-child {
 .rich-doc-light { color: #1f2937; }
 .rich-doc-light :is(h1, h2, h3, h4, h5, h6, p, li, td, th, div, span) { color: inherit; }
 .rich-doc-light a { color: #1d4ed8; }
-.rich-doc-light code { background: #f3f4f6; border-color: #e5e7eb; color: #111827; }
-.rich-doc-light pre { background: #f9fafb; border-color: #e5e7eb; color: #111827; }
-.rich-doc-light blockquote { border-left-color: #d1d5db; color: #4b5563; }
+/* v29-B: code/pre/quote inherit the card ink instead of forcing their own —
+   an author's inline color (e.g. a red error token in a pasted snippet)
+   survives, while colorless text inherits #1f2937 (≈13:1 on these
+   surfaces). Forcing #111827 here used to erase inherited author color. */
+.rich-doc-light code { background: #f3f4f6; border-color: #e5e7eb; color: inherit; }
+.rich-doc-light pre { background: #f9fafb; border-color: #e5e7eb; color: inherit; }
+.rich-doc-light blockquote { border-left-color: #d1d5db; color: inherit; }
 .rich-doc-light mark { background: #fef08a; color: #713f12; }
+/* v29-B: table/hr chrome follows the paper card, not the app theme — the
+   base rules paint var(--elev)/var(--line) (dark in the dark app theme),
+   which made dark rows + dark ink inside the white card. */
+.rich-doc-light th { background: #f3f4f6; }
+.rich-doc-light tr:nth-child(even) { background: #f9fafb; }
+.rich-doc-light :is(td, th) { border-color: #e5e7eb; }
+.rich-doc-light hr { border-top-color: #e5e7eb; }
 /* Dark-source card: captures from black websites keep light ink on a dark
    surface in BOTH app themes (the white card would erase them). All pairs
    clear AA: body ~14:1, links ~7:1, quotes ~7:1. */
 .rich-doc-dark { color: #e8eaed; }
 .rich-doc-dark :is(h1, h2, h3, h4, h5, h6, p, li, td, th, div, span) { color: inherit; }
 .rich-doc-dark a { color: #8ab4f8; }
-.rich-doc-dark code { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.14); color: #e8eaed; }
-.rich-doc-dark pre { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.12); color: #e8eaed; }
-.rich-doc-dark blockquote { border-left-color: rgba(255,255,255,0.2); color: #9aa0a6; }
+/* v29-B: same inherit rule as the light card — author inline colors pass
+   through, colorless text inherits #e8eaed. */
+.rich-doc-dark code { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.14); color: inherit; }
+.rich-doc-dark pre { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.12); color: inherit; }
+.rich-doc-dark blockquote { border-left-color: rgba(255,255,255,0.2); color: inherit; }
 .rich-doc-dark mark { background: #713f12; color: #fef08a; }
+.rich-doc-dark th { background: rgba(255,255,255,0.08); }
+.rich-doc-dark tr:nth-child(even) { background: rgba(255,255,255,0.03); }
+.rich-doc-dark :is(td, th) { border-color: rgba(255,255,255,0.14); }
+.rich-doc-dark hr { border-top-color: rgba(255,255,255,0.14); }
 .rich-doc > *:first-child { margin-top: 0; }
 .rich-img-placeholder {
   padding: 14px 16px;
