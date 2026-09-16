@@ -6,7 +6,7 @@ import { ClipItem, HotkeyStatus, AppSettings, Collection, Snippet } from '../typ
 import { ClipPreview, ClipMetaStrip, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
 import { getActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
 import { matchesHotkeyCombo } from '../utils/hotkeys';
-import { setClipDragData, shouldOsDrag, attachOsFileDrag } from '../utils/clipDrag';
+import { setClipDragData, shouldOsDrag, attachOsFileDrag, armDragGuard, disarmDragGuard } from '../utils/clipDrag';
 import type { OsGestureCleanup } from '../utils/clipDrag';
 import { collectionColorFor, normalizeCollectionColor } from '../utils/collections';
 import {
@@ -632,6 +632,11 @@ export const QuickOverlay: React.FC = () => {
   // drag image, same dragging highlight. Sensitive clips only expose their
   // masked label, never the secret.
   const handleOverlayDragStart = useCallback((item: ClipItem, e: React.DragEvent) => {
+    // Safeguard: hold the overlay visible for the whole gesture — a blur
+    // mid-drag would otherwise hide the source surface from under the OS
+    // (teardown) or kill a DOM drag (blocked circle / renderer crash).
+    // Released in handleOverlayDragEnd (dragend always fires for DOM drags).
+    armDragGuard();
     if (item.is_sensitive) {
       e.dataTransfer.effectAllowed = 'copy';
       try {
@@ -652,6 +657,7 @@ export const QuickOverlay: React.FC = () => {
   }, []);
 
   const handleOverlayDragEnd = useCallback(() => {
+    disarmDragGuard();
     setDraggingId(null);
     window.__carbonDraggingClipIds = null;
   }, []);

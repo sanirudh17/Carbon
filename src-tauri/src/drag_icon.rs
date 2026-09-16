@@ -1,29 +1,31 @@
-//! OS file drag-out support (Glint-proven pattern).
+//! OS drag support (Glint-proven file pattern + DOM-drag guard).
 //!
-//! Image/file clips leave through `@crabnebula/tauri-plugin-drag`
-//! (`startDrag` with real file paths) instead of hand-rolled COM or DOM
-//! flavors: the plugin owns the modal loop on the right thread, offers real
-//! HDROP, and reports Dropped/Cancelled. This module holds only two small
-//! pieces of our own:
+//! Image/file clips leave as REAL files through
+//! `@crabnebula/tauri-plugin-drag` (`startDrag`) instead of hand-rolled COM
+//! or DOM flavors: the plugin owns the modal loop on the right thread,
+//! offers real HDROP, and reports Dropped/Cancelled. This module holds only
+//! small pieces of our own:
 //!
 //! - `drag_blank_icon`: a cached 1x1 transparent PNG so the OS drag shows
 //!   just the cursor, never a giant ghost image (Glint pattern; the plugin
 //!   requires *some* icon path).
-//! - `OS_DRAG_ACTIVE`: set while an OS drag is in flight so the overlay's
-//!   focus-loss handler suppresses auto-hide (same reason the old native
-//!   guard existed — the window must not vanish from under the gesture).
-//!   Cleared in `finally` on settle plus a safety timeout frontend-side, so
-//!   a wedged target can only delay auto-hide, never disable it.
+//! - `DRAG_ACTIVE`: set while ANY drag is in flight (plugin file drags AND
+//!   DOM text drags) so the overlay's focus-loss handler suppresses
+//!   auto-hide — without this the window vanishes from under the gesture:
+//!   OS drags tear the modal surface down, DOM drags die (blocked circle)
+//!   or take the renderer with them. Cleared on settle; the plugin path
+//!   additionally carries a 60s safety timeout, so a wedged target can
+//!   only delay auto-hide, never disable it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::{AppHandle, Manager};
 
-/// True while an OS file drag is in flight (see module docs).
-static OS_DRAG_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// True while a drag gesture is in flight (see module docs).
+static DRAG_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-pub fn is_os_drag_active() -> bool {
-    OS_DRAG_ACTIVE.load(Ordering::SeqCst)
+pub fn is_drag_active() -> bool {
+    DRAG_ACTIVE.load(Ordering::SeqCst)
 }
 
 /// Return the path to a 1x1 transparent PNG (created once in the cache dir),
@@ -42,10 +44,11 @@ pub fn drag_blank_icon(app: AppHandle) -> std::result::Result<String, String> {
     Ok(p.to_string_lossy().to_string())
 }
 
-/// Arm/disarm the in-flight flag around `startDrag` (frontend `finally`).
+/// Arm/disarm the in-flight flag around drags (plugin `finally`, DOM
+/// dragstart/dragend). Fire-and-forget from the frontend.
 #[tauri::command]
-pub fn set_os_drag_active(active: bool) -> std::result::Result<(), String> {
-    OS_DRAG_ACTIVE.store(active, Ordering::SeqCst);
-    crate::paste::log_diag(&format!("[OS_DRAG] active={active}"));
+pub fn set_drag_active(active: bool) -> std::result::Result<(), String> {
+    DRAG_ACTIVE.store(active, Ordering::SeqCst);
+    crate::paste::log_diag(&format!("[DRAG_GUARD] active={active}"));
     Ok(())
 }

@@ -37,13 +37,13 @@ test('os-drag - blank icon command and auto-hide guard exist', () => {
   const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'drag_icon.rs'), 'utf8');
   assert.ok(rs.includes('pub fn drag_blank_icon'), 'blank icon command must exist');
   assert.ok(rs.includes('carbon-drag-blank.png'), 'blank icon must be cached by name');
-  assert.ok(rs.includes('pub fn set_os_drag_active'), 'in-flight flag command must exist');
-  assert.ok(rs.includes('pub fn is_os_drag_active'), 'focus handler needs a reader');
+  assert.ok(rs.includes('pub fn set_drag_active'), 'in-flight flag command must exist');
+  assert.ok(rs.includes('pub fn is_drag_active'), 'focus handler needs a reader');
   const libRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'lib.rs'), 'utf8');
   assert.ok(libRs.includes('drag_icon::drag_blank_icon'), 'blank icon must be registered');
-  assert.ok(libRs.includes('drag_icon::set_os_drag_active'), 'flag command must be registered');
+  assert.ok(libRs.includes('drag_icon::set_drag_active'), 'flag command must be registered');
   assert.ok(
-    libRs.includes('drag_icon::is_os_drag_active()'),
+    libRs.includes('drag_icon::is_drag_active()'),
     'focus-loss handler must suppress hide during OS drags'
   );
 });
@@ -92,4 +92,41 @@ test('os-drag - rows split by type (OS files vs DOM text)', () => {
   assert.ok(qo.includes('previewOsRef'), 'preview media wrapper must use the OS gesture');
   // Text path untouched: DOM dragstart still feeds setClipDragData.
   assert.ok(qo.includes('setClipDragData(e, item)'), 'text rows must keep the DOM payload');
+});
+
+/**
+ * DOM-drag auto-hide safeguard: the overlay must hold visible for the whole
+ * gesture. A blur mid-drag hides the source surface from under the OS
+ * (teardown) or kills a DOM drag (blocked circle / renderer crash) — the
+ * rich-text Orca crash with zero WER trace. Armed on dragstart (both
+ * branches), released on dragend (browser-guaranteed for DOM drags).
+ */
+
+test('drag-guard - overlay DOM dragstart arms, dragend releases', () => {
+  const qo = fs.readFileSync(path.join(SRC_DIR, 'components', 'QuickOverlay.tsx'), 'utf8');
+  assert.ok(qo.includes('armDragGuard()'), 'dragstart must arm the guard');
+  assert.ok(qo.includes('disarmDragGuard()'), 'dragend must release the guard');
+  // Arming sits before the sensitive branch so decoy drags are covered too.
+  const startIdx = qo.indexOf('handleOverlayDragStart = useCallback');
+  const armIdx = qo.indexOf('armDragGuard()', startIdx);
+  const sensIdx = qo.indexOf('is_sensitive', startIdx);
+  assert.ok(armIdx !== -1 && armIdx < sensIdx, 'arm must precede all branches');
+  const util = fs.readFileSync(path.join(SRC_DIR, 'utils', 'clipDrag.ts'), 'utf8');
+  assert.ok(util.includes('export function armDragGuard'), 'arm helper must be exported');
+  assert.ok(util.includes('export function disarmDragGuard'), 'disarm helper must be exported');
+  assert.ok(
+    util.includes("invoke('set_drag_active'"),
+    'guard must reuse the backend flag command'
+  );
+});
+
+test('drag-guard - backend suppresses hide for ANY in-flight drag', () => {
+  const libRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'lib.rs'), 'utf8');
+  assert.ok(
+    libRs.includes('drag_icon::is_drag_active()'),
+    'focus-loss handler must check the unified guard'
+  );
+  const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'drag_icon.rs'), 'utf8');
+  assert.ok(rs.includes('DRAG_ACTIVE'), 'unified in-flight flag must exist');
+  assert.ok(!rs.includes('OS_DRAG_ACTIVE'), 'old OS-only flag must be gone');
 });

@@ -62,12 +62,22 @@ void invoke<string>('drag_blank_icon').then((p) => {
 /** True from threshold-cross to settle; gates the overlay auto-hide. */
 let osDragInFlight = false;
 
-async function setOsDragFlag(active: boolean): Promise<void> {
+async function setDragFlag(active: boolean): Promise<void> {
   try {
-    await invoke('set_os_drag_active', { active });
+    await invoke('set_drag_active', { active });
   } catch {
     /* diagnostics only — the drag itself is unaffected */
   }
+}
+
+/** Arm the backend auto-hide guard for a DOM drag (fire-and-forget). */
+export function armDragGuard(): void {
+  void setDragFlag(true);
+}
+
+/** Release the backend auto-hide guard after a DOM drag settles. */
+export function disarmDragGuard(): void {
+  void setDragFlag(false);
 }
 
 /**
@@ -87,10 +97,10 @@ export async function dragOutFiles(paths: string[]): Promise<string> {
     if (osDragInFlight) {
       console.warn('[drag] OS drag exceeded 60s — releasing auto-hide guard');
       osDragInFlight = false;
-      void setOsDragFlag(false);
+      void setDragFlag(false);
     }
   }, 60_000);
-  await setOsDragFlag(true);
+  await setDragFlag(true);
   console.debug(`[drag] OS threshold crossed — starting plugin drag for ${paths.length} file(s)`);
   try {
     let result = 'Cancelled';
@@ -110,7 +120,7 @@ export async function dragOutFiles(paths: string[]): Promise<string> {
   } finally {
     window.clearTimeout(safety);
     osDragInFlight = false;
-    await setOsDragFlag(false);
+    await setDragFlag(false);
   }
 }
 
