@@ -287,6 +287,73 @@ fn sweep_stale_staging() {
     }
 }
 
+/// v32-A1: single CF_HTML generator for drag offers. Emits Version:1.0
+/// with byte-accurate offsets over the UTF-8 body, NUL-terminated.
+fn build_cf_html_document(fragment: &str) -> String {
+    let prefix = "<html><body>\r\n<!--StartFragment-->";
+    let suffix = "<!--EndFragment-->\r\n</body></html>";
+    // Header length from the formatter itself (zero values): the template
+    // width can never drift from the emitted width again.
+    let header_len = format!(
+        "Version:1.0\r\nStartHTML:{:010}\r\nEndHTML:{:010}\r\nStartFragment:{:010}\r\nEndFragment:{:010}\r\n",
+        0, 0, 0, 0
+    )
+    .len();
+    let start_html = header_len;
+    let start_fragment = start_html + prefix.len();
+    let end_fragment = start_fragment + fragment.as_bytes().len();
+    let end_html = end_fragment + suffix.len();
+    let mut out = format!(
+        "Version:1.0\r\nStartHTML:{:010}\r\nEndHTML:{:010}\r\nStartFragment:{:010}\r\nEndFragment:{:010}\r\n",
+        start_html, end_html, start_fragment, end_fragment
+    );
+    out.push_str(prefix);
+    out.push_str(fragment);
+    out.push_str(suffix);
+    out.push('\0');
+    out
+}
+
+/// Minimal text escaper for generated fragments (plain text -> HTML).
+fn escape_html_text(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// v32-A1: resolve the HTML bytes to offer for a text-like clip, or None.
+/// Links generate an anchor; stored full documents validate as-is;
+/// anything else goes through the single generator. Validation failures
+/// omit silently (malformed headers are why web zones ignore drops).
+fn offer_html_bytes(kind: &str, text: &str, html_opt: Option<&str>, item_id: &str) -> Option<Vec<u8>> {
+    let raw: Vec<u8> = match kind {
+        "link" => build_cf_html_document(&format!("<a href=\"{text}\">{text}</a>")).into_bytes(),
+        _ => match html_opt {
+            Some(h) if h.starts_with("Version:") => {
+                let mut b = h.as_bytes().to_vec();
+                if b.last() != Some(&0) {
+                    b.push(0);
+                }
+                b
+            }
+            Some(h) => build_cf_html_document(h).into_bytes(),
+            None => {
+                if matches!(kind, "text" | "code" | "link") {
+                    build_cf_html_document(&escape_html_text(text)).into_bytes()
+                } else {
+                    return None;
+                }
+            }
+        },
+    };
+    if validate_cf_html_payload(&raw) {
+        Some(raw)
+    } else {
+        drag_log(&format!(
+            "[NATIVE_DRAG] CF_HTML failed validation for id='{item_id}' kind='{kind}' — omitted (v32-A1)"
+        ));
+        None
+    }
+}
+
 /// v31-F2.2: structural CF_HTML validation (same checks as the R5 harness
 /// parse). Rich clips offer HTML only when the wrapped payload passes;
 /// otherwise it is omitted silently — a malformed header is why web zones
@@ -321,10 +388,10 @@ fn build_offers(item: &crate::db::ClipItem, cf_html: u32) -> (Vec<Offer>, Option
     let mut offers = Vec::new();
     let kind = item.content_type.as_str();
 
-    // Text-like clips: UNICODETEXT (+TEXT). v31-F2.1: text/code/link offer
-    // NO HTML — web zones map unicode to text/plain and HTML only invites
-    // misparses. Email keeps HTML when stored (mail acceptance); rich_text
-    // offers HTML only when it passes the R5 validator (F2.2).
+    // Text-like clips: UNICODETEXT (+TEXT). v32-A1: text/code/link/email
+    // offer generated-or-stored HTML through the single generator (web
+    // zones map it alongside unicode); rich_text offers validated HTML
+    // only. Anything failing validation is omitted silently.
     if matches!(kind, "text" | "code" | "link" | "email" | "rich_text") {
         let text = item.text_content.clone().unwrap_or_else(|| item.title.clone());
         offers.push(Offer {
@@ -340,40 +407,23 @@ fn build_offers(item: &crate::db::ClipItem, cf_html: u32) -> (Vec<Offer>, Option
             data: OfferData::Global(text.bytes().chain(std::iter::once(0)).collect()),
         });
         if kind == "email" {
-            if let Some(ref html) = item.html_content {
-                let cf = if html.starts_with("Version:") {
-                    html.clone()
-                } else {
-                    crate::paste::wrap_in_cf_html(html)
-                };
+            // Email keeps stored HTML when present (mail acceptance), else
+            // generated text HTML — both validated by offer_html_bytes.
+            if let Some(bytes) = offer_html_bytes(kind, &text, item.html_content.as_deref(), &item.id) {
                 offers.push(Offer {
                     cf_format: cf_html,
                     tymed: TYMED_HGLOBAL.0 as u32,
                     lindex: -1,
-                    data: OfferData::Global(cf.into_bytes()),
+                    data: OfferData::Global(bytes),
                 });
             }
-        } else if kind == "rich_text" {
-            if let Some(ref html) = item.html_content {
-                let cf = if html.starts_with("Version:") {
-                    html.clone()
-                } else {
-                    crate::paste::wrap_in_cf_html(html)
-                };
-                if validate_cf_html_payload(cf.as_bytes()) {
-                    offers.push(Offer {
-                        cf_format: cf_html,
-                        tymed: TYMED_HGLOBAL.0 as u32,
-                        lindex: -1,
-                        data: OfferData::Global(cf.into_bytes()),
-                    });
-                } else {
-                    drag_log(&format!(
-                        "[NATIVE_DRAG] rich CF_HTML failed validation for id='{}' — omitted (F2.2)",
-                        item.id
-                    ));
-                }
-            }
+        } else if let Some(bytes) = offer_html_bytes(kind, &text, item.html_content.as_deref(), &item.id) {
+            offers.push(Offer {
+                cf_format: cf_html,
+                tymed: TYMED_HGLOBAL.0 as u32,
+                lindex: -1,
+                data: OfferData::Global(bytes),
+            });
         }
         return (offers, None);
     }
@@ -1280,20 +1330,19 @@ mod conformance_tests {
         String::from_utf16_lossy(&words[..words.len() - 1])
     }
 
-    // R6 + v31-F2.1/F2.2: text/code/link offer unicode+text ONLY (no HTML);
-    // email keeps HTML when stored; rich validates-or-omits.
+    // R6 + v32-A1: text/code/link offer unicode+text+generated HTML;
+    // email keeps stored-or-generated HTML; rich validates-or-omits.
     #[test]
     fn r6_offer_sets_per_type() {
         let cf_html = register_format("HTML Format");
         for kind in ["text", "code", "link"] {
-            let mut item = clip(kind);
-            item.html_content = Some("<p>ignored</p>".to_string());
+            let item = clip(kind);
             let (offers, _) = build_offers(&item, cf_html);
             let cfs: Vec<u32> = offers.iter().map(|o| o.cf_format).collect();
-            assert_eq!(cfs.len(), 2, "F2.1: {kind} offers exactly unicode+text");
+            assert_eq!(cfs.len(), 3, "A1: {kind} offers the generated trio");
             assert!(cfs.contains(&CF_UNICODETEXT), "R6: {kind} offers UNICODETEXT");
             assert!(cfs.contains(&CF_TEXT), "R6: {kind} offers TEXT");
-            assert!(!cfs.contains(&cf_html), "F2.1: {kind} must not offer HTML");
+            assert!(cfs.contains(&cf_html), "A1: {kind} offers generated CF_HTML");
             assert!(offers.iter().all(|o| o.tymed == HGLOBAL_TYMED), "R6: text mediums are HGLOBAL");
         }
         // Email with HTML keeps the trio (mail acceptance).
@@ -1327,6 +1376,28 @@ mod conformance_tests {
         assert_eq!(offers.len(), 2, "F2.2: omitted rich still offers unicode+text");
     }
 
+    // v32-A1: the single generator emits valid Version:1.0 documents.
+    #[test]
+    fn a1_generator_output_validates() {
+        for frag in ["plain words", "<p>héllo ✓</p>", "<a href=\"https://x.y\">x</a>"] {
+            let doc = build_cf_html_document(frag);
+            assert!(doc.starts_with("Version:1.0\r\n"), "A1: generator stamps 1.0");
+            assert!(doc.starts_with("Version:1.0\r\n"), "A1: generator stamps 1.0");
+            let bytes = doc.as_bytes();
+            assert!(validate_cf_html_payload(bytes), "A1: generator output must validate");
+            // Fragment encloses exactly the content.
+            let text = std::str::from_utf8(&bytes[..bytes.len() - 1]).unwrap();
+            let sf: usize = text.lines().find(|l| l.starts_with("StartFragment:"))
+                .map(|l| l[14..].trim().parse().unwrap()).unwrap();
+            let ef: usize = text.lines().find(|l| l.starts_with("EndFragment:"))
+                .map(|l| l[12..].trim().parse().unwrap()).unwrap();
+            assert_eq!(&text.as_bytes()[sf..ef], frag.as_bytes(), "A1: fragment must enclose exactly the content");
+        }
+        // Empty payload + empty fragment rejected (terminator/fragment rules).
+        assert!(!validate_cf_html_payload(b""), "A1: empty payload rejected");
+        assert!(!validate_cf_html_payload(build_cf_html_document("").as_bytes()), "A1: empty fragment rejected");
+    }
+
     // v31-F2.2: validator accepts well-formed, rejects malformed.
     #[test]
     fn f2_html_validator() {
@@ -1353,6 +1424,7 @@ mod conformance_tests {
                 let penum = obj
                     .EnumFormatEtc(DATADIR_GET.0 as u32)
                     .expect("R1: enum must succeed");
+                let cf_html = register_format("HTML Format");
                 let mut seen = 0u32;
                 loop {
                     let mut buf: [FORMATETC; 1] = std::mem::zeroed();
@@ -1364,14 +1436,15 @@ mod conformance_tests {
                     assert_eq!(hr, S_OK, "R1: per-item Next must be S_OK");
                     assert_eq!(fetched, 1, "R1: fetched count must be 1");
                     let fmt = buf[0];
+                    let cf = fmt.cfFormat as u32;
                     assert!(
-                        fmt.cfFormat as u32 == CF_UNICODETEXT || fmt.cfFormat as u32 == CF_TEXT,
+                        cf == CF_UNICODETEXT || cf == CF_TEXT || cf == cf_html,
                         "R1: enumerated set must equal offered set"
                     );
                     seen += 1;
                     assert!(seen <= 8, "R1: enumerator must terminate (bounds)");
                 }
-                assert_eq!(seen, 2, "R1 pass {pass}: text clip enumerates exactly 2 formats");
+                assert_eq!(seen, 3, "R1 pass {pass}: text clip enumerates exactly 3 formats");
                 // Clone is independent: reset original, clone still reads.
                 let this = Interface::as_raw(&penum);
                 let vt = *(this as *const *const IEnumFORMATETC_Vtbl);
@@ -1718,8 +1791,10 @@ mod conformance_tests {
                 std::fs::remove_dir_all(&s.dir).ok();
             }
             // Text-like clips never gate, even after HTML queries (F1.3).
+            // (Text objects offer CF_HTML too since v32-A1, so the query
+            // succeeds — the point stands: text is always served.)
             let tobj = test_object(&clip("text"));
-            assert_eq!(tobj.QueryGetData(&fmtetc(cf_html, HGLOBAL_TYMED, -1)), DV_E_FORMATETC);
+            assert_eq!(tobj.QueryGetData(&fmtetc(cf_html, HGLOBAL_TYMED, -1)), S_OK);
             let med = tobj
                 .GetData(&fmtetc(CF_UNICODETEXT, HGLOBAL_TYMED, -1))
                 .expect("F1.3: text clips always serve text");

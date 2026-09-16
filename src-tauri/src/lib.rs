@@ -224,7 +224,7 @@ fn queue_paste_next(
             window.hide().ok();
         }
 
-        paste::paste_item(&item, transform)?;
+        paste::paste_item(&item, transform, settings.paste_deselect_after)?;
 
         // If there are more items in queue, prepare the next one on the clipboard
         let queue = state.paste_queue.lock().map_err(|e| e.to_string())?;
@@ -330,7 +330,7 @@ fn paste_clip(
         }
 
         paste::log_diag("[PASTE_CLIP] Calling paste_item...");
-        paste::paste_item(&item, transform)?;
+        paste::paste_item(&item, transform, settings.paste_deselect_after)?;
 
         let _ = app_handle.emit("paste-queue-updated", ());
         let _ = app_handle.emit("clipboard-updated", ());

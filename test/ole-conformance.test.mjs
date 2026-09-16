@@ -30,7 +30,7 @@ test('v30 - R6 agreed sets only, no exotic formats', () => {
   assert.ok(src.includes('CF_UNICODETEXT'), 'must offer unicode text');
   assert.ok(src.includes('CF_TEXT'), 'must offer ANSI text');
   assert.ok(src.includes('CF_HDROP'), 'must offer HDROP');
-  assert.ok(src.includes('wrap_in_cf_html'), 'must offer wrapped CF_HTML');
+  assert.ok(src.includes('build_cf_html_document'), 'v32-A1 single generator must build HTML');
   for (const banned of [
     'FileContents',
     'CF_DIB',
@@ -123,7 +123,7 @@ test('v30 - conformance harness wired into CI', () => {
   for (const r of ['r1_enumeration_contract', 'r2_query_matrix', 'r2_qi_contract',
     'r3_r4_medium_ownership_and_terminators', 'r3_getdata_here_fills_caller_medium',
     'r5_cf_html_wellformed', 'r6_offer_sets_per_type', 'r6_image_hdrop_and_path',
-    'r6_file_hdrop_live_only', 'r7_graveyard_sweep', 'r8_drop_source_contract', 'f1_text_gate_refusal', 'f2_html_validator']) {
+    'r6_file_hdrop_live_only', 'r7_graveyard_sweep', 'r8_drop_source_contract', 'f1_text_gate_refusal', 'f2_html_validator', 'a1_generator_output_validates']) {
     assert.ok(src.includes(`fn ${r}()`), `harness must drive ${r}`);
   }
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'));
@@ -148,13 +148,15 @@ test('v31-F1 - query-history text gate for image/file drags', () => {
   assert.ok(src.includes('gate_text'), 'gate must apply to image/file objects');
 });
 
-test('v31-F2 - web text reliability (offers + validator + settle)', () => {
+test('v32-A/B - generated HTML, B2 settle, restaging retry', () => {
   const src = fs.readFileSync(path.join(SRC_TAURI_DIR, 'native_drag.rs'), 'utf8');
   assert.ok(src.includes('validate_cf_html_payload'), 'R5 validator must exist');
-  assert.ok(src.includes('F2.2'), 'validate-or-omit must be documented');
+  assert.ok(src.includes('offer_html_bytes'), 'single resolution point must exist');
+  assert.ok(src.includes('Version:1.0'), 'generator must stamp 1.0');
   const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'paste.rs'), 'utf8');
-  assert.ok(rs.includes('stability frames') || rs.includes('stable='), 'two-frame stability gate must exist');
-  assert.ok(rs.includes('retry 1/1'), 'exactly one retry must exist');
-  assert.ok(rs.includes('clipboard unchanged'), 'retry must not rewrite the clipboard');
-  assert.ok(rs.includes('settling') || rs.includes('settle'), 'settle time must be logged');
+  assert.ok(rs.includes('stable_frames'), 'two-frame stability gate must count frames');
+  assert.ok(rs.includes('retry 1/1'), 'exactly one retry path must exist');
+  assert.ok(rs.includes('re-staging identical content'), 'retry must re-stage the same item');
+  assert.ok(rs.includes('mark_paste(&restage_item)'), 'retry must re-mark the watcher skip');
+  assert.ok(rs.includes('settling 80ms'), 'bounded 80ms settle must be logged');
 });

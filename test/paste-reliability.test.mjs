@@ -111,51 +111,55 @@ test('v28-C - elevation fallback with visible hint (C3)', () => {
  * Snippet expansion keeps its own caret placement (untouched).
  */
 
-test('paste deselect - browser-gated collapse exists and is scoped', () => {
+test('v32-C - deselect is opt-in, web-class scoped, single keystroke', () => {
   const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'paste.rs'), 'utf8');
-  assert.ok(rs.includes('fn inject_right_arrow'), 'single Right-arrow injector must exist');
-  assert.ok(rs.includes('VK_RIGHT'), 'must use the Right-arrow virtual key');
-  assert.ok(rs.includes('DESELECT_BROWSERS'), 'browser allowlist must exist');
-  for (const exe of ['chrome.exe', 'msedge.exe', 'firefox.exe', 'comet.exe', 'brave.exe', 'slack.exe', 'discord.exe', 'msteams.exe', 'notion.exe']) {
-    assert.ok(rs.includes(`"${exe}"`), `allowlist must cover ${exe}`);
-  }
-  assert.ok(rs.includes('fn collapse_pasted_selection'), 'gating decision fn must exist');
-  assert.ok(rs.includes('get_window_exe_name'), 'decision must key on the foreground exe');
-  assert.ok(rs.includes('[DESELECT]'), 'decision must be logged either way');
-  // Main item-paste path only: snippet expansion owns its caret already.
-  const callSites = rs.match(/collapse_pasted_selection\(target_hwnd\);/g) || [];
-  assert.equal(callSites.length, 1, 'exactly one call site (main paste path)');
-  assert.ok(rs.includes('fn still_on_target'), 'taps must re-validate focus');
-  assert.ok(rs.includes('collapse_pasted_selection(target_hwnd)'), 'paste target must scope the taps');
-  const mainPath = rs.indexOf('// Inject Ctrl+V into focused control');
-  assert.ok(
-    mainPath !== -1 && rs.indexOf('collapse_pasted_selection(target_hwnd);', mainPath) > mainPath,
-    'must run right after the main Ctrl+V inject'
-  );
-  assert.ok(
-    !rs.includes('PASTE_SNIPPET] Injecting Ctrl+V for snippet prefix...\n        inject_ctrl_v();\n\n        collapse_pasted_selection'),
-    'snippet path must stay untouched'
-  );
+  // C1 classification: inserted text remains selected => target behavior,
+  // cosmetic => accept + document + OPTIONAL setting (default OFF).
+  assert.ok(rs.includes('fn inject_right_arrow'), 'single Right-arrow injector retained');
+  assert.ok(rs.includes('fn maybe_deselect_after_paste'), 'opt-in decision fn must exist');
+  assert.ok(rs.includes('Chrome_WidgetWin_'), 'must scope to Chromium window class');
+  assert.ok(rs.includes('Mozilla'), 'must scope to Mozilla window class');
+  assert.ok(!rs.includes('DESELECT_BROWSERS'), 'exe allowlist must be gone');
+  assert.ok(!rs.includes('collapse_pasted_selection'), 'default tap loop must be gone');
+  // C2: default configuration sends NO post-paste keystroke.
+  assert.ok(rs.includes('maybe_deselect_after_paste(deselect_after);'), 'worker must call the gated deselect');
+  // Setting exists, default false, old files still parse.
+  const settings = fs.readFileSync(path.join(SRC_TAURI_DIR, 'settings.rs'), 'utf8');
+  assert.ok(settings.includes('pub paste_deselect_after: bool'), 'setting must exist');
+  assert.ok(settings.includes('paste_deselect_after: false'), 'default must be OFF');
+  const types = fs.readFileSync(path.join(SRC_DIR, 'types.ts'), 'utf8');
+  assert.ok(types.includes('paste_deselect_after: boolean'), 'frontend type must exist');
+  const tsx = fs.readFileSync(path.join(SRC_DIR, 'components', 'Settings.tsx'), 'utf8');
+  assert.ok(tsx.includes('paste_deselect_after'), 'settings UI must expose the toggle');
+  assert.ok(tsx.includes('Off by default'), 'toggle must document the default');
 });
 
-test('paste deselect - double-tap covers async editor selection', () => {
+test('v32-B - settle sequence, post-check, single retry', () => {
   const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'paste.rs'), 'utf8');
-  assert.ok(rs.includes('(tap {}/3)'), 'numbered collapse taps must be logged');
-  assert.ok(rs.includes('[0u64, 270, 550]'), 'three-tap schedule must exist');
+  assert.ok(rs.includes('CLIP_SEQ'), 'clipboard sequence counter must exist');
+  assert.ok(rs.includes('stable_frames'), 'two-frame stability gate must count frames');
+  assert.ok(rs.includes('settling 80ms'), 'bounded 80ms settle must be logged with hwnd');
+  assert.ok(rs.includes('keystrokes sent: Ctrl+V'), 'keystrokes must be logged');
+  assert.ok(rs.includes('post-check'), 'post-check must exist and log');
+  assert.ok(rs.includes('retry 1/1'), 'exactly one retry path must exist');
+  assert.ok(rs.includes('No further retries'), 'retry cap must be documented');
+  assert.ok(rs.includes('mark_paste(&restage_item)'), 'retry must re-mark watcher skip');
+  assert.ok(rs.includes('thread::sleep(Duration::from_millis(150))'), 'retry settle must be 150ms');
+  assert.ok(rs.includes('thread::sleep(Duration::from_millis(250))'), 'post-check window must be 250ms');
 });
 
-test('paste guard - flag releases before the deselect tail', () => {
+test('paste guard - flag releases before any caret tail', () => {
   const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'paste.rs'), 'utf8');
-  // The ~1s tap schedule must never hold the single-shot guard: a fast
+  // The single-shot guard must never be held by post-inject tails: a fast
   // consecutive paste into another interface was silently dropped (read as
-  // a crash). Critical section ends at inject; taps run unguarded but
-  // focus-scoped (still_on_target aborts on focus change).
+  // a crash). Critical section ends at inject/retry; caret tails run after.
   const threadStart = rs.indexOf('Focus confirmation attempt');
   const clearIdx = rs.indexOf('PASTE_IN_FLIGHT.store(false, Ordering::SeqCst);', threadStart);
-  const collapseIdx = rs.indexOf('collapse_pasted_selection(target_hwnd);', threadStart);
-  assert.ok(threadStart !== -1 && clearIdx !== -1 && collapseIdx !== -1, 'anchors must exist');
+  const deselectIdx = rs.indexOf('maybe_deselect_after_paste(deselect_after);', threadStart);
+  assert.ok(threadStart !== -1 && clearIdx !== -1 && deselectIdx !== -1, 'anchors must exist');
   assert.ok(
-    clearIdx < collapseIdx,
-    'guard must release before the deselect tail (consecutive pastes must not drop)'
+    clearIdx < deselectIdx,
+    'guard must release before the caret tail (consecutive pastes must not drop)'
   );
 });
+

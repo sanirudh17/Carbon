@@ -44,6 +44,7 @@ export interface AppSettings {
   quick_hotkey: string;
   enlarged_hotkey: string;
   paste_plain_text: boolean;
+  paste_deselect_after: boolean;
   move_to_top_on_paste: boolean;
   start_with_windows: boolean;
   retention_days: number;

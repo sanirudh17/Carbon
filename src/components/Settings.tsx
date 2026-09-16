@@ -51,6 +51,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     quick_hotkey: 'Ctrl+Shift+Z',
     enlarged_hotkey: 'Ctrl+Alt+X',
     paste_plain_text: false,
+    paste_deselect_after: false,
     move_to_top_on_paste: true,
     start_with_windows: true,
     retention_days: 30,
@@ -823,6 +824,21 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               <button
                 className={`toggle ${settings.move_to_top_on_paste ? 'on' : ''}`}
                 onClick={() => updateSetting('move_to_top_on_paste', !settings.move_to_top_on_paste)}
+              >
+                <span className="knob" />
+              </button>
+            </div>
+          </div>
+
+          <div className="set-row">
+            <div className="set-label">
+              Deselect after paste (web chats)
+              <div className="set-hint">Send one Right-arrow after pasting into browser/chat inputs that leave text selected. Off by default.</div>
+            </div>
+            <div className="set-control">
+              <button
+                className={`toggle ${settings.paste_deselect_after ? 'on' : ''}`}
+                onClick={() => updateSetting('paste_deselect_after', !settings.paste_deselect_after)}
               >
                 <span className="knob" />
               </button>

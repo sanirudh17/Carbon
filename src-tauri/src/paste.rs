@@ -2,10 +2,10 @@ use crate::db::ClipItem;
 use regex::Regex;
 use serde_json::{Map, Value};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HANDLE, HGLOBAL, HWND, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
@@ -139,7 +139,6 @@ fn is_terminal_window(hwnd: HWND) -> bool {
 }
 
 /// Reads the current CF_UNICODETEXT content of the clipboard, if any.
-#[allow(dead_code)]
 pub fn read_clipboard_text() -> Option<String> {
     unsafe {
         if !open_clipboard_with_retry() {
@@ -949,7 +948,22 @@ pub enum PasteTransform {
 /// thread when it finishes.
 static PASTE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
-pub fn paste_item(item: &ClipItem, transform: PasteTransform) -> Result<(), String> {
+/// v32-B1: clipboard sequence — bumped on every paste staging so the
+/// post-check can tell our content from interference.
+static CLIP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// v32-B1: hide-complete proxy — paste_clip dismisses surfaces immediately
+/// before calling paste_item, so entry time ≈ hide-complete time.
+static PASTE_START: Mutex<Option<Instant>> = Mutex::new(None);
+
+fn paste_elapsed_ms() -> u128 {
+    PASTE_START
+        .lock()
+        .map(|g| g.as_ref().map(|t| t.elapsed().as_millis()).unwrap_or(0))
+        .unwrap_or(0)
+}
+
+pub fn paste_item(item: &ClipItem, transform: PasteTransform, deselect_after: bool) -> Result<(), String> {
     log_diag(&format!(
         "[PASTE_ITEM] paste_item starting for clip id='{}', title='{}', transform={:?}",
         item.id, item.title, transform
@@ -991,6 +1005,13 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform) -> Result<(), Stri
     let target_hwnd = TARGET_HWND.lock().unwrap().take();
     log_diag(&format!("[PASTE_ITEM] Taken TARGET_HWND: 0x{:X?}", target_hwnd));
 
+    // v32-B1: hide-complete proxy + retry material. paste_clip dismisses
+    // surfaces immediately before calling, so entry ≈ hide-complete.
+    PASTE_START.lock().ok().map(|mut t| *t = Some(Instant::now()));
+    let restage_item = item_to_paste.clone();
+    let expected_text = restage_item.text_content.clone();
+    let restage_plain = plain_text_only;
+
     // 3. Focus target and inject Ctrl+V on a background thread with confirmation
     thread::spawn(move || {
         log_diag("[PASTE_THREAD] Thread spawned. Sleeping 50ms initial for window hide...");
@@ -1017,27 +1038,26 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform) -> Result<(), Stri
                 thread::sleep(Duration::from_millis(15));
             }
 
-            // v31-F2.3: stability frames — GetForegroundWindow must read
-            // identical twice in a row before injection (a focus still in
-            // flight eats the keystroke in SPA composers).
+            // v32-B2: stability frames — FG identical twice in a row.
             let mut last_fg = unsafe { GetForegroundWindow() };
-            let mut stable = false;
+            let mut stable_frames = 0u32;
             for _ in 0..6 {
                 thread::sleep(Duration::from_millis(15));
                 let fg = unsafe { GetForegroundWindow() };
+                stable_frames += 1;
                 if fg.0 as usize == last_fg.0 as usize {
-                    stable = true;
+                    stable_frames += 1;
                     break;
                 }
                 last_fg = fg;
             }
-            // Bounded 50-100ms focus-settle delay (50 fast path confirmed).
-            let settle_ms = if focus_confirmed { 50 } else { 100 };
+            // v32-B2: bounded 80ms focus-settle delay.
             log_diag(&format!(
-                "[PASTE_THREAD] target=0x{:X} stable={} settling {}ms before injection...",
-                hwnd_val, stable, settle_ms
+                "[PASTE_THREAD] target=0x{:X} confirmed={} stable_frames={} settling 80ms before injection (t+{}ms)...",
+                hwnd_val, focus_confirmed, stable_frames,
+                paste_elapsed_ms()
             ));
-            thread::sleep(Duration::from_millis(settle_ms));
+            thread::sleep(Duration::from_millis(80));
         } else {
             log_diag("[PASTE_THREAD] TARGET_HWND is None. Sleeping 60ms default before injection...");
             thread::sleep(Duration::from_millis(60));
@@ -1063,13 +1083,45 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform) -> Result<(), Stri
         }
         // Inject Ctrl+V into focused control
         inject_ctrl_v();
+        log_diag(&format!(
+            "[PASTE_THREAD] keystrokes sent: Ctrl+V (t+{}ms)",
+            paste_elapsed_ms()
+        ));
 
-        // v31-F2.3: retry ONCE on the mismatch signal. The clipboard
-        // sequence is untouched (no rewrite — 250ms+ old by now); only a
-        // bounded re-focus plus a second inject.
-        if send_mismatch {
-            log_diag("[PASTE_THREAD] retry 1/1 after mismatch: re-focusing...");
-            thread::sleep(Duration::from_millis(100));
+        // v32-B2 post-check at +250ms: our staged unicode must still own
+        // the clipboard. Changed content (or a send-time mismatch) is the
+        // single-retry signal; unreadable means the target holds it open
+        // (still consuming) — never retry into that.
+        thread::sleep(Duration::from_millis(250));
+        let post_changed = match &expected_text {
+            None => {
+                log_diag("[PASTE_THREAD] post-check skipped (no unicode staged).");
+                false
+            }
+            Some(want) => match read_clipboard_text() {
+                None => {
+                    log_diag("[PASTE_THREAD] post-check unreadable (target holds clipboard) — no retry.");
+                    false
+                }
+                Some(got) if &got == want => {
+                    log_diag("[PASTE_THREAD] post-check: clipboard intact — no retry.");
+                    false
+                }
+                Some(got) => {
+                    log_diag(&format!(
+                        "[PASTE_THREAD] post-check CHANGED (staged {} chars, now {} chars) — retry signal.",
+                        want.len(),
+                        got.len()
+                    ));
+                    true
+                }
+            },
+        };
+        if send_mismatch || post_changed {
+            log_diag("[PASTE_THREAD] retry 1/1: re-staging identical content + re-focusing...");
+            if write_item_to_clipboard(&restage_item, restage_plain).is_ok() {
+                crate::clipboard_watcher::mark_paste(&restage_item);
+            }
             if let Some(hwnd_val) = target_hwnd {
                 let target = HWND(hwnd_val as *mut _);
                 for _ in 0..3 {
@@ -1079,23 +1131,21 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform) -> Result<(), Stri
                     thread::sleep(Duration::from_millis(20));
                 }
             }
+            thread::sleep(Duration::from_millis(150));
             inject_ctrl_v();
-            log_diag("[PASTE_THREAD] retry 1/1 injected (clipboard unchanged).");
+            log_diag("[PASTE_THREAD] retry 1/1 injected (same content). No further retries.");
         }
 
         // Critical section ends here: clipboard content + keystrokes are
-        // delivered. Release the guard BEFORE the deselect tail so a fast
-        // consecutive paste is never dropped (the ~1s tap schedule used to
-        // hold the flag and eat repeat pastes). The taps below touch only
-        // the caret and abort the moment focus leaves this target, so they
-        // are safe to run unguarded alongside a following paste.
+        // delivered. Release the guard BEFORE the optional deselect so a
+        // fast consecutive paste is never dropped. The caret nudge below
+        // aborts the moment focus leaves this target, so it is safe to
+        // run unguarded alongside a following paste.
         PASTE_IN_FLIGHT.store(false, Ordering::SeqCst);
 
-        // Deselect-after-paste: some browser engines leave the inserted
-        // text selected (highlighted) after a synthetic Ctrl+V. Collapse
-        // it (browsers only — elsewhere a stray Right would nudge the
-        // caret, so other targets are deliberately untouched).
-        collapse_pasted_selection(target_hwnd);
+        // v32-C: optional deselect (setting-gated, web-class only, one
+        // Right). Default configuration sends NO post-paste keystroke.
+        maybe_deselect_after_paste(deselect_after);
     });
 
     Ok(())
@@ -1731,6 +1781,18 @@ pub fn write_item_to_clipboard(item: &ClipItem, plain_text_only: bool) -> Result
 
         EmptyClipboard().map_err(|e| e.to_string())?;
 
+        // v32-B1: sequence + staged-format inventory for the post-check.
+        let seq = CLIP_SEQ.fetch_add(1, Ordering::SeqCst);
+        log_diag(&format!(
+            "[CLIP_SEQ #{seq}] staging type='{}' plain_only={} unicode={} html={} image={} files={}",
+            item.content_type,
+            plain_text_only,
+            item.text_content.is_some(),
+            item.html_content.is_some(),
+            item.image_path.is_some(),
+            item.file_paths.is_some(),
+        ));
+
         let html_format = RegisterClipboardFormatW(
             PCWSTR("HTML Format\0".encode_utf16().collect::<Vec<u16>>().as_ptr()),
         );
@@ -2214,7 +2276,7 @@ fn inject_ctrl_c() {
 /// Sends a single Right-arrow press (down+up, batched into one SendInput).
 /// Collapses a post-paste selection to its end so pasted text lands
 /// unhighlighted. At an unselected caret it is at most a one-char nudge —
-/// hence browser-gated by collapse_pasted_selection, never unconditional.
+/// hence browser-gated by definition, never unconditional.
 fn inject_right_arrow() {
     unsafe {
         let scan_right = MapVirtualKeyW(VK_RIGHT.0 as u32, MAPVK_VK_TO_VSC) as u16;
@@ -2249,94 +2311,39 @@ fn inject_right_arrow() {
     }
 }
 
-/// Browser + chat-shell allowlist for deselect-after-paste: Chromium/Gecko
-/// inputs (and Electron chat shells built on them) are the ones observed
-/// leaving synthetic Ctrl+V inserts selected. Everything else (terminals,
-/// editors, Office, IDEs) is left untouched — a stray Right there would
-/// move the caret for no benefit. Tell us the exe and it gets added.
-const DESELECT_BROWSERS: &[&str] = &[
-    "chrome.exe",
-    "msedge.exe",
-    "firefox.exe",
-    "comet.exe",
-    "brave.exe",
-    "arc.exe",
-    "opera.exe",
-    "vivaldi.exe",
-    "zen.exe",
-    "thorium.exe",
-    "floorp.exe",
-    "librewolf.exe",
-    "slack.exe",
-    "discord.exe",
-    "msteams.exe",
-    "teams.exe",
-    "notion.exe",
-    "whatsapp.exe",
-    "telegram.exe",
-];
-
-/// If the foreground window is a known browser, collapse any selection the
-/// just-injected paste left behind. Three taps (+80/+350/+900ms): the first
-/// catches synchronous inserts, the later ones catch editors that render or
-/// focus-late (busy pages can process Ctrl+V long after injection). Every
-/// tap re-validates that focus never left the paste target — the sequence
-/// aborts otherwise, so a tap can never land in another window. At an
-/// unselected caret each tap is a no-op; logs every step for traceability.
-fn collapse_pasted_selection(target_hwnd: Option<isize>) {
-    thread::sleep(Duration::from_millis(80));
-    let exe = foreground_exe();
-    if !DESELECT_BROWSERS.iter().any(|b| exe == *b) {
-        log_diag(&format!(
-            "[DESELECT] non-browser target '{exe}' — leaving caret alone"
-        ));
+/// v32-C: optional post-paste deselect (setting-gated, default OFF per
+/// C2 — the default configuration sends NO post-paste keystroke). When the
+/// `paste_deselect_after` setting is on AND the foreground window is a
+/// web-class target (Chromium Widget / Mozilla), send ONE VK_RIGHT to
+/// collapse a selection the paste left behind. Never enabled otherwise.
+fn maybe_deselect_after_paste(enabled: bool) {
+    if !enabled {
         return;
     }
-    for (i, wait_ms) in [0u64, 270, 550].iter().enumerate() {
-        if *wait_ms > 0 {
-            thread::sleep(Duration::from_millis(*wait_ms));
-        }
-        if !still_on_target(target_hwnd, &exe) {
-            log_diag(&format!(
-                "[DESELECT] focus left the paste target — stopping after tap {i}/3"
-            ));
-            return;
-        }
-        log_diag(&format!(
-            "[DESELECT] browser target '{exe}' — collapsing (tap {}/3)",
-            i + 1
-        ));
+    let fg = unsafe { GetForegroundWindow() };
+    let class = get_window_class_name(fg);
+    let is_web = class.starts_with("Chrome_WidgetWin_") || class.contains("Mozilla");
+    log_diag(&format!(
+        "[DESELECT] setting on: fg class='{class}' web={is_web}"
+    ));
+    if is_web {
         inject_right_arrow();
     }
 }
 
-/// Lowercased foreground exe name (empty when unreadable).
-fn foreground_exe() -> String {
+/// Window class name (empty when unreadable).
+/// Window class name (empty when unreadable).
+fn get_window_class_name(hwnd: HWND) -> String {
     unsafe {
-        get_window_exe_name(GetForegroundWindow())
-            .unwrap_or_default()
-            .to_lowercase()
+        let mut buf = [0u16; 256];
+        let n = GetClassNameW(hwnd, &mut buf);
+        if n <= 0 {
+            return String::new();
+        }
+        String::from_utf16_lossy(&buf[..(n as usize).min(buf.len())])
     }
 }
 
-/// True when focus is still where the paste landed: same hwnd when the
-/// target is known, else same exe family (target-less snippet/legacy
-/// paths). Any user Alt-Tab (or focus theft) aborts the tap sequence.
-fn still_on_target(target_hwnd: Option<isize>, exe: &str) -> bool {
-    unsafe {
-        let fg = GetForegroundWindow();
-        if fg.0.is_null() {
-            return false;
-        }
-        if let Some(want) = target_hwnd {
-            if fg.0 as isize != want {
-                return false;
-            }
-        }
-        let now = get_window_exe_name(fg).unwrap_or_default().to_lowercase();
-        now == exe
-    }
-}
 
 /// Sends `count` Left-arrow presses (batched into a single SendInput call).
 /// Used to move the caret back over a snippet's suffix for `{cursor}`.
