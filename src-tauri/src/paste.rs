@@ -23,7 +23,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
-    KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VK_C, VK_CONTROL, VK_LEFT, VK_LWIN, VK_MENU, VK_RWIN,
+    KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VK_C, VK_CONTROL, VK_LEFT, VK_LWIN, VK_MENU, VK_RIGHT, VK_RWIN,
     VK_SHIFT, VK_V,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -1038,6 +1038,12 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform) -> Result<(), Stri
         }
         // Inject Ctrl+V into focused control
         inject_ctrl_v();
+
+        // Deselect-after-paste: some browser engines leave the inserted
+        // text selected (highlighted) after a synthetic Ctrl+V. Collapse
+        // it (browsers only — elsewhere a stray Right would nudge the
+        // caret, so other targets are deliberately untouched).
+        collapse_pasted_selection();
 
         // Paste fully carried out — allow the next (legitimate) request.
         PASTE_IN_FLIGHT.store(false, Ordering::SeqCst);
@@ -2153,6 +2159,85 @@ fn inject_ctrl_c() {
             },
         }];
         SendInput(&ctrl_up, std::mem::size_of::<INPUT>() as i32);
+    }
+}
+
+/// Sends a single Right-arrow press (down+up, batched into one SendInput).
+/// Collapses a post-paste selection to its end so pasted text lands
+/// unhighlighted. At an unselected caret it is at most a one-char nudge —
+/// hence browser-gated by collapse_pasted_selection, never unconditional.
+fn inject_right_arrow() {
+    unsafe {
+        let scan_right = MapVirtualKeyW(VK_RIGHT.0 as u32, MAPVK_VK_TO_VSC) as u16;
+        let events = [
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_RIGHT,
+                        wScan: scan_right,
+                        dwFlags: Default::default(),
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_RIGHT,
+                        wScan: scan_right,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+        ];
+        let sent = SendInput(&events, std::mem::size_of::<INPUT>() as i32);
+        log_diag(&format!("[DESELECT] Right-arrow sent (SendInput returned {sent})"));
+    }
+}
+
+/// Browser allowlist for deselect-after-paste: Chromium/Gecko inputs are
+/// the ones observed leaving synthetic Ctrl+V inserts selected. Everything
+/// else (terminals, editors, Office, IDEs) is left untouched — a stray
+/// Right there would move the caret for no benefit.
+const DESELECT_BROWSERS: &[&str] = &[
+    "chrome.exe",
+    "msedge.exe",
+    "firefox.exe",
+    "comet.exe",
+    "brave.exe",
+    "arc.exe",
+    "opera.exe",
+    "vivaldi.exe",
+    "zen.exe",
+    "thorium.exe",
+    "floorp.exe",
+    "librewolf.exe",
+];
+
+/// If the foreground window is a known browser, collapse any selection the
+/// just-injected paste left behind. Waits briefly so the app processes
+/// Ctrl+V first; logs the decision either way for traceability.
+fn collapse_pasted_selection() {
+    thread::sleep(Duration::from_millis(60));
+    let exe = unsafe {
+        get_window_exe_name(GetForegroundWindow())
+            .unwrap_or_default()
+            .to_lowercase()
+    };
+    if DESELECT_BROWSERS.iter().any(|b| exe == *b) {
+        log_diag(&format!(
+            "[DESELECT] browser target '{exe}' — collapsing post-paste selection"
+        ));
+        inject_right_arrow();
+    } else {
+        log_diag(&format!(
+            "[DESELECT] non-browser target '{exe}' — leaving caret alone"
+        ));
     }
 }
 

@@ -103,3 +103,35 @@ test('v28-C - elevation fallback with visible hint (C3)', () => {
     assert.ok(tsx.includes('pasteNotice'), `${file} must render the transient notice`);
   }
 });
+
+/**
+ * Deselect-after-paste: browser engines can leave a synthetic Ctrl+V insert
+ * selected (highlighted). A single Right-arrow collapses it — but ONLY for
+ * known browsers, since elsewhere it would nudge the caret for no benefit.
+ * Snippet expansion keeps its own caret placement (untouched).
+ */
+
+test('paste deselect - browser-gated collapse exists and is scoped', () => {
+  const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'paste.rs'), 'utf8');
+  assert.ok(rs.includes('fn inject_right_arrow'), 'single Right-arrow injector must exist');
+  assert.ok(rs.includes('VK_RIGHT'), 'must use the Right-arrow virtual key');
+  assert.ok(rs.includes('DESELECT_BROWSERS'), 'browser allowlist must exist');
+  for (const exe of ['chrome.exe', 'msedge.exe', 'firefox.exe', 'comet.exe', 'brave.exe']) {
+    assert.ok(rs.includes(`"${exe}"`), `allowlist must cover ${exe}`);
+  }
+  assert.ok(rs.includes('fn collapse_pasted_selection'), 'gating decision fn must exist');
+  assert.ok(rs.includes('get_window_exe_name'), 'decision must key on the foreground exe');
+  assert.ok(rs.includes('[DESELECT]'), 'decision must be logged either way');
+  // Main item-paste path only: snippet expansion owns its caret already.
+  const callSites = rs.match(/collapse_pasted_selection\(\);/g) || [];
+  assert.equal(callSites.length, 1, 'exactly one call site (main paste path)');
+  const mainPath = rs.indexOf('// Inject Ctrl+V into focused control');
+  assert.ok(
+    mainPath !== -1 && rs.indexOf('collapse_pasted_selection();', mainPath) > mainPath,
+    'must run right after the main Ctrl+V inject'
+  );
+  assert.ok(
+    !rs.includes('PASTE_SNIPPET] Injecting Ctrl+V for snippet prefix...\n        inject_ctrl_v();\n\n        collapse_pasted_selection'),
+    'snippet path must stay untouched'
+  );
+});
