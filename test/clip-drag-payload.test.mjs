@@ -81,10 +81,17 @@ test('drag payload - every clip carries collection + internal flavors', () => {
   assert.equal(JSON.parse(e.dataTransfer.store['application/json']).clipId, 'clip-1');
 });
 
-test('drag payload - html passthrough for rich targets', () => {
-  const e = mockEvent();
-  setClipDragData(e, base({ html_content: '<b>hi</b>' }));
-  assert.equal(e.dataTransfer.store['text/html'], '<b>hi</b>');
+test('drag payload - NO clip type offers text/html (tab-crash vector)', () => {
+  for (const item of [
+    base({ html_content: '<b>hi</b>' }),
+    base({ content_type: 'code', text_content: 'x();', html_content: '<code>x();</code>' }),
+    base({ content_type: 'link', text_content: 'https://example.com', html_content: '<a href="https://example.com">x</a>' }),
+  ]) {
+    const e = mockEvent();
+    setClipDragData(e, item);
+    assert.ok(!('text/html' in e.dataTransfer.store), item.content_type + ': must not offer HTML');
+    assert.ok(e.dataTransfer.store['text/plain'].length > 0, item.content_type + ': plain text must survive');
+  }
 });
 
 test('drag payload - link exposes uri-list', () => {
@@ -167,8 +174,8 @@ test('drag payload - rich_text never offers text/html', () => {
   assert.ok(e.dataTransfer.store['carbon/clip-ids'], 'internal flavors must survive');
 });
 
-test('drag payload - non-rich clips keep their HTML flavor', () => {
+test('drag payload - retired: HTML flavor removed for all types', () => {
   const e = mockEvent();
   setClipDragData(e, base({ content_type: 'text', html_content: '<b>hi</b>' }));
-  assert.equal(e.dataTransfer.store['text/html'], '<b>hi</b>');
+  assert.ok(!('text/html' in e.dataTransfer.store), 'text must not offer HTML either');
 });

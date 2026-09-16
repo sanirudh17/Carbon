@@ -20,14 +20,12 @@ export const setClipDragData = (
   dt.setData('application/json', JSON.stringify({ ids: list, clipId: item.id }));
   dt.setData('carbon/clip-ids', JSON.stringify(list));
 
-  if (item.html_content && item.content_type !== 'rich_text') {
-    // Rich-text clips deliberately offer NO text/html: the stored fragment
-    // is full-page capture HTML (deep nesting, data-URL images, sliced
-    // tags) that crashes target tabs/editors on drop across browsers.
-    // Plain unformatted text drops universally; same-window Carbon drops
-    // resolve via the ids/json flavors above, never via HTML.
-    dt.setData('text/html', item.html_content);
-  }
+  // NOTE: no text/html on drags, for ANY type. Stored HTML is full-page
+  // capture markup (deep nesting, data-URL images, sliced tags) that
+  // crashes target tabs/editors on drop — first seen with rich_text,
+  // then with HTML-carrying text clips too. Plain text drops universally;
+  // same-window Carbon drops resolve via the ids/json flavors above;
+  // rich paste (Ctrl+V) still delivers full CF_HTML formatting.
 
   if (item.content_type === 'link') {
     dt.setData('text/uri-list', text);
