@@ -174,3 +174,19 @@ test('v34-F1/F3 - html+dropeffect offers, named logging', () => {
   assert.ok(src.includes('REFUSED'), 'v31 gate refusal must stay');
   assert.ok(src.includes('cf_drop_effect'), 'dropeffect id must thread through offers');
 });
+
+test('v26-F1/F2/F3 - decisive sets, proof logging, self-test command', () => {
+  const src = fs.readFileSync(path.join(SRC_TAURI_DIR, 'native_drag.rs'), 'utf8');
+  // F1: text/code/link carry no HTML path (offer_html_bytes only serves
+  // email + rich branches now).
+  const offerCalls = (src.match(/offer_html_bytes\(kind, &text/g) || []).length;
+  assert.equal(offerCalls, 2, 'only email and rich branches resolve HTML');
+  // F2: serve-time proof + drop-result line.
+  for (const token of ['escape_preview', 'SERVED_FORMATS', 'rendered=[', 'VIOLATION: unicode medium', 'VIOLATION: served HTML']) {
+    assert.ok(src.includes(token), `F2 proof logging must include ${token}`);
+  }
+  // F3: self-test command wired.
+  assert.ok(src.includes('pub fn drag_selftest'), 'self-test command must exist');
+  const libRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'lib.rs'), 'utf8');
+  assert.ok(libRs.includes('native_drag::drag_selftest'), 'self-test must be registered');
+});

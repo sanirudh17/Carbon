@@ -1384,6 +1384,7 @@ pub fn run() {
             set_show_snippets,
             set_overlay_animation,
             native_drag::begin_native_drag,
+            native_drag::drag_selftest,
             submit_arg_prompt,
             get_pending_arg_request,
             get_hotkey_status,

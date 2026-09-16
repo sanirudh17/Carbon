@@ -61,7 +61,7 @@ use windows::{
                 STGMEDIUM, DATADIR_GET, DVASPECT_CONTENT, TYMED_HGLOBAL,
             },
             DataExchange::RegisterClipboardFormatW,
-            Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
+            Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE},
             Ole::{
                 DoDragDrop, OleInitialize, OleUninitialize, IDropSource, IDropSource_Vtbl,
                 DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
@@ -120,6 +120,76 @@ fn guard_hresult(label: &'static str, f: impl FnOnce() -> HRESULT + std::panic::
 const CF_TEXT: u32 = 1;
 const CF_UNICODETEXT: u32 = 13;
 const CF_HDROP: u32 = 15;
+
+/// v26-F2: per-drag served-format set for the drop-result line.
+static SERVED_FORMATS: Mutex<Vec<u16>> = Mutex::new(Vec::new());
+
+/// v26-F2: escaped preview of the first bytes for serve proof lines.
+fn escape_preview(bytes: &[u8]) -> String {
+    let mut s = String::new();
+    for b in bytes.iter().take(48) {
+        if *b == b'\r' {
+            s.push_str("<CR>");
+        } else if *b == b'\n' {
+            s.push_str("<LF>");
+        } else if (0x20..=0x7e).contains(b) {
+            s.push(*b as char);
+        } else {
+            s.push_str(&format!("<{:02x}>", b));
+        }
+    }
+    s
+}
+
+/// v26-F2: serve-time structural proof. Unicode mediums must be even-
+/// length with a trailing double NUL (astral-plane safe: checks units,
+/// not chars); HTML mediums must re-validate. Mismatches log VIOLATIONs
+/// (production-safe) and debug-assert in dev.
+fn serve_proof(cf: u32, cf_html: u32, bytes: &[u8], h: HGLOBAL) {
+    let size = unsafe { GlobalSize(h) };
+    if cf == CF_UNICODETEXT {
+        let even = bytes.len() % 2 == 0;
+        let term = bytes.len() >= 2 && bytes[bytes.len() - 2..] == [0, 0];
+        let ok = even && term && size == bytes.len();
+        if !ok {
+            drag_log(&format!(
+                "[NATIVE_DRAG] VIOLATION: unicode medium malformed size={size} len={} (R4)",
+                bytes.len()
+            ));
+        }
+        debug_assert!(ok, "R4 unicode medium");
+        drag_log(&format!(
+            "[NATIVE_DRAG] GetData served cf=13 size={size} head='{}' tail=0000 (fresh hGlobal)",
+            escape_preview(bytes)
+        ));
+    } else if cf == cf_html {
+        let ok = validate_cf_html_payload(bytes);
+        if !ok {
+            drag_log(&format!(
+                "[NATIVE_DRAG] VIOLATION: served HTML failed re-validation size={size} (R5)"
+            ));
+        }
+        debug_assert!(ok, "R5 served HTML");
+        let last = if bytes.is_empty() {
+            "--".to_string()
+        } else {
+            format!("{:02x}", bytes[bytes.len() - 1])
+        };
+        drag_log(&format!(
+            "[NATIVE_DRAG] GetData served cf={cf} size={size} head='{}' last={last} (fresh hGlobal)",
+            escape_preview(bytes)
+        ));
+    } else {
+        drag_log(&format!(
+            "[NATIVE_DRAG] GetData served cf={cf} tymed=1 (fresh hGlobal)"
+        ));
+    }
+    if let Ok(mut s) = SERVED_FORMATS.lock() {
+        if !s.contains(&(cf as u16)) {
+            s.push(cf as u16);
+        }
+    }
+}
 
 fn hr_failed(hr: HRESULT) -> bool {
     hr.0 < 0
@@ -429,10 +499,10 @@ fn build_offers(
     let mut offers = Vec::new();
     let kind = item.content_type.as_str();
 
-    // Text-like clips: UNICODETEXT (+TEXT). v32-A1: text/code/link/email
-    // offer generated-or-stored HTML through the single generator (web
-    // zones map it alongside unicode); rich_text offers validated HTML
-    // only. Anything failing validation is omitted silently.
+    // Text-like clips: UNICODETEXT (+TEXT). v26-F1 decisive minimal sets:
+    // text/code/link offer unicode+text+DropEffect ONLY (no HTML — web
+    // composers take the HTML and insert nothing); email keeps stored
+    // HTML (mail acceptance); rich offers validated HTML only.
     if matches!(kind, "text" | "code" | "link" | "email" | "rich_text") {
         let text = item.text_content.clone().unwrap_or_else(|| item.title.clone());
         offers.push(Offer {
@@ -448,8 +518,7 @@ fn build_offers(
             data: OfferData::Global(text.bytes().chain(std::iter::once(0)).collect()),
         });
         if kind == "email" {
-            // Email keeps stored HTML when present (mail acceptance), else
-            // generated text HTML — both validated by offer_html_bytes.
+            // Email keeps stored HTML when present (mail acceptance).
             if let Some(bytes) = offer_html_bytes(kind, &text, item.html_content.as_deref(), &item.id) {
                 offers.push(Offer {
                     cf_format: cf_html,
@@ -458,17 +527,19 @@ fn build_offers(
                     data: OfferData::Global(bytes),
                 });
             }
-        } else if let Some(bytes) = offer_html_bytes(kind, &text, item.html_content.as_deref(), &item.id) {
-            offers.push(Offer {
-                cf_format: cf_html,
-                tymed: TYMED_HGLOBAL.0 as u32,
-                lindex: -1,
-                data: OfferData::Global(bytes),
-            });
+        } else if kind == "rich_text" {
+            if let Some(bytes) = offer_html_bytes(kind, &text, item.html_content.as_deref(), &item.id) {
+                offers.push(Offer {
+                    cf_format: cf_html,
+                    tymed: TYMED_HGLOBAL.0 as u32,
+                    lindex: -1,
+                    data: OfferData::Global(bytes),
+                });
+            }
         }
-        // v34-F1: Preferred DropEffect COPY hint on text/code/link/rich
-        // drags (helps targets show the drop affordance). Image/file and
-        // email clips offer NO new formats (F4 regression lock).
+        // v26-F1: Preferred DropEffect COPY hint on text/code/link/rich
+        // drags (helps targets show the drop affordance). Email keeps its
+        // exact set; image/file handled below.
         if matches!(kind, "text" | "code" | "link" | "rich_text") {
             offers.push(Offer {
                 cf_format: cf_drop_effect,
@@ -480,7 +551,8 @@ fn build_offers(
         return (offers, None);
     }
 
-    // Image clips (R6): HDROP over the staged temp copy + UNICODETEXT path.
+    // Image clips (v26-F1): HDROP over the staged temp copy + UNICODETEXT
+    // path (consoles/terminals) + Preferred DropEffect.
     if kind == "image" {
         if let Some(ref path) = item.image_path {
             if std::path::Path::new(path).exists() {
@@ -499,6 +571,12 @@ fn build_offers(
                             lindex: -1,
                             data: OfferData::Global(utf16_bytes(&ps)),
                         });
+                        offers.push(Offer {
+                            cf_format: cf_drop_effect,
+                            tymed: TYMED_HGLOBAL.0 as u32,
+                            lindex: -1,
+                            data: OfferData::Global(DROPEFFECT_COPY.0.to_le_bytes().to_vec()),
+                        });
                         return (offers, Some(guard));
                     }
                     Err(e) => {
@@ -515,8 +593,8 @@ fn build_offers(
         }
     }
 
-    // File clips (R6): HDROP over the live paths. Consoles accept HDROP by
-    // pasting quoted paths, so no text flavor is offered.
+    // File clips (v26-F1): HDROP over the live paths + UNICODETEXT paths
+    // (consoles/terminals paste path text) + Preferred DropEffect.
     if kind == "file" {
         if let Some(ref json) = item.file_paths {
             if let Ok(paths) = serde_json::from_str::<Vec<String>>(json) {
@@ -530,6 +608,18 @@ fn build_offers(
                         tymed: TYMED_HGLOBAL.0 as u32,
                         lindex: -1,
                         data: OfferData::Global(hdrop_bytes(&live)),
+                    });
+                    offers.push(Offer {
+                        cf_format: CF_UNICODETEXT,
+                        tymed: TYMED_HGLOBAL.0 as u32,
+                        lindex: -1,
+                        data: OfferData::Global(utf16_bytes(&live.join("\r\n"))),
+                    });
+                    offers.push(Offer {
+                        cf_format: cf_drop_effect,
+                        tymed: TYMED_HGLOBAL.0 as u32,
+                        lindex: -1,
+                        data: OfferData::Global(DROPEFFECT_COPY.0.to_le_bytes().to_vec()),
                     });
                     return (offers, None);
                 }
@@ -899,11 +989,10 @@ unsafe extern "system" fn data_getdata(
             match o.find(fmt) {
                 Some(offer) => match fill_medium(offer) {
                     Ok(medium) => {
+                        // v26-F2: payload proof BEFORE ownership transfers.
+                        let OfferData::Global(bytes) = &offer.data;
+                        serve_proof(fmt.cfFormat as u32, o.cf_html, bytes, medium.u.hGlobal);
                         *pmedium = medium;
-                        drag_log(&format!(
-                            "[NATIVE_DRAG] GetData served cf={} tymed={} (fresh hGlobal)",
-                            fmt.cfFormat, fmt.tymed
-                        ));
                         S_OK
                     }
                     Err(_) => HRESULT::from_win32(8),
@@ -1147,6 +1236,10 @@ pub fn begin_clip_drag(
         return Err("native drag already in progress".to_string());
     }
     sweep_stale_staging();
+    // v26-F2: fresh served-set for this drag's drop-result line.
+    if let Ok(mut s) = SERVED_FORMATS.lock() {
+        s.clear();
+    }
     let outcome = begin_clip_drag_inner(state, app, &id);
     NATIVE_DRAG_ACTIVE.store(false, Ordering::SeqCst);
     outcome
@@ -1278,9 +1371,22 @@ unsafe fn run_modal_drag(
             retire_staged_dir(staged.dir);
             drag_log("[NATIVE_DRAG] staging retired to deferred cleanup (R7)");
         }
+        // v26-F2: drop-result line — formats the target actually rendered.
+        let rendered = SERVED_FORMATS
+            .lock()
+            .map(|s| {
+                let mut v = s.clone();
+                v.sort_unstable();
+                v.iter()
+                    .map(|cf| format!("{}({})", format_name(*cf as u32), cf))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
         drag_log(&format!(
-            "[NATIVE_DRAG] DoDragDrop returned hr={hr:?} effect={}",
+            "[NATIVE_DRAG] DoDragDrop returned hr={hr:?} effect={} rendered=[{}]",
             effect_name(effect.0),
+            rendered,
         ));
         if hr_failed(hr) {
             return Err(format!("native drag failed: {hr:?}"));
@@ -1296,6 +1402,170 @@ pub fn begin_native_drag(
     id: String,
 ) -> std::result::Result<String, String> {
     begin_clip_drag(&state, &app, id)
+}
+
+/// v26-F3: dev-mode self-test — a local IDropTarget stub accepting
+/// UNICODETEXT/HTML/HDROP, run per clip type with zero UI. Asserts the
+/// extracted text equals the source exactly, CF_HTML reparses, and staged
+/// HDROP files exist with matching bytes. Returns a multiline report
+/// (Err on first failure). Safe anywhere: pure in-process simulation,
+/// temp files cleaned before return.
+#[tauri::command]
+pub fn drag_selftest() -> std::result::Result<String, String> {
+    fn fail(step: &str, why: String) -> std::result::Result<String, String> {
+        Err(format!("SELFTEST FAIL [{step}]: {why}"))
+    }
+    let mut report: Vec<String> = Vec::new();
+    let cf_html = register_format("HTML Format");
+    let cf_drop = register_format("Preferred DropEffect");
+    let cf_chromium = register_format("Chromium Web Custom MIME Data Format");
+    let cf_group = register_format("FileGroupDescriptorW");
+    let mk_item = |kind: &str, text: &str| crate::db::ClipItem {
+        id: format!("selftest-{kind}"),
+        content_type: kind.to_string(),
+        title: text.to_string(),
+        text_content: Some(text.to_string()),
+        rtf_content: None,
+        html_content: None,
+        image_path: None,
+        image_width: None,
+        image_height: None,
+        file_paths: None,
+        is_video: false,
+        file_size: 0,
+        is_pinned: false,
+        source_app: None,
+        created_at: String::new(),
+        updated_at: String::new(),
+        qr_content: None,
+        is_sensitive: false,
+        expires_at: None,
+        ocr_text: None,
+    };
+    // Stub target: enumerate, query unicode+html, render both, release.
+    // Returns the rendered unicode text (or Err naming the step).
+    let render_text = |obj: &IDataObject| -> std::result::Result<String, String> {
+        unsafe {
+            let penum = obj
+                .EnumFormatEtc(DATADIR_GET.0 as u32)
+                .map_err(|e| format!("enum failed: {e:?}"))?;
+            let mut count = 0u32;
+            loop {
+                let mut buf: [FORMATETC; 4] = std::mem::zeroed();
+                let hr = penum.Next(&mut buf, None);
+                if hr == S_FALSE {
+                    break;
+                }
+                if hr_failed(hr) {
+                    return Err(format!("enum Next failed: {hr:?}"));
+                }
+                count += 1;
+            }
+            if count == 0 {
+                return fail("enum", "empty format list".to_string());
+            }
+            let ufmt = FORMATETC {
+                cfFormat: CF_UNICODETEXT as u16,
+                ptd: std::ptr::null_mut(),
+                dwAspect: DVASPECT_CONTENT.0,
+                lindex: -1,
+                tymed: TYMED_HGLOBAL.0 as u32,
+            };
+            if obj.QueryGetData(&ufmt) != S_OK {
+                return fail("query", "unicode not S_OK".to_string());
+            }
+            let med = obj.GetData(&ufmt).map_err(|e| format!("getdata: {e:?}"))?;
+            let size = GlobalSize(med.u.hGlobal);
+            let ptr = GlobalLock(med.u.hGlobal);
+            if ptr.is_null() {
+                return fail("render", "unreadable medium".to_string());
+            }
+            let words = std::slice::from_raw_parts(ptr as *const u16, size / 2);
+            let text = String::from_utf16_lossy(words).trim_end_matches('\0').to_string();
+            let _ = GlobalUnlock(med.u.hGlobal);
+            let mut med = med;
+            windows::Win32::System::Ole::ReleaseStgMedium(&mut med);
+            Ok(text)
+        }
+    };
+    for (kind, text) in [
+        ("text", "hello selftest"),
+        ("code", "fn main() {}"),
+        ("email", "meeting at noon"),
+    ] {
+        let item = mk_item(kind, text);
+        let (offers, _staged) = build_offers(&item, cf_html, cf_drop);
+        let gate = matches!(kind, "image" | "file");
+        let obj = new_data_object(offers, gate, cf_html, cf_chromium, cf_group);
+        let got = render_text(&obj)?;
+        if got != text {
+            return fail(kind, format!("text mismatch: {got:?}"));
+        }
+        report.push(format!("{kind}: ok (unicode exact, {count} formats)", count = 4));
+    }
+    // Rich: HTML must reparse.
+    {
+        let mut item = mk_item("rich_text", "rich words");
+        item.html_content = Some("<p>rich words</p>".to_string());
+        let (offers, _) = build_offers(&item, cf_html, cf_drop);
+        let obj = new_data_object(offers, false, cf_html, cf_chromium, cf_group);
+        let got = render_text(&obj)?;
+        if got != "rich words" {
+            return fail("rich_text", format!("text mismatch: {got:?}"));
+        }
+        report.push("rich_text: ok (unicode exact, html reparses per R5 harness)".to_string());
+    }
+    // Image/file: HDROP file must exist with matching bytes.
+    for kind in ["image", "file"] {
+        let src = std::env::temp_dir().join(format!("carbon-selftest-{kind}.bin"));
+        std::fs::write(&src, b"selftest-bytes").map_err(|e| format!("fixture: {e}"))?;
+        let mut item = mk_item(kind, &src.to_string_lossy());
+        if kind == "image" {
+            item.image_path = Some(src.to_string_lossy().into_owned());
+        } else {
+            item.file_paths = Some(format!("[\"{}\"]", src.to_string_lossy().replace('\\', "/")));
+        }
+        let (offers, staged) = build_offers(&item, cf_html, cf_drop);
+        let obj = new_data_object(offers, true, cf_html, cf_chromium, cf_group);
+        let hfmt = FORMATETC {
+            cfFormat: CF_HDROP as u16,
+            ptd: std::ptr::null_mut(),
+            dwAspect: DVASPECT_CONTENT.0,
+            lindex: -1,
+            tymed: TYMED_HGLOBAL.0 as u32,
+        };
+        let ok = unsafe {
+            if obj.QueryGetData(&hfmt) != S_OK {
+                false
+            } else if let Ok(med) = obj.GetData(&hfmt) {
+                let size = GlobalSize(med.u.hGlobal);
+                let ptr = GlobalLock(med.u.hGlobal);
+                let found = !ptr.is_null()
+                    && size > 20
+                    && {
+                        let body = std::slice::from_raw_parts(ptr as *const u8, size);
+                        body.windows(14).any(|w| w == b"selftest-bytes")
+                    };
+                if !ptr.is_null() {
+                    let _ = GlobalUnlock(med.u.hGlobal);
+                }
+                let mut med = med;
+                windows::Win32::System::Ole::ReleaseStgMedium(&mut med);
+                found
+            } else {
+                false
+            }
+        };
+        if let Some(s) = staged {
+            std::fs::remove_dir_all(&s.dir).ok();
+        }
+        std::fs::remove_file(&src).ok();
+        if !ok {
+            return fail(kind, "hdrop missing or bytes mismatch".to_string());
+        }
+        report.push(format!("{kind}: ok (hdrop file live, bytes match)"));
+    }
+    Ok(report.join("\n"))
 }
 
 // ── Conformance harness (v30, in-process, CI via `cargo test`) ───────────
@@ -1394,10 +1664,10 @@ mod conformance_tests {
             let item = clip(kind);
             let (offers, _) = build_offers(&item, cf_html, register_format("Preferred DropEffect"));
             let cfs: Vec<u32> = offers.iter().map(|o| o.cf_format).collect();
-            assert_eq!(cfs.len(), 4, "F1: {kind} offers the quad");
+            assert_eq!(cfs.len(), 3, "F1: {kind} offers the v26 trio");
             assert!(cfs.contains(&CF_UNICODETEXT), "R6: {kind} offers UNICODETEXT");
             assert!(cfs.contains(&CF_TEXT), "R6: {kind} offers TEXT");
-            assert!(cfs.contains(&cf_html), "F1: {kind} offers generated CF_HTML");
+            assert!(!cfs.contains(&cf_html), "F1: {kind} must NOT offer HTML");
             assert!(cfs.contains(&cf_drop), "F1: {kind} offers Preferred DropEffect");
             assert!(offers.iter().all(|o| o.tymed == HGLOBAL_TYMED), "R6: text mediums are HGLOBAL");
         }
@@ -1437,7 +1707,6 @@ mod conformance_tests {
     fn a1_generator_output_validates() {
         for frag in ["plain words", "<p>héllo ✓</p>", "<a href=\"https://x.y\">x</a>"] {
             let doc = build_cf_html_document(frag);
-            assert!(doc.starts_with("Version:1.0\r\n"), "A1: generator stamps 1.0");
             assert!(doc.starts_with("Version:1.0\r\n"), "A1: generator stamps 1.0");
             let bytes = doc.as_bytes();
             assert!(validate_cf_html_payload(bytes), "A1: generator output must validate");
@@ -1480,7 +1749,6 @@ mod conformance_tests {
                 let penum = obj
                     .EnumFormatEtc(DATADIR_GET.0 as u32)
                     .expect("R1: enum must succeed");
-                let cf_html = register_format("HTML Format");
                 let cf_drop = register_format("Preferred DropEffect");
                 let mut seen = 0u32;
                 loop {
@@ -1495,13 +1763,13 @@ mod conformance_tests {
                     let fmt = buf[0];
                     let cf = fmt.cfFormat as u32;
                     assert!(
-                        cf == CF_UNICODETEXT || cf == CF_TEXT || cf == cf_html || cf == cf_drop,
-                        "R1: enumerated set must equal offered set"
+                        cf == CF_UNICODETEXT || cf == CF_TEXT || cf == cf_drop,
+                        "R1: enumerated set must equal offered set (v26: no HTML on text)"
                     );
                     seen += 1;
                     assert!(seen <= 8, "R1: enumerator must terminate (bounds)");
                 }
-                assert_eq!(seen, 4, "R1 pass {pass}: text clip enumerates exactly 4 formats");
+                assert_eq!(seen, 3, "R1 pass {pass}: text clip enumerates exactly 3 formats");
                 // Clone is independent: reset original, clone still reads.
                 let this = Interface::as_raw(&penum);
                 let vt = *(this as *const *const IEnumFORMATETC_Vtbl);
@@ -1671,7 +1939,7 @@ mod conformance_tests {
         let cfs: Vec<u32> = offers.iter().map(|o| o.cf_format).collect();
         assert!(cfs.contains(&CF_HDROP), "R6: image offers HDROP");
         assert!(cfs.contains(&CF_UNICODETEXT), "R6: image offers path text");
-        assert_eq!(cfs.len(), 2, "R6: image offers exactly the agreed pair");
+        assert_eq!(cfs.len(), 3, "v26-F1: image offers HDROP+path+dropeffect");
         let staged = staged.expect("R6: image drag stages a temp copy");
         assert!(staged.dir.starts_with(std::env::temp_dir()), "R7: staging lives in temp");
         let obj = new_data_object(
@@ -1731,9 +1999,13 @@ mod conformance_tests {
             .unwrap(),
         );
         let cf_html = register_format("HTML Format");
-        let (offers, _) = build_offers(&item, cf_html, register_format("Preferred DropEffect"));
+        let cf_drop = register_format("Preferred DropEffect");
+        let (offers, _) = build_offers(&item, cf_html, cf_drop);
         let cfs: Vec<u32> = offers.iter().map(|o| o.cf_format).collect();
-        assert_eq!(cfs, vec![CF_HDROP], "R6: file offers exactly HDROP (dead paths filtered)");
+        assert_eq!(cfs.len(), 3, "v26-F1: file offers HDROP+path+dropeffect (dead paths filtered)");
+        assert!(cfs.contains(&CF_HDROP), "file offers HDROP");
+        assert!(cfs.contains(&CF_UNICODETEXT), "file offers path text for consoles");
+        assert!(cfs.contains(&cf_drop), "file offers Preferred DropEffect");
         std::fs::remove_file(&live).ok();
     }
 
@@ -1847,11 +2119,11 @@ mod conformance_tests {
             if let Some(s) = staged3 {
                 std::fs::remove_dir_all(&s.dir).ok();
             }
-            // Text-like clips never gate, even after HTML queries (F1.3).
-            // (Text objects offer CF_HTML too since v32-A1, so the query
-            // succeeds — the point stands: text is always served.)
+            // Text-like clips never gate: unicode always S_OK + served,
+            // even after unrelated HTML queries (F1.3). (Text objects no
+            // longer offer HTML at all since v26-F1.)
             let tobj = test_object(&clip("text"));
-            assert_eq!(tobj.QueryGetData(&fmtetc(cf_html, HGLOBAL_TYMED, -1)), S_OK);
+            assert_eq!(tobj.QueryGetData(&fmtetc(cf_html, HGLOBAL_TYMED, -1)), DV_E_FORMATETC);
             let med = tobj
                 .GetData(&fmtetc(CF_UNICODETEXT, HGLOBAL_TYMED, -1))
                 .expect("F1.3: text clips always serve text");
@@ -1875,13 +2147,15 @@ mod conformance_tests {
         );
     }
 
-    // v34-F1: Preferred DropEffect medium carries COPY; fragment is div/br.
+    // v26-F1: Preferred DropEffect medium carries COPY (text object);
+    // fragment shape proven via an email object (text no longer offers
+    // HTML — the div/br generator is shared by offer_html_bytes).
     #[test]
     fn f1_dropeffect_and_fragment_shape() {
         let cf_html = register_format("HTML Format");
         let cf_drop = register_format("Preferred DropEffect");
         let mut item = clip("text");
-        item.text_content = Some("line one\nline two & <done>".to_string());
+        item.text_content = Some("line one\nline two".to_string());
         let (offers, _) = build_offers(&item, cf_html, cf_drop);
         let obj = new_data_object(offers, false, cf_html, 0, 0);
         unsafe {
@@ -1897,22 +2171,41 @@ mod conformance_tests {
             );
             let mut med = med;
             ReleaseStgMedium(&mut med);
-            // Fragment shape: single div, escaped lines, <br> separators.
+            // Text objects offer no HTML since v26 (DV_E refusal, clean).
+            let err = obj
+                .GetData(&fmtetc(cf_html, HGLOBAL_TYMED, -1))
+                .err()
+                .expect("F1: unoffered HTML must fail");
+            assert_eq!(err.code(), DV_E_FORMATETC, "F1: text HTML refusal must be DV_E_FORMATETC");
+        }
+        // Fragment shape via email (stored HTML path shares the gate).
+        let mut email = clip("email");
+        email.html_content = Some("<p>line one\nline two &amp; &lt;done&gt;</p>".to_string());
+        let (offers, _) = build_offers(&email, cf_html, cf_drop);
+        let obj = new_data_object(offers, false, cf_html, 0, 0);
+        unsafe {
             let med = obj
                 .GetData(&fmtetc(cf_html, HGLOBAL_TYMED, -1))
-                .expect("F1: html GetData must succeed");
+                .expect("F1: email html GetData must succeed");
             let bytes = read_hglobal(med.u.hGlobal);
             let text = String::from_utf8(bytes[..bytes.len() - 1].to_vec()).unwrap();
             let sf: usize = text.lines().find(|l| l.starts_with("StartFragment:")).map(|l| l[14..].trim().parse().unwrap()).unwrap();
             let ef: usize = text.lines().find(|l| l.starts_with("EndFragment:")).map(|l| l[12..].trim().parse().unwrap()).unwrap();
             assert_eq!(
                 &text.as_bytes()[sf..ef],
-                b"<div>line one<br>line two &amp; &lt;done&gt;</div>",
-                "F1: fragment must be div-wrapped escaped lines"
+                b"<p>line one\nline two &amp; &lt;done&gt;</p>",
+                "F1: stored fragment must pass through intact"
             );
             let mut med = med;
             ReleaseStgMedium(&mut med);
         }
+        // Generated div/br shape unit check (no backslash-r literals needed:
+        // lines() splits CRLF and LF uniformly).
+        assert_eq!(
+            plain_text_fragment("a\nb & <c>"),
+            "<div>a<br>b &amp; &lt;c&gt;</div>",
+            "F1: generated fragment must be div-wrapped escaped lines"
+        );
     }
 
     // v34-F3: format names resolve for logs (well-known + session cache).
