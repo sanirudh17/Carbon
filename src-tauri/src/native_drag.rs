@@ -132,7 +132,33 @@ fn wide_null(s: &str) -> Vec<u16> {
 fn register_format(name: &str) -> u32 {
     unsafe {
         let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
-        RegisterClipboardFormatW(PCWSTR(wide.as_ptr()))
+        let id = RegisterClipboardFormatW(PCWSTR(wide.as_ptr()));
+        // v34-F3: cache the name per session for readable drag logs.
+        if let Ok(mut names) = FORMAT_NAMES.lock() {
+            if !names.iter().any(|(known, _)| *known == id) {
+                names.push((id, name.to_string()));
+            }
+        }
+        id
+    }
+}
+
+/// v34-F3: session cache of registered format names (F3 log readability).
+/// Vec-backed (const-constructible); tiny cardinality, linear scan fine.
+static FORMAT_NAMES: Mutex<Vec<(u32, String)>> = Mutex::new(Vec::new());
+
+/// Human-readable format name for drag logs: well-known ids literally,
+/// registered ids from the session cache, anything else numeric.
+fn format_name(cf: u32) -> String {
+    match cf {
+        CF_TEXT => "CF_TEXT".to_string(),
+        CF_UNICODETEXT => "CF_UNICODETEXT".to_string(),
+        CF_HDROP => "CF_HDROP".to_string(),
+        _ => FORMAT_NAMES
+            .lock()
+            .ok()
+            .and_then(|m| m.iter().find(|(id, _)| *id == cf).map(|(_, n)| n.clone()))
+            .unwrap_or_else(|| format!("cf={cf}")),
     }
 }
 
@@ -319,6 +345,15 @@ fn escape_html_text(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
+/// v34-F1: plain-text fragment shape — escaped lines joined with <br>
+/// inside a single <div>. (No backslash-r literals: lines() splits
+/// CRLF and LF uniformly.)
+fn plain_text_fragment(text: &str) -> String {
+    let escaped = escape_html_text(text);
+    let lines: Vec<&str> = escaped.lines().collect();
+    format!("<div>{}</div>", lines.join("<br>"))
+}
+
 /// v32-A1: resolve the HTML bytes to offer for a text-like clip, or None.
 /// Links generate an anchor; stored full documents validate as-is;
 /// anything else goes through the single generator. Validation failures
@@ -335,9 +370,11 @@ fn offer_html_bytes(kind: &str, text: &str, html_opt: Option<&str>, item_id: &st
                 b
             }
             Some(h) => build_cf_html_document(h).into_bytes(),
+            // v34-F1: text/code/link/rich without stored HTML generate
+            // from the clip text (div/br shape); email stays duo.
             None => {
-                if matches!(kind, "text" | "code" | "link") {
-                    build_cf_html_document(&escape_html_text(text)).into_bytes()
+                if matches!(kind, "text" | "code" | "link" | "rich_text") {
+                    build_cf_html_document(&plain_text_fragment(text)).into_bytes()
                 } else {
                     return None;
                 }
@@ -384,7 +421,11 @@ fn validate_cf_html_payload(payload: &[u8]) -> bool {
 
 /// R6: the agreed format set per clip type — and nothing else. Returns the
 /// offers plus the staging guard (kept alive through DoDragDrop).
-fn build_offers(item: &crate::db::ClipItem, cf_html: u32) -> (Vec<Offer>, Option<StagedDrag>) {
+fn build_offers(
+    item: &crate::db::ClipItem,
+    cf_html: u32,
+    cf_drop_effect: u32,
+) -> (Vec<Offer>, Option<StagedDrag>) {
     let mut offers = Vec::new();
     let kind = item.content_type.as_str();
 
@@ -423,6 +464,17 @@ fn build_offers(item: &crate::db::ClipItem, cf_html: u32) -> (Vec<Offer>, Option
                 tymed: TYMED_HGLOBAL.0 as u32,
                 lindex: -1,
                 data: OfferData::Global(bytes),
+            });
+        }
+        // v34-F1: Preferred DropEffect COPY hint on text/code/link/rich
+        // drags (helps targets show the drop affordance). Image/file and
+        // email clips offer NO new formats (F4 regression lock).
+        if matches!(kind, "text" | "code" | "link" | "rich_text") {
+            offers.push(Offer {
+                cf_format: cf_drop_effect,
+                tymed: TYMED_HGLOBAL.0 as u32,
+                lindex: -1,
+                data: OfferData::Global(DROPEFFECT_COPY.0.to_le_bytes().to_vec()),
             });
         }
         return (offers, None);
@@ -1113,7 +1165,8 @@ fn begin_clip_drag_inner(
     let cf_html = register_format("HTML Format");
     let cf_chromium_mime = register_format("Chromium Web Custom MIME Data Format");
     let cf_file_group = register_format("FileGroupDescriptorW");
-    let (offers, staged) = build_offers(&item, cf_html);
+    let cf_drop_effect = register_format("Preferred DropEffect");
+    let (offers, staged) = build_offers(&item, cf_html, cf_drop_effect);
     // v31-F1: text gating applies to image/file clips (HDROP carriers).
     let gate_text = matches!(item.content_type.as_str(), "image" | "file");
     drag_log(&format!(
@@ -1123,9 +1176,9 @@ fn begin_clip_drag_inner(
         offers.len(),
         offers
             .iter()
-            .map(|o| format!("cf={}", o.cf_format))
+            .map(|o| format!("{}({})", format_name(o.cf_format), o.cf_format))
             .collect::<Vec<_>>()
-            .join(","),
+            .join(", "),
         staged.is_some()
     ));
 
@@ -1300,7 +1353,8 @@ mod conformance_tests {
         let cf_html = register_format("HTML Format");
         let cf_chromium_mime = register_format("Chromium Web Custom MIME Data Format");
         let cf_file_group = register_format("FileGroupDescriptorW");
-        let (offers, _staged) = build_offers(item, cf_html);
+        let cf_drop_effect = register_format("Preferred DropEffect");
+        let (offers, _staged) = build_offers(item, cf_html, cf_drop_effect);
         assert!(!offers.is_empty(), "R6: every clip type must offer something");
         let gate_text = matches!(item.content_type.as_str(), "image" | "file");
         new_data_object(offers, gate_text, cf_html, cf_chromium_mime, cf_file_group)
@@ -1335,30 +1389,32 @@ mod conformance_tests {
     #[test]
     fn r6_offer_sets_per_type() {
         let cf_html = register_format("HTML Format");
+        let cf_drop = register_format("Preferred DropEffect");
         for kind in ["text", "code", "link"] {
             let item = clip(kind);
-            let (offers, _) = build_offers(&item, cf_html);
+            let (offers, _) = build_offers(&item, cf_html, register_format("Preferred DropEffect"));
             let cfs: Vec<u32> = offers.iter().map(|o| o.cf_format).collect();
-            assert_eq!(cfs.len(), 3, "A1: {kind} offers the generated trio");
+            assert_eq!(cfs.len(), 4, "F1: {kind} offers the quad");
             assert!(cfs.contains(&CF_UNICODETEXT), "R6: {kind} offers UNICODETEXT");
             assert!(cfs.contains(&CF_TEXT), "R6: {kind} offers TEXT");
-            assert!(cfs.contains(&cf_html), "A1: {kind} offers generated CF_HTML");
+            assert!(cfs.contains(&cf_html), "F1: {kind} offers generated CF_HTML");
+            assert!(cfs.contains(&cf_drop), "F1: {kind} offers Preferred DropEffect");
             assert!(offers.iter().all(|o| o.tymed == HGLOBAL_TYMED), "R6: text mediums are HGLOBAL");
         }
         // Email with HTML keeps the trio (mail acceptance).
         let mut email = clip("email");
         email.html_content = Some("<p>hi</p>".to_string());
-        let (offers, _) = build_offers(&email, cf_html);
+        let (offers, _) = build_offers(&email, cf_html, register_format("Preferred DropEffect"));
         let cfs: Vec<u32> = offers.iter().map(|o| o.cf_format).collect();
         assert_eq!(cfs.len(), 3, "R6: email+html offers the trio");
         assert!(cfs.contains(&cf_html), "R6: email+html offers CF_HTML");
         // Email without HTML: unicode+text.
-        let (offers, _) = build_offers(&clip("email"), cf_html);
+        let (offers, _) = build_offers(&clip("email"), cf_html, register_format("Preferred DropEffect"));
         assert_eq!(offers.len(), 2, "R6: htmlless email offers exactly unicode+text");
         // Rich with valid HTML: trio. Rich with broken HTML: duo, silent.
         let mut rich = clip("rich_text");
         rich.html_content = Some("<p>fine</p>".to_string());
-        let (offers, _) = build_offers(&rich, cf_html);
+        let (offers, _) = build_offers(&rich, cf_html, register_format("Preferred DropEffect"));
         assert_eq!(
             offers.iter().map(|o| o.cf_format).filter(|c| *c == cf_html).count(),
             1,
@@ -1368,12 +1424,12 @@ mod conformance_tests {
         // Pre-wrapped but malformed payloads pass through unwrapped, so
         // the validator (not the wrapper) is what saves the drop.
         broken.html_content = Some("Version:0.9\r\nStartHTML:10\r\nEndHTML:5\r\nStartFragment:2\r\nEndFragment:3\r\n\0".to_string());
-        let (offers, _) = build_offers(&broken, cf_html);
+        let (offers, _) = build_offers(&broken, cf_html, register_format("Preferred DropEffect"));
         assert!(
             !offers.iter().any(|o| o.cf_format == cf_html),
             "F2.2: malformed rich HTML must be omitted silently"
         );
-        assert_eq!(offers.len(), 2, "F2.2: omitted rich still offers unicode+text");
+        assert_eq!(offers.len(), 3, "F2.2: omitted rich still offers unicode+text+dropeffect");
     }
 
     // v32-A1: the single generator emits valid Version:1.0 documents.
@@ -1425,6 +1481,7 @@ mod conformance_tests {
                     .EnumFormatEtc(DATADIR_GET.0 as u32)
                     .expect("R1: enum must succeed");
                 let cf_html = register_format("HTML Format");
+                let cf_drop = register_format("Preferred DropEffect");
                 let mut seen = 0u32;
                 loop {
                     let mut buf: [FORMATETC; 1] = std::mem::zeroed();
@@ -1438,13 +1495,13 @@ mod conformance_tests {
                     let fmt = buf[0];
                     let cf = fmt.cfFormat as u32;
                     assert!(
-                        cf == CF_UNICODETEXT || cf == CF_TEXT || cf == cf_html,
+                        cf == CF_UNICODETEXT || cf == CF_TEXT || cf == cf_html || cf == cf_drop,
                         "R1: enumerated set must equal offered set"
                     );
                     seen += 1;
                     assert!(seen <= 8, "R1: enumerator must terminate (bounds)");
                 }
-                assert_eq!(seen, 3, "R1 pass {pass}: text clip enumerates exactly 3 formats");
+                assert_eq!(seen, 4, "R1 pass {pass}: text clip enumerates exactly 4 formats");
                 // Clone is independent: reset original, clone still reads.
                 let this = Interface::as_raw(&penum);
                 let vt = *(this as *const *const IEnumFORMATETC_Vtbl);
@@ -1610,7 +1667,7 @@ mod conformance_tests {
         let mut item = clip("image");
         item.image_path = Some(src.to_string_lossy().into_owned());
         let cf_html = register_format("HTML Format");
-        let (offers, staged) = build_offers(&item, cf_html);
+        let (offers, staged) = build_offers(&item, cf_html, register_format("Preferred DropEffect"));
         let cfs: Vec<u32> = offers.iter().map(|o| o.cf_format).collect();
         assert!(cfs.contains(&CF_HDROP), "R6: image offers HDROP");
         assert!(cfs.contains(&CF_UNICODETEXT), "R6: image offers path text");
@@ -1674,7 +1731,7 @@ mod conformance_tests {
             .unwrap(),
         );
         let cf_html = register_format("HTML Format");
-        let (offers, _) = build_offers(&item, cf_html);
+        let (offers, _) = build_offers(&item, cf_html, register_format("Preferred DropEffect"));
         let cfs: Vec<u32> = offers.iter().map(|o| o.cf_format).collect();
         assert_eq!(cfs, vec![CF_HDROP], "R6: file offers exactly HDROP (dead paths filtered)");
         std::fs::remove_file(&live).ok();
@@ -1752,7 +1809,7 @@ mod conformance_tests {
         let cf_chromium = register_format("Chromium Web Custom MIME Data Format");
         let cf_group = register_format("FileGroupDescriptorW");
         let mk = || {
-            let (offers, staged) = build_offers(&item, cf_html);
+            let (offers, staged) = build_offers(&item, cf_html, register_format("Preferred DropEffect"));
             let obj = new_data_object(offers, true, cf_html, cf_chromium, cf_group);
             (obj, staged)
         };
@@ -1816,5 +1873,56 @@ mod conformance_tests {
             STAGED_GRAVEYARD.lock().unwrap().is_empty(),
             "R7: sweep must drain the graveyard"
         );
+    }
+
+    // v34-F1: Preferred DropEffect medium carries COPY; fragment is div/br.
+    #[test]
+    fn f1_dropeffect_and_fragment_shape() {
+        let cf_html = register_format("HTML Format");
+        let cf_drop = register_format("Preferred DropEffect");
+        let mut item = clip("text");
+        item.text_content = Some("line one\nline two & <done>".to_string());
+        let (offers, _) = build_offers(&item, cf_html, cf_drop);
+        let obj = new_data_object(offers, false, cf_html, 0, 0);
+        unsafe {
+            let med = obj
+                .GetData(&fmtetc(cf_drop, HGLOBAL_TYMED, -1))
+                .expect("F1: DropEffect GetData must succeed");
+            let bytes = read_hglobal(med.u.hGlobal);
+            assert_eq!(bytes.len(), 4, "F1: DropEffect medium is one DROPEFFECT");
+            assert_eq!(
+                u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+                DROPEFFECT_COPY.0,
+                "F1: DropEffect medium must say COPY"
+            );
+            let mut med = med;
+            ReleaseStgMedium(&mut med);
+            // Fragment shape: single div, escaped lines, <br> separators.
+            let med = obj
+                .GetData(&fmtetc(cf_html, HGLOBAL_TYMED, -1))
+                .expect("F1: html GetData must succeed");
+            let bytes = read_hglobal(med.u.hGlobal);
+            let text = String::from_utf8(bytes[..bytes.len() - 1].to_vec()).unwrap();
+            let sf: usize = text.lines().find(|l| l.starts_with("StartFragment:")).map(|l| l[14..].trim().parse().unwrap()).unwrap();
+            let ef: usize = text.lines().find(|l| l.starts_with("EndFragment:")).map(|l| l[12..].trim().parse().unwrap()).unwrap();
+            assert_eq!(
+                &text.as_bytes()[sf..ef],
+                b"<div>line one<br>line two &amp; &lt;done&gt;</div>",
+                "F1: fragment must be div-wrapped escaped lines"
+            );
+            let mut med = med;
+            ReleaseStgMedium(&mut med);
+        }
+    }
+
+    // v34-F3: format names resolve for logs (well-known + session cache).
+    #[test]
+    fn f3_format_names() {
+        assert_eq!(format_name(CF_UNICODETEXT), "CF_UNICODETEXT");
+        assert_eq!(format_name(CF_TEXT), "CF_TEXT");
+        assert_eq!(format_name(CF_HDROP), "CF_HDROP");
+        let id = register_format("Preferred DropEffect");
+        assert_eq!(format_name(id), "Preferred DropEffect");
+        assert_eq!(format_name(0xC001), "cf=49153");
     }
 }

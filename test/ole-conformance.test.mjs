@@ -46,7 +46,7 @@ test('v30 - R6 agreed sets only, no exotic formats', () => {
   assert.ok(pushes.length > 0, 'must push offers');
   for (const cf of pushes) {
     assert.ok(
-      ['CF_UNICODETEXT', 'CF_TEXT', 'CF_HDROP', 'cf_html'].includes(cf),
+      ['CF_UNICODETEXT', 'CF_TEXT', 'CF_HDROP', 'cf_html', 'cf_drop_effect'].includes(cf),
       `offered format must be agreed (got ${cf})`
     );
   }
@@ -159,4 +159,18 @@ test('v32-A/B - generated HTML, B2 settle, restaging retry', () => {
   assert.ok(rs.includes('re-staging identical content'), 'retry must re-stage the same item');
   assert.ok(rs.includes('mark_paste(&restage_item)'), 'retry must re-mark the watcher skip');
   assert.ok(rs.includes('settling 80ms'), 'bounded 80ms settle must be logged');
+});
+
+test('v34-F1/F3 - html+dropeffect offers, named logging', () => {
+  const src = fs.readFileSync(path.join(SRC_TAURI_DIR, 'native_drag.rs'), 'utf8');
+  assert.ok(src.includes('build_cf_html_document'), 'single generator must exist');
+  assert.ok(src.includes('Version:1.0'), 'generator must stamp 1.0');
+  assert.ok(src.includes('plain_text_fragment'), 'div/br fragment builder must exist');
+  assert.ok(src.includes('Preferred DropEffect'), 'COPY hint format must be offered');
+  assert.ok(src.includes('DROPEFFECT_COPY.0.to_le_bytes'), 'dropeffect medium must say COPY');
+  assert.ok(src.includes('FORMAT_NAMES'), 'session name cache must exist');
+  assert.ok(src.includes('format_name(o.cf_format)'), 'begin log must name formats');
+  // F2/F4 locks: gate refusal path and image/file sets unchanged.
+  assert.ok(src.includes('REFUSED'), 'v31 gate refusal must stay');
+  assert.ok(src.includes('cf_drop_effect'), 'dropeffect id must thread through offers');
 });
