@@ -252,21 +252,25 @@ test('TAB-NEAT - Async preview media never pops white while decoding', () => {
   assert.ok(css.includes('rgba(10, 10, 12, 0.35)'), 'placeholder must be dark, never white');
 });
 
-test('reveal animation - overlay fade-in is managed, gated, and reduced-motion safe', () => {
+test('reveal parity - overlay pops exactly like the main window (OS ramp only)', () => {
+  // The overlay must not stack its own content fade on top of the OS
+  // ramp: that double motion read as sluggish next to the main window.
+  // Both windows reveal via the 100ms OS-alpha ramp and nothing else.
   const choreo = fs.readFileSync(path.join(SRC_DIR, 'lib', 'choreo.ts'), 'utf8');
-  assert.ok(choreo.includes('armOverlayReveal'), 'reveal helper must exist');
-  assert.ok(choreo.includes("windowName === 'overlay'"), 'reveal must be overlay-only');
-  assert.ok(choreo.includes("classList.add('ov-reveal')"), 'reveal class must be added');
-  assert.ok(choreo.includes("classList.remove('ov-reveal')"), 'reveal class must be removed after play');
-  // Fires after gates/timeouts/interactable — never gates anything itself.
-  const armIdx = choreo.indexOf('armOverlayReveal();');
-  const gateIdx = choreo.indexOf('first user-interactable reached');
-  assert.ok(armIdx > gateIdx, 'reveal must arm after the show gate, never before');
+  assert.ok(!choreo.includes('armOverlayReveal'), 'no overlay-only reveal helper may exist');
+  assert.ok(!choreo.includes('ov-reveal'), 'no reveal class may be armed');
   const css = fs.readFileSync(path.join(SRC_DIR, 'index.css'), 'utf8');
-  assert.ok(css.includes('@keyframes ov-reveal-in'), 'reveal keyframes must exist');
-  assert.ok(css.includes('#root.ov-reveal'), 'reveal must target #root, never html');
-  assert.ok(css.includes('prefers-reduced-motion'), 'reveal must respect reduced motion');
-  // Hide machinery untouched: 90ms hide fades and wm-hidden discipline stay.
+  assert.ok(!css.includes('ov-reveal-in'), 'no reveal keyframes may remain');
+  const hotkey = fs.readFileSync(path.join(SRC_TAURI_DIR, 'hotkey.rs'), 'utf8');
+  assert.ok(
+    hotkey.includes('ramp_window_alpha(win.clone(), 0, 255, 100, expected_token, true);'),
+    'overlay ramp must match main at 100ms'
+  );
+  assert.ok(
+    hotkey.includes('ramp_window_alpha(win.clone(), 0, 255, 100, expected_token, false);'),
+    'main ramp must stay 100ms'
+  );
+  // Hide machinery untouched: 90ms hide fades stay.
   assert.ok(css.includes('opacity 90ms'), 'hide fades must stay at 90ms');
 });
 
@@ -285,10 +289,10 @@ test('first-paint hardening - background application is verified and retried hid
   assert.ok(hotkey.includes('background retry attempt'), 'prepare_main_surface must retry on failure');
   assert.ok(hotkey.includes('do not touch mid-show') || hotkey.includes('live surface now'), 'retry must skip visible windows');
   assert.ok(hotkey.includes('1..=3'), 'retry must be bounded');
-  // Overlay reveal ramp untouched by this change (still 60ms).
+  // Overlay reveal ramp untouched by this change (parity with main: 100ms).
   assert.ok(
-    hotkey.includes('ramp_window_alpha(win.clone(), 0, 255, 60, expected_token, true);'),
-    'overlay ramp must stay 60ms'
+    hotkey.includes('ramp_window_alpha(win.clone(), 0, 255, 100, expected_token, true);'),
+    'overlay ramp must match main at 100ms'
   );
 });
 
@@ -299,9 +303,4 @@ test('ui-ready fires post-paint, never at module evaluation', () => {
   assert.ok(app.includes("emit('carbon-ui-ready')"), 'App must emit readiness');
   assert.ok(app.includes('requestAnimationFrame'), 'readiness must wait for paint frames');
   assert.ok(app.includes('uiReadySent'), 'readiness must be once-guarded for StrictMode');
-});
-
-test('reveal animation runs 100ms', () => {
-  const css = fs.readFileSync(path.join(SRC_DIR, 'index.css'), 'utf8');
-  assert.ok(css.includes('ov-reveal-in 100ms'), 'reveal must run 100ms');
 });

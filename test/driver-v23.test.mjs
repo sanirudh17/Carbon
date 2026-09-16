@@ -49,8 +49,8 @@ test('ADDENDUM v23 - Static Check: OS-alpha masking and ramp in Rust hotkey modu
   );
   assert.ok(
     hotkeyRs.includes('set_window_alpha(&win, 0);') &&
-    hotkeyRs.includes('ramp_window_alpha(win.clone(), 0, 255, 60, expected_token, true);'),
-    'uncloak_overlay_if_current must set alpha 0 and start a 60ms ramp on uncloak'
+    hotkeyRs.includes('ramp_window_alpha(win.clone(), 0, 255, 100, expected_token, true);'),
+    'uncloak_overlay_if_current must set alpha 0 and start ramp on uncloak'
   );
   assert.ok(
     hotkeyRs.includes('ramp_window_alpha(win.clone(), 0, 255, 100, expected_token, false);'),

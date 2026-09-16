@@ -145,26 +145,6 @@ export function getFadeTarget(): HTMLElement {
     : html;
 }
 
-// ── Overlay reveal animation ───────────────────────────────────────────
-// Gentle fade-in on the content root as the cloak lifts (150ms ease-out).
-// Always targets #root — never html, whose opacity transitions belong to
-// the hide machinery. Fire-and-forget: no gate reads this class.
-let revealTimer: number | null = null;
-
-export function armOverlayReveal(): void {
-  if (typeof document === 'undefined') return;
-  const root = document.getElementById('root');
-  if (!root) return;
-  root.classList.remove('ov-reveal');
-  void root.offsetWidth;
-  root.classList.add('ov-reveal');
-  if (revealTimer !== null) window.clearTimeout(revealTimer);
-  revealTimer = window.setTimeout(() => {
-    revealTimer = null;
-    root.classList.remove('ov-reveal');
-  }, 120);
-}
-
 // ── Invariant I1: Window Show & Paint Gate ──
 
 export function initPaintGate(): () => void {
@@ -255,14 +235,6 @@ export function executeWindowShow(
 
             const tInteractable = performance.now();
             traceChoreo(`${windowName} first user-interactable reached in ${(tInteractable - tHotkey).toFixed(1)}ms`);
-
-            // Reveal animation (overlay only): gentle fade-in on the content
-            // root as the cloak lifts. Purely visual — fires after all gates
-            // and timeouts, never gates or delays anything. Re-arms every
-            // open (class removed after each play so rapid toggles replay).
-            if (windowName === 'overlay') {
-              armOverlayReveal();
-            }
 
             if (onRevealed) onRevealed();
           });

@@ -167,7 +167,7 @@ pub fn set_window_alpha(window: &tauri::WebviewWindow, alpha: u8) {
 #[cfg(not(target_os = "windows"))]
 pub fn set_window_alpha(_window: &tauri::WebviewWindow, _alpha: u8) {}
 
-/// Smoothly ramps window OS-level alpha from start to target over duration_ms (60-120ms).
+/// Smoothly ramps window OS-level alpha from start to target over duration_ms (80-120ms).
 /// Token-guarded: cancels early if window is hidden or re-shown.
 pub fn ramp_window_alpha(
     window: tauri::WebviewWindow,
@@ -276,12 +276,11 @@ fn uncloak_overlay_if_current(app: &AppHandle, token: Option<u64>) {
             use windows::Win32::Graphics::Dwm::DwmFlush;
             let _ = DwmFlush();
         }
-        // I2 OS-ALPHA MASKING: Start at alpha 0, uncloak DWM, ramp to 255 over 60ms
-        // (quick overlay reveal — same flash masking, snappier launch).
+        // I2 OS-ALPHA MASKING: Start at alpha 0, uncloak DWM, ramp to 255 over 100ms
         set_window_alpha(&win, 0);
         set_window_cloaked(&win, false);
-        ramp_window_alpha(win.clone(), 0, 255, 60, expected_token, true);
-        crate::paste::log_diag("[SHOW_OVERLAY] uncloaked after forced present with OS-alpha ramp (0->255 over 60ms)");
+        ramp_window_alpha(win.clone(), 0, 255, 100, expected_token, true);
+        crate::paste::log_diag("[SHOW_OVERLAY] uncloaked after forced present with OS-alpha ramp (0->255 over 100ms)");
     }
 }
 
