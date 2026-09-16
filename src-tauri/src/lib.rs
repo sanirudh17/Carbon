@@ -1078,6 +1078,10 @@ fn paste_snippet_text(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Crash attribution first (v29-A): any panic anywhere logs message +
+    // backtrace to stderr and carbon_crash.log before abort.
+    crate::native_drag::install_crash_hook();
+
     // Force the WebView2 loader's default background to fully transparent
     // BEFORE any webview environment is created: the first present of a
     // freshly (re)allocated surface is then transparent instead of white —

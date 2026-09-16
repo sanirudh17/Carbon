@@ -52,13 +52,25 @@ export function shouldNativeDrag(item: ClipItem): boolean {
  * onDragStart preserves native threshold behavior. preventDefault cancels
  * the DOM drag (no dragend will fire — callers must clean up in `finally`).
  * Resolves with the negotiated drop effect ('copy' expected).
+ *
+ * Re-entrancy (v29-A): the backend rejects concurrent drags, but the
+ * frontend also refuses to stack invokes — rapid drag-start spam resolves
+ * immediately as 'busy' instead of piling modal loops.
  */
+let nativeDragInFlight = false;
+
 export async function beginNativeDrag(
   e: React.DragEvent | DragEvent,
   item: ClipItem
 ): Promise<string> {
   e.preventDefault();
   e.stopPropagation();
+  console.debug(`[drag] threshold detected for '${item.id}' (${item.content_type}) — posting to main STA thread`);
+  if (nativeDragInFlight) {
+    console.warn('[drag] native drag already in flight — ignoring stacked dragstart (spam guard)');
+    return 'busy';
+  }
+  nativeDragInFlight = true;
   // B4 gesture hygiene: no DOM selection bleed, no coexistence with a
   // WebView text selection while the OS owns the gesture.
   try {
@@ -72,6 +84,7 @@ export async function beginNativeDrag(
     }
     return effect;
   } finally {
+    nativeDragInFlight = false;
     document.documentElement.classList.remove('native-dragging');
   }
 }

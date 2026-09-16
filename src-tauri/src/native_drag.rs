@@ -1,22 +1,33 @@
-//! Native OLE drag source for clip rows (ADDENDUM v28-B).
+//! Native OLE drag source for clip rows (ADDENDUM v28-B, hardened v29-A).
 //!
 //! The DOM DataTransfer path (clipDrag.ts) only offers text flavors, which is
 //! why text drops work everywhere but images/files can never land in chat
-//! upload zones, Explorer, or image editors (those require CF_HDROP, file
-//! descriptors, or DIB — formats Chromium will not synthesize). This module
-//! runs a real `DoDragDrop` with a per-clip `IDataObject`:
+//! upload zones or Explorer (those require CF_HDROP — a format Chromium will
+//! not synthesize). This module runs a real `DoDragDrop` with a per-clip
+//! `IDataObject`:
 //!
 //! - text/code/link: CF_UNICODETEXT (+ CF_TEXT), CF_HTML when stored.
-//! - image: CF_HDROP over the stored file, FileGroupDescriptorW +
-//!   FileContents (virtual-file targets), CF_DIB (editors), plus
-//!   CF_UNICODETEXT holding the path (consoles, text-only targets).
-//! - file clip: CF_HDROP with the real paths + CF_UNICODETEXT paths.
+//! - image: CF_HDROP over a staged temp copy (lifetime spans the drag) +
+//!   CF_UNICODETEXT/CF_TEXT holding the path (consoles, text-only targets).
+//! - file clip: CF_HDROP with the real paths + CF_UNICODETEXT/CF_TEXT paths.
 //!
 //! Only DROPEFFECT_COPY is ever allowed, so supported targets always report
-//! COPY and the circle-slash cursor is unreachable for them. The drag runs
-//! on a dedicated STA thread (OleInitialize/DoDragDrop/OleUninitialize) and
-//! the Tauri command blocks until the drop settles, returning the effect as
-//! a string for frontend logging.
+//! COPY and the circle-slash cursor is unreachable for them.
+//!
+//! Crash-safety (v29-A audit — the drag modal loop used to run on a thread-
+//! pool worker while the WebView owned the window, and offered exotic
+//! virtual-file/DIB formats through a hand-rolled IStream):
+//! - the drag is initiated ONLY on the main STA thread via
+//!   `run_on_main_thread` (posted window message), where OleInitialize
+//!   state is known;
+//! - a `compare_exchange` busy guard rejects concurrent/rapid-spam drags;
+//! - every HRESULT-returning COM entry point is wrapped in `catch_unwind`
+//!   (panic -> E_FAIL, never across FFI), all out-pointers null-checked;
+//! - the payload is minimal (HDROP + unicode/ansi text + HTML) — no
+//!   FileGroupDescriptor/Contents IStream, no BMP transcode, no private
+//!   flavors no target consumes;
+//! - a process-global panic hook logs message + backtrace to stderr and
+//!   `carbon_crash.log` before abort, so any future crash is attributable.
 //!
 //! COM plumbing is hand-rolled vtables (not the `implement!` macro): this
 //! crate mixes windows 0.58 interfaces with a direct windows-core 0.61
@@ -24,25 +35,22 @@
 //! the wrong core version. Explicit vtables keep every type on 0.58.
 
 use std::sync::{
-    atomic::{AtomicU32, Ordering},
+    atomic::{AtomicU32, AtomicU64, Ordering},
     mpsc, Mutex,
 };
 
-use tauri::State;
+use tauri::{AppHandle, State};
 use windows::{
     core::{GUID, HRESULT, IUnknown, IUnknown_Vtbl, Interface, PCWSTR},
     Win32::{
         Foundation::{
-            BOOL, E_NOINTERFACE, E_NOTIMPL, E_POINTER, HGLOBAL, S_FALSE, S_OK, DV_E_FORMATETC,
-            DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS,
+            BOOL, E_FAIL, E_NOINTERFACE, E_NOTIMPL, E_POINTER, HGLOBAL, S_FALSE, S_OK,
+            DV_E_FORMATETC, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS,
         },
-        Storage::FileSystem::FILE_ATTRIBUTE_NORMAL,
         System::{
             Com::{
-                IDataObject, IDataObject_Vtbl, IEnumFORMATETC, IEnumFORMATETC_Vtbl, IStream,
-                IStream_Vtbl, ISequentialStream_Vtbl, STATSTG, FORMATETC, STGMEDIUM,
-                STREAM_SEEK, STREAM_SEEK_SET, STREAM_SEEK_CUR, STREAM_SEEK_END,
-                DATADIR_GET, DVASPECT_CONTENT, TYMED_HGLOBAL, TYMED_ISTREAM,
+                IDataObject, IDataObject_Vtbl, IEnumFORMATETC, IEnumFORMATETC_Vtbl, FORMATETC,
+                STGMEDIUM, DATADIR_GET, DVASPECT_CONTENT, TYMED_HGLOBAL,
             },
             DataExchange::RegisterClipboardFormatW,
             Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
@@ -52,7 +60,6 @@ use windows::{
             },
             SystemServices::{MK_LBUTTON, MK_RBUTTON, MODIFIERKEYS_FLAGS},
         },
-        UI::Shell::{FD_ATTRIBUTES, FD_FILESIZE, FILEDESCRIPTORW, FILEGROUPDESCRIPTORW},
     },
 };
 
@@ -70,9 +77,74 @@ pub fn is_native_drag_active() -> bool {
     NATIVE_DRAG_ACTIVE.load(Ordering::SeqCst)
 }
 
+/// Process-global crash hook (A1): log the panic message + backtrace to
+/// stderr AND an always-on `carbon_crash.log` before abort, so a future
+/// drag crash records WHICH thread died and where (pair with WER/Event
+/// Viewer + the .dmp for attribution). Idempotent — installs once.
+/// Call from `run()` before the Tauri builder starts.
+pub fn install_crash_hook() {
+    static INSTALLED: AtomicBool = AtomicBool::new(false);
+    if INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("<unnamed>");
+        let bt = std::backtrace::Backtrace::force_capture();
+        let line = format!("[CARBON_CRASH] thread='{name}' panic={info}\n{bt}");
+        eprintln!("{line}");
+        log_diag(&format!("[CARBON_CRASH] thread='{name}' panic={info}"));
+        // Backtraces are long — persist the full text to disk (best effort).
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("carbon_crash.log")
+        {
+            use std::io::Write as _;
+            let _ = writeln!(f, "{line}");
+        }
+        prev(info);
+    }));
+    log_diag("[NATIVE_DRAG] crash hook installed (panic -> carbon_crash.log + backtrace)");
+}
+
+/// FFI boundary guard (A2-ii): a Rust panic must never unwind across an
+/// `extern "system"` frame into OLE (undefined behavior -> abort). Every
+/// HRESULT-returning COM entry point below funnels through here and degrades
+/// to E_FAIL. Bodies are written in tail-expression style (no `return`)
+/// so they fit the closure.
+fn guard_hresult(label: &'static str, f: impl FnOnce() -> HRESULT + std::panic::UnwindSafe) -> HRESULT {
+    match std::panic::catch_unwind(f) {
+        Ok(hr) => hr,
+        Err(_) => {
+            log_diag(&format!("[NATIVE_DRAG] PANIC across FFI in {label} -> E_FAIL"));
+            E_FAIL
+        }
+    }
+}
+
+// ── Drag lifecycle telemetry (A1) ────────────────────────────────────────
+// DoDragDrop callbacks fire at input rate; log the first of each kind plus
+// totals at return so a crash dump / diag log shows exactly how far the
+// drag got: threshold -> posted -> entered -> OleInit -> DoDragDrop ->
+// first-QI -> first-GetData -> ticks -> settled/returned.
+static FIRST_QI: AtomicBool = AtomicBool::new(false);
+static FIRST_GETDATA: AtomicBool = AtomicBool::new(false);
+static FIRST_TICK: AtomicBool = AtomicBool::new(false);
+static GETDATA_COUNT: AtomicU64 = AtomicU64::new(0);
+static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
+
+fn reset_drag_telemetry() {
+    FIRST_QI.store(false, Ordering::SeqCst);
+    FIRST_GETDATA.store(false, Ordering::SeqCst);
+    FIRST_TICK.store(false, Ordering::SeqCst);
+    GETDATA_COUNT.store(0, Ordering::SeqCst);
+    TICK_COUNT.store(0, Ordering::SeqCst);
+}
+
 // Win32 clipboard format ids (constant across sessions).
 const CF_TEXT: u32 = 1;
-const CF_DIB: u32 = 8;
 const CF_HDROP: u32 = 15;
 const CF_UNICODETEXT: u32 = 13;
 
@@ -115,21 +187,10 @@ fn utf16_bytes(s: &str) -> Vec<u8> {
     out
 }
 
-/// Current time as a Windows FILETIME pair (for file descriptors).
-fn now_filetime() -> (u32, u32) {
-    let dur = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let ticks =
-        dur.as_secs() * 10_000_000 + u64::from(dur.subsec_nanos() / 100) + 11644473600 * 10_000_000;
-    (ticks as u32, (ticks >> 32) as u32)
-}
-
-// ── Offered formats ──────────────────────────────────────────────────────
+// ── Offered formats ──
 
 enum OfferData {
     Global(Vec<u8>),
-    Stream(Vec<u8>),
 }
 
 struct Offer {
@@ -163,81 +224,61 @@ fn hdrop_bytes(paths: &[String]) -> Vec<u8> {
     out
 }
 
-fn file_group_descriptor(paths: &[String], sizes: &[u64]) -> Vec<u8> {
-    let (low, high) = now_filetime();
-    let mut descs: Vec<FILEDESCRIPTORW> = Vec::new();
-    for (i, p) in paths.iter().enumerate() {
-        let name = std::path::Path::new(p)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("clipboard-file");
-        let mut desc: FILEDESCRIPTORW = unsafe { std::mem::zeroed() };
-        desc.dwFlags = (FD_ATTRIBUTES.0 | FD_FILESIZE.0) as u32;
-        desc.dwFileAttributes = FILE_ATTRIBUTE_NORMAL.0;
-        let size = sizes.get(i).copied().unwrap_or(0);
-        desc.nFileSizeLow = size as u32;
-        desc.nFileSizeHigh = (size >> 32) as u32;
-        desc.ftCreationTime.dwLowDateTime = low;
-        desc.ftCreationTime.dwHighDateTime = high;
-        desc.ftLastAccessTime.dwLowDateTime = low;
-        desc.ftLastAccessTime.dwHighDateTime = high;
-        desc.ftLastWriteTime.dwLowDateTime = low;
-        desc.ftLastWriteTime.dwHighDateTime = high;
-        let mut cname = [0u16; 260];
-        for (j, w) in name.encode_utf16().take(259).enumerate() {
-            cname[j] = w;
+// ── Temp-file staging (A3) ───────────────────────────────────────────────
+// Image clips are materialized as a temp copy whose lifetime spans the whole
+// drag: HDROP must point at a stable on-disk path for the entire modal loop,
+// and a fresh name with the original extension keeps extension-sniffing
+// targets (chat upload zones, editors) accepting the drop. The staging dir
+// is removed after DoDragDrop returns (Drop impl below). File clips already
+// reference real paths and need no staging.
+
+static DRAG_STAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct StagedDrag {
+    dir: std::path::PathBuf,
+}
+
+fn stage_image_temp(src: &str, clip_id: &str) -> std::io::Result<(StagedDrag, std::path::PathBuf)> {
+    let n = DRAG_STAGE_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("CarbonDrag-{clip_id}-{n}"));
+    std::fs::create_dir_all(&dir)?;
+    let src_path = std::path::Path::new(src);
+    let fname = src_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("clip-image");
+    let mut staged = dir.join(fname);
+    if staged.extension().is_none() {
+        staged.set_extension("png");
+    }
+    std::fs::copy(src, &staged)?;
+    log_diag(&format!(
+        "[NATIVE_DRAG] staged temp copy '{}' ({} bytes)",
+        staged.display(),
+        staged.metadata().map(|m| m.len()).unwrap_or(0)
+    ));
+    Ok((StagedDrag { dir }, staged))
+}
+
+impl Drop for StagedDrag {
+    fn drop(&mut self) {
+        if std::fs::remove_dir_all(&self.dir).is_ok() {
+            log_diag(&format!(
+                "[NATIVE_DRAG] cleaned staged dir '{}'",
+                self.dir.display()
+            ));
         }
-        desc.cFileName = cname;
-        descs.push(desc);
     }
-    let mut out = Vec::new();
-    out.extend_from_slice(&(descs.len() as u32).to_le_bytes());
-    for d in &descs {
-        let bytes = unsafe {
-            std::slice::from_raw_parts(
-                d as *const FILEDESCRIPTORW as *const u8,
-                std::mem::size_of::<FILEDESCRIPTORW>(),
-            )
-        };
-        out.extend_from_slice(bytes);
-    }
-    // Keep the header layout honest even though we serialize manually.
-    debug_assert_eq!(
-        out.len(),
-        4 + descs.len() * std::mem::size_of::<FILEDESCRIPTORW>()
-    );
-    let _ = std::mem::size_of::<FILEGROUPDESCRIPTORW>();
-    out
 }
 
-/// BMP file bytes (with 14-byte file header) for an image on disk.
-fn bmp_file_bytes(path: &str) -> Option<Vec<u8>> {
-    let img = image::open(path).ok()?.to_rgba8();
-    let (w, h) = (img.width(), img.height());
-    let mut buf = Vec::new();
-    image::codecs::bmp::BmpEncoder::new(&mut buf)
-        .encode(img.as_raw(), w, h, image::ExtendedColorType::Rgba8)
-        .ok()?;
-    Some(buf)
-}
-
-fn build_offers(
-    item: &crate::db::ClipItem,
-    cf_html: u32,
-    cf_descriptor: u32,
-    cf_contents: u32,
-    cf_carbon_ids: u32,
-) -> Vec<Offer> {
+/// Minimal robust payload (A3): CF_UNICODETEXT (+ CF_TEXT), CF_HDROP over a
+/// staged temp file for images (lifetime spans the drag via the returned
+/// guard), optional CF_HTML. Returns the offers plus the staging guard
+/// (None when nothing was staged) — the caller must keep the guard alive
+/// until DoDragDrop returns.
+fn build_offers(item: &crate::db::ClipItem, cf_html: u32) -> (Vec<Offer>, Option<StagedDrag>) {
     let mut offers = Vec::new();
     let kind = item.content_type.as_str();
-
-    // Private internal flavor (Carbon-to-Carbon awareness).
-    offers.push(Offer {
-        cf_format: cf_carbon_ids,
-        tymed: TYMED_HGLOBAL.0 as u32,
-        lindex: -1,
-        data: OfferData::Global(item.id.as_bytes().to_vec()),
-    });
 
     // Plain + ANSI text for text-like clips.
     if matches!(kind, "text" | "code" | "link" | "email" | "color") {
@@ -277,57 +318,48 @@ fn build_offers(
                 data: OfferData::Global(cf.into_bytes()),
             });
         }
-        return offers;
+        return (offers, None);
     }
 
-    // Image clips: real-file HDROP + virtual descriptor + DIB + path text.
+    // Image clips: HDROP over the staged temp copy + path text for
+    // consoles and text-only targets. No virtual descriptors, no DIB.
     if kind == "image" {
         if let Some(ref path) = item.image_path {
             if std::path::Path::new(path).exists() {
-                offers.push(Offer {
-                    cf_format: CF_HDROP,
-                    tymed: TYMED_HGLOBAL.0 as u32,
-                    lindex: -1,
-                    data: OfferData::Global(hdrop_bytes(std::slice::from_ref(path))),
-                });
-                if let Ok(bytes) = std::fs::read(path) {
-                    let size = bytes.len() as u64;
-                    offers.push(Offer {
-                        cf_format: cf_descriptor,
-                        tymed: TYMED_HGLOBAL.0 as u32,
-                        lindex: -1,
-                        data: OfferData::Global(file_group_descriptor(
-                            std::slice::from_ref(path),
-                            &[size],
-                        )),
-                    });
-                    offers.push(Offer {
-                        cf_format: cf_contents,
-                        tymed: TYMED_ISTREAM.0 as u32,
-                        lindex: 0,
-                        data: OfferData::Stream(bytes),
-                    });
-                }
-                if let Some(bmp) = bmp_file_bytes(path) {
-                    // CF_DIB is BITMAPINFO + bits: strip the 14-byte file header.
-                    if bmp.len() > 14 {
+                match stage_image_temp(path, &item.id) {
+                    Ok((guard, staged_path)) => {
+                        let ps = staged_path.to_string_lossy().into_owned();
                         offers.push(Offer {
-                            cf_format: CF_DIB,
+                            cf_format: CF_HDROP,
                             tymed: TYMED_HGLOBAL.0 as u32,
                             lindex: -1,
-                            data: OfferData::Global(bmp[14..].to_vec()),
+                            data: OfferData::Global(hdrop_bytes(std::slice::from_ref(&ps))),
                         });
+                        offers.push(Offer {
+                            cf_format: CF_UNICODETEXT,
+                            tymed: TYMED_HGLOBAL.0 as u32,
+                            lindex: -1,
+                            data: OfferData::Global(utf16_bytes(&ps)),
+                        });
+                        offers.push(Offer {
+                            cf_format: CF_TEXT,
+                            tymed: TYMED_HGLOBAL.0 as u32,
+                            lindex: -1,
+                            data: OfferData::Global(ps.bytes().chain(std::iter::once(0)).collect()),
+                        });
+                        return (offers, Some(guard));
+                    }
+                    Err(e) => {
+                        log_diag(&format!(
+                            "[NATIVE_DRAG] staging failed for '{path}': {e} — text fallback"
+                        ));
                     }
                 }
-                offers.push(Offer {
-                    cf_format: CF_UNICODETEXT,
-                    tymed: TYMED_HGLOBAL.0 as u32,
-                    lindex: -1,
-                    data: OfferData::Global(utf16_bytes(path)),
-                });
-                return offers;
+            } else {
+                log_diag(&format!(
+                    "[NATIVE_DRAG] image file missing, file formats skipped: {path}"
+                ));
             }
-            log_diag(&format!("[NATIVE_DRAG] image file missing, file formats skipped: {path}"));
         }
     }
 
@@ -352,7 +384,15 @@ fn build_offers(
                         lindex: -1,
                         data: OfferData::Global(utf16_bytes(&live.join("\r\n"))),
                     });
-                    return offers;
+                    offers.push(Offer {
+                        cf_format: CF_TEXT,
+                        tymed: TYMED_HGLOBAL.0 as u32,
+                        lindex: -1,
+                        data: OfferData::Global(
+                            live.join("\r\n").bytes().chain(std::iter::once(0)).collect(),
+                        ),
+                    });
+                    return (offers, None);
                 }
             }
         }
@@ -366,7 +406,7 @@ fn build_offers(
         lindex: -1,
         data: OfferData::Global(utf16_bytes(&text)),
     });
-    offers
+    (offers, None)
 }
 
 // ── Hand-rolled COM plumbing ─────────────────────────────────────────────
@@ -379,23 +419,26 @@ macro_rules! com_unknown {
             riid: *const GUID,
             ppv: *mut *mut std::ffi::c_void,
         ) -> HRESULT {
-            if ppv.is_null() || riid.is_null() {
-                return E_POINTER;
-            }
-            let want = unsafe { &*riid };
-            let ok = *want == IUnknown::IID $(|| *want == $iid)*;
-            if !ok {
-                unsafe {
-                    *ppv = std::ptr::null_mut();
+            guard_hresult(stringify!($qi), || unsafe {
+                if this.is_null() || ppv.is_null() || riid.is_null() {
+                    E_POINTER
+                } else {
+                    let want = &*riid;
+                    let ok = *want == IUnknown::IID $(|| *want == $iid)*;
+                    if !ok {
+                        *ppv = std::ptr::null_mut();
+                        E_NOINTERFACE
+                    } else {
+                        let o = &*(this as *const $t);
+                        o.refs.fetch_add(1, Ordering::SeqCst);
+                        *ppv = this;
+                        if !FIRST_QI.swap(true, Ordering::SeqCst) {
+                            log_diag("[NATIVE_DRAG] first QueryInterface (object alive, refs additive)");
+                        }
+                        S_OK
+                    }
                 }
-                return E_NOINTERFACE;
-            }
-            unsafe {
-                let o = &*(this as *const $t);
-                o.refs.fetch_add(1, Ordering::SeqCst);
-                *ppv = this;
-            }
-            S_OK
+            })
         }
         unsafe extern "system" fn $add(this: *mut std::ffi::c_void) -> u32 {
             unsafe { (&*(this as *const $t)).refs.fetch_add(1, Ordering::SeqCst) + 1 }
@@ -414,254 +457,9 @@ macro_rules! com_unknown {
     };
 }
 
-// ── COM: in-memory IStream (FileContents) ────────────────────────────────
-
-#[repr(C)]
-struct MemStream {
-    vtbl: *const IStream_Vtbl,
-    refs: AtomicU32,
-    inner: Mutex<MemStreamInner>,
-}
-
-struct MemStreamInner {
-    data: Vec<u8>,
-    pos: u64,
-}
-
-impl MemStream {
-    unsafe fn this<'a>(this: *mut std::ffi::c_void) -> &'a Self {
-        &*(this as *const Self)
-    }
-
-    fn read_impl(&self, pv: *mut std::ffi::c_void, cb: u32, pcbread: *mut u32) -> HRESULT {
-        let mut inner = match self.inner.lock() {
-            Ok(g) => g,
-            Err(_) => return HRESULT::from_win32(5),
-        };
-        let start = (inner.pos as usize).min(inner.data.len());
-        let n = ((inner.data.len() - start) as u64).min(cb as u64) as usize;
-        unsafe {
-            if n > 0 {
-                std::ptr::copy_nonoverlapping(inner.data.as_ptr().add(start), pv as *mut u8, n);
-            }
-            if !pcbread.is_null() {
-                *pcbread = n as u32;
-            }
-        }
-        inner.pos = (start + n) as u64;
-        if (n as u32) < cb {
-            S_FALSE
-        } else {
-            S_OK
-        }
-    }
-
-    fn write_impl(&self, pv: *const std::ffi::c_void, cb: u32, pcbwritten: *mut u32) -> HRESULT {
-        let mut inner = match self.inner.lock() {
-            Ok(g) => g,
-            Err(_) => return HRESULT::from_win32(5),
-        };
-        let start = inner.pos as usize;
-        if inner.data.len() < start + cb as usize {
-            inner.data.resize(start + cb as usize, 0);
-        }
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                pv as *const u8,
-                inner.data.as_mut_ptr().add(start),
-                cb as usize,
-            );
-            if !pcbwritten.is_null() {
-                *pcbwritten = cb;
-            }
-        }
-        inner.pos += cb as u64;
-        S_OK
-    }
-}
-
-com_unknown!(MemStream, stream_qi, stream_add, stream_rel, [IStream::IID]);
-
-unsafe extern "system" fn stream_read(
-    this: *mut std::ffi::c_void,
-    pv: *mut std::ffi::c_void,
-    cb: u32,
-    pcbread: *mut u32,
-) -> HRESULT {
-    unsafe { MemStream::this(this).read_impl(pv, cb, pcbread) }
-}
-
-unsafe extern "system" fn stream_write(
-    this: *mut std::ffi::c_void,
-    pv: *const std::ffi::c_void,
-    cb: u32,
-    pcbwritten: *mut u32,
-) -> HRESULT {
-    unsafe { MemStream::this(this).write_impl(pv, cb, pcbwritten) }
-}
-
-unsafe extern "system" fn stream_seek(
-    this: *mut std::ffi::c_void,
-    dlibmove: i64,
-    dworigin: STREAM_SEEK,
-    plibnewposition: *mut u64,
-) -> HRESULT {
-    // STREAM_SEEK_SET/CUR/END are 0/1/2.
-    unsafe {
-        let o = MemStream::this(this);
-        let mut inner = match o.inner.lock() {
-            Ok(g) => g,
-            Err(_) => return HRESULT::from_win32(5),
-        };
-        let len = inner.data.len() as i64;
-        let base: i64 = if dworigin == STREAM_SEEK_SET {
-            0
-        } else if dworigin == STREAM_SEEK_CUR {
-            inner.pos as i64
-        } else if dworigin == STREAM_SEEK_END {
-            len
-        } else {
-            return HRESULT::from_win32(87);
-        };
-        inner.pos = (base + dlibmove).max(0).min(len) as u64;
-        if !plibnewposition.is_null() {
-            *plibnewposition = inner.pos;
-        }
-    }
-    S_OK
-}
-
-unsafe extern "system" fn stream_setsize(
-    this: *mut std::ffi::c_void,
-    libnewsize: u64,
-) -> HRESULT {
-    unsafe {
-        let o = MemStream::this(this);
-        match o.inner.lock() {
-            Ok(mut inner) => {
-                inner.data.resize(libnewsize as usize, 0);
-                S_OK
-            }
-            Err(_) => HRESULT::from_win32(5),
-        }
-    }
-}
-
-unsafe extern "system" fn stream_stat(
-    this: *mut std::ffi::c_void,
-    pstatstg: *mut STATSTG,
-    _grfstatflag: u32,
-) -> HRESULT {
-    unsafe {
-        if pstatstg.is_null() {
-            return HRESULT::from_win32(87);
-        }
-        let o = MemStream::this(this);
-        let inner = match o.inner.lock() {
-            Ok(g) => g,
-            Err(_) => return HRESULT::from_win32(5),
-        };
-        let st = &mut *pstatstg;
-        st.pwcsName = windows::core::PWSTR::null();
-        st.r#type = 2; // STGTY_STREAM
-        st.cbSize = inner.data.len() as u64;
-        st.mtime = std::mem::zeroed();
-        st.ctime = std::mem::zeroed();
-        st.atime = std::mem::zeroed();
-        st.grfMode = std::mem::zeroed();
-        st.grfLocksSupported = 0;
-        st.clsid = windows::core::GUID::zeroed();
-        st.grfStateBits = 0;
-        st.reserved = 0;
-    }
-    S_OK
-}
-
-unsafe extern "system" fn stream_clone(this: *mut std::ffi::c_void, out: *mut *mut std::ffi::c_void) -> HRESULT {
-    unsafe {
-        if out.is_null() {
-            return HRESULT::from_win32(87);
-        }
-        let o = MemStream::this(this);
-        let data = match o.inner.lock() {
-            Ok(g) => g.data.clone(),
-            Err(_) => return HRESULT::from_win32(5),
-        };
-        let boxed = Box::new(MemStream {
-            vtbl: &STREAM_VTBL,
-            refs: AtomicU32::new(1),
-            inner: Mutex::new(MemStreamInner { data, pos: 0 }),
-        });
-        *out = Box::into_raw(boxed) as *mut std::ffi::c_void;
-    }
-    S_OK
-}
-
-static STREAM_VTBL: IStream_Vtbl = IStream_Vtbl {
-    base__: ISequentialStream_Vtbl {
-        base__: IUnknown_Vtbl {
-            QueryInterface: stream_qi,
-            AddRef: stream_add,
-            Release: stream_rel,
-        },
-        Read: stream_read,
-        Write: stream_write,
-    },
-    Seek: stream_seek,
-    SetSize: stream_setsize,
-    CopyTo: stream_notimpl_4,
-    Commit: stream_notimpl_1,
-    Revert: stream_notimpl_0,
-    LockRegion: stream_notimpl_3,
-    UnlockRegion: stream_notimpl_3u,
-    Stat: stream_stat,
-    Clone: stream_clone,
-};
-
-// Minimal E_NOTIMPL stubs with the exact arities the vtable needs.
-unsafe extern "system" fn stream_notimpl_0(_this: *mut std::ffi::c_void) -> HRESULT {
-    E_NOTIMPL
-}
-unsafe extern "system" fn stream_notimpl_1(
-    _this: *mut std::ffi::c_void,
-    _a: u32,
-) -> HRESULT {
-    E_NOTIMPL
-}
-unsafe extern "system" fn stream_notimpl_3(
-    _this: *mut std::ffi::c_void,
-    _a: u64,
-    _b: u64,
-    _c: u32,
-) -> HRESULT {
-    E_NOTIMPL
-}
-unsafe extern "system" fn stream_notimpl_3u(
-    _this: *mut std::ffi::c_void,
-    _a: u64,
-    _b: u64,
-    _c: u32,
-) -> HRESULT {
-    E_NOTIMPL
-}
-unsafe extern "system" fn stream_notimpl_4(
-    _this: *mut std::ffi::c_void,
-    _a: *mut std::ffi::c_void,
-    _b: u64,
-    _c: *mut u64,
-    _d: *mut u64,
-) -> HRESULT {
-    E_NOTIMPL
-}
-
-fn new_mem_stream(data: Vec<u8>) -> IStream {
-    let boxed = Box::new(MemStream {
-        vtbl: &STREAM_VTBL,
-        refs: AtomicU32::new(1),
-        inner: Mutex::new(MemStreamInner { data, pos: 0 }),
-    });
-    unsafe { IStream::from_raw(Box::into_raw(boxed) as *mut std::ffi::c_void) }
-}
+// NOTE (A3): the in-memory IStream (FileContents virtual-file) surface was
+// deleted - virtual descriptors are gone (HDROP over a staged temp file
+// covers chat zones, consoles, and Explorer with far less vtbl surface).
 
 // ── COM: format enumerator ───────────────────────────────────────────────
 
@@ -681,80 +479,97 @@ unsafe extern "system" fn fmt_next(
     rgelt: *mut FORMATETC,
     pceltfetched: *mut u32,
 ) -> HRESULT {
-    unsafe {
-        let o = &*(this as *const FormatEnumerator);
-        let mut pos = match o.pos.lock() {
-            Ok(g) => g,
-            Err(_) => return HRESULT::from_win32(5),
-        };
-        let mut fetched = 0u32;
-        while fetched < celt && *pos < o.formats.len() {
-            *rgelt.add(fetched as usize) = o.formats[*pos];
-            *pos += 1;
-            fetched += 1;
-        }
-        if !pceltfetched.is_null() {
-            *pceltfetched = fetched;
-        }
-        if fetched == celt {
-            S_OK
+    guard_hresult("fmt_next", || unsafe {
+        if this.is_null() || (celt > 0 && rgelt.is_null()) {
+            E_POINTER
         } else {
-            S_FALSE
+            let o = &*(this as *const FormatEnumerator);
+            match o.pos.lock() {
+                Err(_) => HRESULT::from_win32(5),
+                Ok(mut pos) => {
+                    let mut fetched = 0u32;
+                    while fetched < celt && *pos < o.formats.len() {
+                        *rgelt.add(fetched as usize) = o.formats[*pos];
+                        *pos += 1;
+                        fetched += 1;
+                    }
+                    if !pceltfetched.is_null() {
+                        *pceltfetched = fetched;
+                    }
+                    if fetched == celt {
+                        S_OK
+                    } else {
+                        S_FALSE
+                    }
+                }
+            }
         }
-    }
+    })
 }
 
 unsafe extern "system" fn fmt_skip(this: *mut std::ffi::c_void, celt: u32) -> HRESULT {
-    unsafe {
-        let o = &*(this as *const FormatEnumerator);
-        let mut pos = match o.pos.lock() {
-            Ok(g) => g,
-            Err(_) => return HRESULT::from_win32(5),
-        };
-        *pos = (*pos + celt as usize).min(o.formats.len());
-        if *pos >= o.formats.len() {
-            S_FALSE
+    guard_hresult("fmt_skip", || unsafe {
+        if this.is_null() {
+            E_POINTER
         } else {
-            S_OK
+            let o = &*(this as *const FormatEnumerator);
+            match o.pos.lock() {
+                Err(_) => HRESULT::from_win32(5),
+                Ok(mut pos) => {
+                    *pos = (*pos + celt as usize).min(o.formats.len());
+                    if *pos >= o.formats.len() {
+                        S_FALSE
+                    } else {
+                        S_OK
+                    }
+                }
+            }
         }
-    }
+    })
 }
 
 unsafe extern "system" fn fmt_reset(this: *mut std::ffi::c_void) -> HRESULT {
-    unsafe {
-        let o = &*(this as *const FormatEnumerator);
-        match o.pos.lock() {
-            Ok(mut pos) => {
-                *pos = 0;
-                S_OK
+    guard_hresult("fmt_reset", || unsafe {
+        if this.is_null() {
+            E_POINTER
+        } else {
+            let o = &*(this as *const FormatEnumerator);
+            match o.pos.lock() {
+                Ok(mut pos) => {
+                    *pos = 0;
+                    S_OK
+                }
+                Err(_) => HRESULT::from_win32(5),
             }
-            Err(_) => HRESULT::from_win32(5),
         }
-    }
+    })
 }
 
 unsafe extern "system" fn fmt_clone(
     this: *mut std::ffi::c_void,
     out: *mut *mut std::ffi::c_void,
 ) -> HRESULT {
-    unsafe {
-        if out.is_null() {
-            return HRESULT::from_win32(87);
+    guard_hresult("fmt_clone", || unsafe {
+        if this.is_null() || out.is_null() {
+            E_POINTER
+        } else {
+            let o = &*(this as *const FormatEnumerator);
+            match o.pos.lock() {
+                Err(_) => HRESULT::from_win32(5),
+                Ok(guard) => {
+                    let pos = *guard;
+                    let boxed = Box::new(FormatEnumerator {
+                        vtbl: &FORMATENUM_VTBL,
+                        refs: AtomicU32::new(1),
+                        formats: o.formats.clone(),
+                        pos: Mutex::new(pos),
+                    });
+                    *out = Box::into_raw(boxed) as *mut std::ffi::c_void;
+                    S_OK
+                }
+            }
         }
-        let o = &*(this as *const FormatEnumerator);
-        let pos = match o.pos.lock() {
-            Ok(g) => *g,
-            Err(_) => return HRESULT::from_win32(5),
-        };
-        let boxed = Box::new(FormatEnumerator {
-            vtbl: &FORMATENUM_VTBL,
-            refs: AtomicU32::new(1),
-            formats: o.formats.clone(),
-            pos: Mutex::new(pos),
-        });
-        *out = Box::into_raw(boxed) as *mut std::ffi::c_void;
-    }
-    S_OK
+    })
 }
 
 static FORMATENUM_VTBL: IEnumFORMATETC_Vtbl = IEnumFORMATETC_Vtbl {
@@ -784,13 +599,19 @@ unsafe extern "system" fn src_query_continue(
     fescapepressed: BOOL,
     grfkeystate: MODIFIERKEYS_FLAGS,
 ) -> HRESULT {
-    if fescapepressed.as_bool() {
-        DRAGDROP_S_CANCEL
-    } else if grfkeystate.0 & (MK_LBUTTON.0 | MK_RBUTTON.0) == 0 {
-        DRAGDROP_S_DROP
-    } else {
-        S_OK
-    }
+    guard_hresult("src_query_continue", || {
+        TICK_COUNT.fetch_add(1, Ordering::SeqCst);
+        if !FIRST_TICK.swap(true, Ordering::SeqCst) {
+            log_diag("[NATIVE_DRAG] first QueryContinueDrag tick (modal loop alive)");
+        }
+        if fescapepressed.as_bool() {
+            DRAGDROP_S_CANCEL
+        } else if grfkeystate.0 & (MK_LBUTTON.0 | MK_RBUTTON.0) == 0 {
+            DRAGDROP_S_DROP
+        } else {
+            S_OK
+        }
+    })
 }
 
 unsafe extern "system" fn src_feedback(
@@ -798,6 +619,8 @@ unsafe extern "system" fn src_feedback(
     _dweffect: DROPEFFECT,
 ) -> HRESULT {
     // Default cursors: the copy cursor shows for our COPY-only drags.
+    // Pure function — no telemetry here (fires per mouse move); the
+    // QueryContinueDrag tick counter above tracks loop liveness.
     DRAGDROP_S_USEDEFAULTCURSORS
 }
 
@@ -842,23 +665,12 @@ impl ClipDataObject {
 
 fn fill_medium(offer: &Offer) -> windows::core::Result<STGMEDIUM> {
     unsafe {
-        match &offer.data {
-            OfferData::Global(bytes) => {
-                let h = hglobal_from_bytes(bytes)?;
-                let mut medium: STGMEDIUM = std::mem::zeroed();
-                medium.tymed = TYMED_HGLOBAL.0 as u32;
-                medium.u.hGlobal = h;
-                Ok(medium)
-            }
-            OfferData::Stream(bytes) => {
-                let stream = new_mem_stream(bytes.clone());
-                let mut medium: STGMEDIUM = std::mem::zeroed();
-                medium.tymed = TYMED_ISTREAM.0 as u32;
-                medium.u.pstm =
-                    std::mem::ManuallyDrop::new(Some(stream));
-                Ok(medium)
-            }
-        }
+        let OfferData::Global(bytes) = &offer.data;
+        let h = hglobal_from_bytes(bytes)?;
+        let mut medium: STGMEDIUM = std::mem::zeroed();
+        medium.tymed = TYMED_HGLOBAL.0 as u32;
+        medium.u.hGlobal = h;
+        Ok(medium)
     }
 }
 
@@ -867,33 +679,38 @@ unsafe extern "system" fn data_getdata(
     pformatetcin: *const FORMATETC,
     pmedium: *mut STGMEDIUM,
 ) -> HRESULT {
-    unsafe {
-        if pformatetcin.is_null() || pmedium.is_null() {
-            return HRESULT::from_win32(87);
-        }
-        let o = ClipDataObject::this(this);
-        let fmt = &*pformatetcin;
-        match o.find(fmt) {
-            Some(offer) => match fill_medium(offer) {
-                Ok(medium) => {
-                    *pmedium = medium;
-                    log_diag(&format!("[NATIVE_DRAG] GetData served cf={}", fmt.cfFormat));
-                    S_OK
+    guard_hresult("data_getdata", || unsafe {
+        if this.is_null() || pformatetcin.is_null() || pmedium.is_null() {
+            E_POINTER
+        } else {
+            GETDATA_COUNT.fetch_add(1, Ordering::SeqCst);
+            if !FIRST_GETDATA.swap(true, Ordering::SeqCst) {
+                log_diag("[NATIVE_DRAG] first GetData (target is pulling formats)");
+            }
+            let o = ClipDataObject::this(this);
+            let fmt = &*pformatetcin;
+            match o.find(fmt) {
+                Some(offer) => match fill_medium(offer) {
+                    Ok(medium) => {
+                        *pmedium = medium;
+                        log_diag(&format!("[NATIVE_DRAG] GetData served cf={}", fmt.cfFormat));
+                        S_OK
+                    }
+                    Err(_) => HRESULT::from_win32(8),
+                },
+                None => {
+                    log_diag(&format!(
+                        "[NATIVE_DRAG] GetData queried-vs-offered MISS cf={} tymed={} idx={} (offered: {})",
+                        fmt.cfFormat,
+                        fmt.tymed,
+                        fmt.lindex,
+                        o.list_kinds()
+                    ));
+                    DV_E_FORMATETC
                 }
-                Err(_) => HRESULT::from_win32(8),
-            },
-            None => {
-                log_diag(&format!(
-                    "[NATIVE_DRAG] GetData queried-vs-offered MISS cf={} tymed={} idx={} (offered: {})",
-                    fmt.cfFormat,
-                    fmt.tymed,
-                    fmt.lindex,
-                    o.list_kinds()
-                ));
-                DV_E_FORMATETC
             }
         }
-    }
+    })
 }
 
 unsafe extern "system" fn data_notimpl_2(
@@ -908,16 +725,17 @@ unsafe extern "system" fn data_query(
     this: *mut std::ffi::c_void,
     pformatetc: *const FORMATETC,
 ) -> HRESULT {
-    unsafe {
-        if pformatetc.is_null() {
-            return HRESULT::from_win32(87);
+    guard_hresult("data_query", || unsafe {
+        if this.is_null() || pformatetc.is_null() {
+            E_POINTER
+        } else {
+            let o = ClipDataObject::this(this);
+            match o.find(&*pformatetc) {
+                Some(_) => S_OK,
+                None => DV_E_FORMATETC,
+            }
         }
-        let o = ClipDataObject::this(this);
-        match o.find(&*pformatetc) {
-            Some(_) => S_OK,
-            None => DV_E_FORMATETC,
-        }
-    }
+    })
 }
 
 unsafe extern "system" fn data_notimpl_2b(
@@ -946,20 +764,21 @@ unsafe extern "system" fn data_enum(
     if dwdirection != DATADIR_GET.0 as u32 {
         return E_NOTIMPL;
     }
-    unsafe {
-        if out.is_null() {
-            return HRESULT::from_win32(87);
+    guard_hresult("data_enum", || unsafe {
+        if this.is_null() || out.is_null() {
+            E_POINTER
+        } else {
+            let o = ClipDataObject::this(this);
+            let boxed = Box::new(FormatEnumerator {
+                vtbl: &FORMATENUM_VTBL,
+                refs: AtomicU32::new(1),
+                formats: o.offers.iter().map(Offer::fmtetc).collect(),
+                pos: Mutex::new(0),
+            });
+            *out = Box::into_raw(boxed) as *mut std::ffi::c_void;
+            S_OK
         }
-        let o = ClipDataObject::this(this);
-        let boxed = Box::new(FormatEnumerator {
-            vtbl: &FORMATENUM_VTBL,
-            refs: AtomicU32::new(1),
-            formats: o.offers.iter().map(Offer::fmtetc).collect(),
-            pos: Mutex::new(0),
-        });
-        *out = Box::into_raw(boxed) as *mut std::ffi::c_void;
-    }
-    S_OK
+    })
 }
 
 unsafe extern "system" fn data_notimpl_4(
@@ -1035,65 +854,75 @@ fn effect_name(effect: u32) -> &'static str {
 /// Starts a native OLE drag for a clip. Blocks until the drop settles and
 /// returns the negotiated effect ("copy" expected; "none" is logged as a
 /// violation since only COPY is ever allowed).
-pub fn begin_clip_drag(state: &State<'_, AppState>, id: String) -> std::result::Result<String, String> {
+///
+/// Threading (A2-i): the WebView invokes this command from its `dragstart`
+/// handler, but `DoDragDrop` runs ONLY on the main STA thread — the modal
+/// body is posted via `run_on_main_thread` and the command blocks on a
+/// channel. A `compare_exchange` busy guard rejects concurrent drags
+/// (rapid-spam protection): only one modal loop can exist at a time.
+pub fn begin_clip_drag(
+    state: &State<'_, AppState>,
+    app: &AppHandle,
+    id: String,
+) -> std::result::Result<String, String> {
+    if NATIVE_DRAG_ACTIVE
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        log_diag(&format!(
+            "[NATIVE_DRAG] VIOLATION: concurrent dragstart rejected id='{id}' (spam guard)"
+        ));
+        return Err("native drag already in progress".to_string());
+    }
+    let outcome = begin_clip_drag_inner(state, app, &id);
+    NATIVE_DRAG_ACTIVE.store(false, Ordering::SeqCst);
+    outcome
+}
+
+fn begin_clip_drag_inner(
+    state: &State<'_, AppState>,
+    app: &AppHandle,
+    id: &str,
+) -> std::result::Result<String, String> {
     let item = state
         .db
-        .get_entry_by_id(&id)?
+        .get_entry_by_id(id)?
         .ok_or_else(|| format!("clip not found: {id}"))?;
 
     let cf_html = register_format("HTML Format");
-    let cf_descriptor = register_format("FileGroupDescriptorW");
-    let cf_contents = register_format("FileContents");
-    let cf_carbon_ids = register_format("CarbonClipIds");
-    let offers = build_offers(&item, cf_html, cf_descriptor, cf_contents, cf_carbon_ids);
+    let (offers, staged) = build_offers(&item, cf_html);
     log_diag(&format!(
-        "[NATIVE_DRAG] begin id='{}' type='{}' offering {} formats",
+        "[NATIVE_DRAG] begin id='{}' type='{}' offering {} formats (staged={})",
         item.id,
         item.content_type,
-        offers.len()
+        offers.len(),
+        staged.is_some()
     ));
+    reset_drag_telemetry();
 
-    NATIVE_DRAG_ACTIVE.store(true, Ordering::SeqCst);
     let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let outcome: windows::core::Result<String> = (|| unsafe {
-            OleInitialize(None)?;
-            struct OleGuard;
-            impl Drop for OleGuard {
-                fn drop(&mut self) {
-                    unsafe {
-                        OleUninitialize();
-                    }
-                }
+    log_diag(&format!(
+        "[NATIVE_DRAG] drag message posted to main STA thread id='{id}'"
+    ));
+    if let Err(e) = app.run_on_main_thread(move || {
+        // Contain OUR panics: unwinding through the wry event loop would
+        // abort the process. COM callbacks carry their own per-entry guards.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            run_modal_drag(offers, staged)
+        }));
+        let outcome = match result {
+            Ok(r) => r,
+            Err(_) => {
+                log_diag("[NATIVE_DRAG] PANIC on main STA thread during drag -> error");
+                Err("native drag panicked".to_string())
             }
-            let _guard = OleGuard;
-            let dataobj = new_data_object(offers);
-            let source = new_drop_source();
-            // COPY-only: supported targets always report COPY, so the
-            // circle-slash cursor is unreachable for them.
-            let mut effect = DROPEFFECT_NONE;
-            let hr = DoDragDrop(&dataobj, &source, DROPEFFECT_COPY, &mut effect);
-            // Release OUR initial refs via IUnknown (only IUnknown::drop
-            // calls Release; dropping the typed wrappers alone would leak).
-            // OLE has already released its own references by now.
-            let unk_data: IUnknown = dataobj.cast()?;
-            let unk_src: IUnknown = source.cast()?;
-            drop(dataobj);
-            drop(source);
-            drop(unk_data);
-            drop(unk_src);
-            if hr_failed(hr) {
-                log_diag(&format!("[NATIVE_DRAG] DoDragDrop failed: {hr:?}"));
-                return Err(hr.into());
-            }
-            Ok(effect_name(effect.0).to_string())
-        })();
+        };
         let _ = tx.send(outcome);
-    });
+    }) {
+        return Err(format!("failed to post drag to main thread: {e}"));
+    }
 
-    let result = rx.recv();
-    NATIVE_DRAG_ACTIVE.store(false, Ordering::SeqCst);
-    match result {
+    match rx.recv() {
         Ok(Ok(effect)) => {
             if effect != "copy" {
                 log_diag(&format!(
@@ -1104,12 +933,79 @@ pub fn begin_clip_drag(state: &State<'_, AppState>, id: String) -> std::result::
             }
             Ok(effect)
         }
-        Ok(Err(e)) => Err(format!("native drag failed: {e:?}")),
-        Err(_) => Err("native drag thread vanished".to_string()),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err("native drag channel vanished".to_string()),
+    }
+}
+
+/// Modal drag body. Runs ONLY on the main STA thread (A2-i/iv): OleInitialize
+/// state is logged, DoDragDrop entered/returned is logged, and the staging
+/// guard is dropped (temp cleanup) after the loop settles.
+unsafe fn run_modal_drag(
+    offers: Vec<Offer>,
+    staged: Option<StagedDrag>,
+) -> std::result::Result<String, String> {
+    unsafe {
+        log_diag("[NATIVE_DRAG] handler entered on main STA thread");
+        match OleInitialize(None) {
+            Ok(()) => log_diag("[NATIVE_DRAG] OleInitialize ok (S_OK or S_FALSE/already-init)"),
+            Err(e) => {
+                log_diag(&format!(
+                    "[NATIVE_DRAG] OleInitialize FAILED: {e:?} — aborting drag"
+                ));
+                return Err(format!("OleInitialize failed: {e:?}"));
+            }
+        }
+        struct OleGuard;
+        impl Drop for OleGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    OleUninitialize();
+                }
+            }
+        }
+        let _guard = OleGuard;
+        // Keep the temp staging alive for the whole modal loop.
+        let _staged = staged;
+        let dataobj = new_data_object(offers);
+        let source = new_drop_source();
+        // COPY-only: supported targets always report COPY, so the
+        // circle-slash cursor is unreachable for them.
+        let mut effect = DROPEFFECT_NONE;
+        log_diag("[NATIVE_DRAG] DoDragDrop entered");
+        let hr = DoDragDrop(&dataobj, &source, DROPEFFECT_COPY, &mut effect);
+        // Release OUR initial refs via IUnknown (only IUnknown::drop
+        // calls Release; dropping the typed wrappers alone would leak).
+        // OLE has already released its own references by now.
+        let unk_data: IUnknown = dataobj
+            .cast()
+            .map_err(|e| format!("QI IUnknown failed: {e:?}"))?;
+        let unk_src: IUnknown = source
+            .cast()
+            .map_err(|e| format!("QI IUnknown failed: {e:?}"))?;
+        drop(dataobj);
+        drop(source);
+        drop(unk_data);
+        drop(unk_src);
+        drop(_staged);
+        log_diag(&format!(
+            "[NATIVE_DRAG] DoDragDrop returned hr={hr:?} effect={} (getdata={} ticks={})",
+            effect_name(effect.0),
+            GETDATA_COUNT.load(Ordering::SeqCst),
+            TICK_COUNT.load(Ordering::SeqCst),
+        ));
+        if hr_failed(hr) {
+            return Err(format!("native drag failed: {hr:?}"));
+        }
+        Ok(effect_name(effect.0).to_string())
     }
 }
 
 #[tauri::command]
-pub fn begin_native_drag(state: State<'_, AppState>, id: String) -> std::result::Result<String, String> {
-    begin_clip_drag(&state, id)
+pub fn begin_native_drag(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    id: String,
+) -> std::result::Result<String, String> {
+    begin_clip_drag(&state, &app, id)
 }

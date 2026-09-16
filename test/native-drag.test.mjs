@@ -18,11 +18,12 @@ test('v28-B - native drag module owns the OLE surface (and only it)', () => {
   for (const token of [
     'IDataObject_Vtbl',
     'IDropSource_Vtbl',
-    'IStream_Vtbl',
     'IEnumFORMATETC_Vtbl',
     'DoDragDrop',
     'OleInitialize',
     'OleUninitialize',
+    'run_on_main_thread',
+    'guard_hresult',
   ]) {
     assert.ok(rs.includes(token), `native_drag.rs must implement ${token}`);
   }
@@ -40,20 +41,28 @@ test('v28-B - native drag module owns the OLE surface (and only it)', () => {
   assert.ok(rs.includes('GetData served cf='), 'served formats must log');
 });
 
-test('v28-B - per-type format set (B2)', () => {
+test('v28-B - per-type format set (B2, minimal payload as of v29-A)', () => {
   const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'native_drag.rs'), 'utf8');
   // Text/code/link.
   assert.ok(rs.includes('CF_UNICODETEXT'), 'must offer unicode text');
   assert.ok(rs.includes('CF_TEXT'), 'must offer ANSI text');
   assert.ok(rs.includes('wrap_in_cf_html'), 'must offer wrapped CF_HTML');
-  // Images: HDROP + descriptor/contents + DIB + path text.
-  assert.ok(rs.includes('CF_HDROP'), 'images must offer HDROP');
-  assert.ok(rs.includes('FileGroupDescriptorW'), 'images must offer virtual descriptors');
-  assert.ok(rs.includes('FileContents'), 'images must offer descriptor contents');
-  assert.ok(rs.includes('CF_DIB'), 'images must offer DIB for editors');
-  assert.ok(rs.includes('BITMAPINFO'), 'DIB comment must document the layout');
-  // Files: HDROP over real paths.
+  // Images/files: HDROP + path text only (v29-A deleted the exotic
+  // virtual-file/DIB surface after the crash audit).
+  assert.ok(rs.includes('CF_HDROP'), 'images/files must offer HDROP');
   assert.ok(rs.includes('hdrop_bytes'), 'HDROP serializer must exist');
+  assert.ok(rs.includes('stage_image_temp'), 'images must stage a temp copy');
+  assert.ok(rs.includes('CarbonDrag'), 'staging dir must be namespaced');
+  assert.ok(rs.includes('remove_dir_all'), 'staging must be cleaned after the drop');
+  for (const dead of [
+    'FileGroupDescriptorW',
+    'new_mem_stream',
+    'bmp_file_bytes',
+    'CarbonClipIds',
+    'IStream_Vtbl',
+  ]) {
+    assert.ok(!rs.includes(dead), `v29-A minimal payload must not contain ${dead}`);
+  }
   // Command wiring.
   const libRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'lib.rs'), 'utf8');
   assert.ok(
@@ -93,6 +102,9 @@ test('v28-B - frontend gesture routing and hygiene (B4)', () => {
 
   const css = fs.readFileSync(path.join(SRC_DIR, 'index.css'), 'utf8');
   assert.ok(css.includes('html.native-dragging'), 'suppression CSS must exist');
+  // v29-A frontend spam guard.
+  assert.ok(util.includes('nativeDragInFlight'), 'must refuse stacked invokes');
+  assert.ok(util.includes('threshold detected'), 'must log the threshold handoff');
 });
 
 test('v28-B - native drag suppresses overlay auto-hide on blur to prevent crash', () => {
@@ -108,5 +120,91 @@ test('v28-B - native drag suppresses overlay auto-hide on blur to prevent crash'
   assert.ok(
     libRs.includes('suppressing hide to prevent crash'),
     'focus-loss handler must log suppression rationale'
+  );
+});
+
+/**
+ * ADDENDUM v29-A: crash-safe native drag source.
+ * The drag modal loop used to run on a thread-pool worker while the WebView
+ * owned the window, offered exotic virtual-file/DIB formats through a
+ * hand-rolled IStream, and had no FFI panic containment. These tests pin
+ * the hardened contract: main-STA dispatch, busy guard, per-entry unwind
+ * guards, minimal payload, lifecycle telemetry, and the crash hook.
+ */
+
+test('v29-A - drag runs ONLY on the main STA thread (never a worker)', () => {
+  const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'native_drag.rs'), 'utf8');
+  assert.ok(rs.includes('run_on_main_thread'), 'modal body must post to the main STA thread');
+  assert.ok(rs.includes('run_modal_drag'), 'modal body must be a dedicated main-thread fn');
+  assert.ok(!rs.includes('thread::spawn'), 'no worker thread may own the modal loop');
+});
+
+test('v29-A - busy guard rejects concurrent / spam dragstarts', () => {
+  const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'native_drag.rs'), 'utf8');
+  assert.ok(rs.includes('compare_exchange'), 'entry must be a compare_exchange busy guard');
+  assert.ok(
+    rs.includes('native drag already in progress'),
+    'concurrent dragstart must fail loudly'
+  );
+  assert.ok(rs.includes('spam guard'), 'rejection rationale must be documented');
+});
+
+test('v29-A - every COM entry point is unwind-guarded and null-checked', () => {
+  const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'native_drag.rs'), 'utf8');
+  assert.ok(rs.includes('fn guard_hresult'), 'FFI boundary guard must exist');
+  assert.ok(rs.includes('catch_unwind'), 'guard must catch unwinds');
+  assert.ok(rs.includes('E_FAIL'), 'panics must degrade to E_FAIL');
+  assert.ok(rs.includes('AssertUnwindSafe'), 'main-thread body must be unwind-contained');
+  for (const entry of [
+    'fmt_next', 'fmt_skip', 'fmt_reset', 'fmt_clone',
+    'data_getdata', 'data_query', 'data_enum',
+    'src_query_continue',
+  ]) {
+    assert.ok(
+      rs.includes(`guard_hresult("${entry}"`),
+      `${entry} must funnel through the unwind guard`
+    );
+  }
+  // Audit-pinned: no panic paths inside the module (unwrap/expect/panic
+  // macros). unwrap_or / unwrap_or_default are fine (no panic).
+  assert.doesNotMatch(rs, /\.unwrap\(\)/, 'no unwrapping calls allowed');
+  assert.doesNotMatch(rs, /\.expect\(/, 'no expecting calls allowed');
+  assert.doesNotMatch(rs, /panic!\(/, 'no panic! allowed');
+  assert.doesNotMatch(rs, /unreachable!\(/, 'no unreachable! allowed');
+  // QI answers exactly IUnknown + the object's own IID.
+  assert.ok(rs.includes('E_NOINTERFACE'), 'QI must reject unknown IIDs');
+  assert.ok(rs.includes('this.is_null()'), 'entry points must null-check the object');
+});
+
+test('v29-A - drag lifecycle telemetry covers threshold to return', () => {
+  const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'native_drag.rs'), 'utf8');
+  for (const token of [
+    'drag message posted to main STA thread',
+    'handler entered on main STA thread',
+    'OleInitialize ok',
+    'OleInitialize FAILED',
+    'DoDragDrop entered',
+    'DoDragDrop returned hr=',
+    'first QueryInterface',
+    'first GetData',
+    'first QueryContinueDrag tick',
+  ]) {
+    assert.ok(rs.includes(token), `lifecycle must log: ${token}`);
+  }
+});
+
+test('v29-A - crash hook captures message + backtrace before abort', () => {
+  const rs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'native_drag.rs'), 'utf8');
+  assert.ok(rs.includes('pub fn install_crash_hook'), 'hook installer must be exported');
+  assert.ok(rs.includes('set_hook'), 'must install a process panic hook');
+  assert.ok(
+    rs.includes('Backtrace::force_capture'),
+    'hook must capture a backtrace'
+  );
+  assert.ok(rs.includes('carbon_crash.log'), 'hook must persist to carbon_crash.log');
+  const libRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'lib.rs'), 'utf8');
+  assert.ok(
+    libRs.includes('native_drag::install_crash_hook()'),
+    'run() must install the hook before the builder starts'
   );
 });
