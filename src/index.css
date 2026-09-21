@@ -122,6 +122,13 @@ html.win-overlay body {
      protruding tabs). */
   border-radius: 8px;
   overflow: hidden;
+  border: none !important;
+  outline: none !important;
+}
+
+html.win-overlay {
+  border: none !important;
+  outline: none !important;
 }
 
 body.win-library,
@@ -530,6 +537,14 @@ input, textarea, select, button {
   box-sizing: border-box;
   margin: 0;
   background: transparent;
+  border: none !important;
+  outline: none !important;
+}
+
+.overlay-container:focus,
+.overlay-container:focus-visible {
+  border: none !important;
+  outline: none !important;
 }
 
 .overlay, .overlay-window {
@@ -545,7 +560,8 @@ input, textarea, select, button {
      same two-tone frosted depth as the library columns. A second 0.70 slab
      here used to double-stack to ~0.91 opaque, making the overlay flat dark. */
   background: transparent;
-  border: none;
+  border: none !important;
+  outline: none !important;
   /* ADDENDUM v35 W3: window roots carry NO perimeter border and NO inset
      highlight — edge definition comes from the outer shadow + acrylic/base
      contrast only (W3.1 discrimination: zeroing this inset removes the
@@ -555,6 +571,14 @@ input, textarea, select, button {
   box-shadow: var(--glass-shadow);
   display: flex;
   flex-direction: column;
+}
+
+.overlay:focus,
+.overlay:focus-visible,
+.overlay-window:focus,
+.overlay-window:focus-visible {
+  border: none !important;
+  outline: none !important;
 }
 
 /* F5 Content Layer: NO content animation on either window. Show/hide is one
@@ -1594,10 +1618,9 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   left: 0;
   top: 0;
   bottom: 0;
-  width: 1px;
-  background: var(--glass-hairline);
+  width: 0;
+  background: transparent;
   opacity: 0;
-  transition: opacity 60ms var(--ease-exit);
   pointer-events: none;
   z-index: 1;
 }
@@ -1608,8 +1631,7 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
 }
 
 .preview.open::before {
-  opacity: 1;
-  transition: opacity 120ms var(--ease-cream) 20ms;
+  opacity: 0;
 }
 
 .preview-inner {
@@ -1635,7 +1657,7 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: none;
 }
 
 .preview-kind {
@@ -1712,7 +1734,7 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   min-height: 260px;
   resize: none;
   background: transparent;
-  border: 1px solid var(--glass-border);
+  border: none;
   border-radius: var(--r-panel);
   outline: none;
   font-family: var(--mono);
@@ -1756,7 +1778,7 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   justify-content: center;
   background: transparent;
   border-radius: var(--r-panel);
-  border: 1px solid var(--glass-border);
+  border: none;
   overflow: hidden;
   padding: 8px;
   position: relative;
@@ -1805,7 +1827,7 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   padding: 14px;
   background: transparent;
   border-radius: var(--r-panel);
-  border: 1px solid var(--glass-border);
+  border: none;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1832,7 +1854,7 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   border-radius: var(--r-panel);
   overflow: hidden;
   background: #000;
-  border: 1px solid var(--glass-border);
+  border: none;
   background-clip: padding-box;
 }
 
@@ -1846,7 +1868,7 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   width: 100%;
   height: 80px;
   border-radius: var(--r-panel);
-  border: 1px solid var(--glass-border);
+  border: none;
   margin-bottom: 12px;
   display: flex;
   align-items: center;
@@ -1865,7 +1887,7 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   align-items: center;
   gap: 6px;
   padding: 8px 14px;
-  border-top: 1px solid var(--glass-hairline);
+  border-top: none;
   font-size: 10.5px;
   color: var(--text-3);
 }
@@ -2839,7 +2861,7 @@ section:last-child {
   letter-spacing: 0;
   line-height: 1.7;
   background: transparent;
-  border: 1px solid var(--glass-border);
+  border: none;
   border-radius: var(--r-panel);
   padding: 16px 18px;
   max-height: 100%;
@@ -2850,7 +2872,7 @@ section:last-child {
 
 .preview-text.plain {
   background: transparent;
-  border: 1px solid var(--glass-border);
+  border: none;
   border-radius: var(--r-panel);
   padding: 16px 18px;
   overflow: hidden;
@@ -3042,7 +3064,7 @@ section:last-child {
 /* Metadata strip (Tinycast-style compact information panel:
    label left / value right, hairline row separators) */
 .meta-strip {
-  border-top: 1px solid var(--glass-hairline);
+  border-top: none;
   background: transparent;
   padding: 10px 22px 12px;
   display: flex;
@@ -5457,7 +5479,7 @@ section:last-child {
   /* Glass like the clips .preview pane (was opaque --surface, which killed
      the frosted effect across the whole snippet detail column). */
   background: var(--glass-preview);
-  border-left: 1px solid var(--glass-hairline);
+  border-left: none;
   transition: width 200ms var(--ease-out);
 }
 
@@ -5513,11 +5535,10 @@ section:last-child {
 
 .sn-content-preview {
   /* Bare glass card like the clips .preview-text.mono block: text floats on
-     the pane frost with only a hairline box (was a 55% --elev slab that read
-     flat/dark next to the airy clips preview). Theme-adaptive; tokens kept. */
+     the pane frost with no painted border line. Theme-adaptive; tokens kept. */
   background: transparent;
   background-clip: padding-box;
-  border: 1px solid var(--glass-border);
+  border: none;
   border-radius: var(--r-panel);
   padding: 10px 12px;
   font-family: var(--mono, monospace);
@@ -5583,7 +5604,7 @@ html[data-material="solid"] .sn-content-preview {
   justify-content: space-between;
   gap: 10px;
   padding: 10px 14px 12px;
-  border-top: 1px solid var(--glass-hairline);
+  border-top: none;
 }
 
 .sn-foot-label {

@@ -65,3 +65,19 @@ test('v37 shared structural hairlines untouched (meta strip, pills, controls)', 
   assert.ok(css.includes('.meta-row + .meta-row'), 'meta separators stay (real UI, not rim)');
   assert.ok(css.includes('.preview-link-card'), 'v35 link card untouched');
 });
+
+test('v37 read section and preview chrome: no painted border lines in overlay or main', () => {
+  const css = readCss();
+  for (const sel of ['.preview-text.mono', '.preview-text.plain', '.sn-content-preview', '.preview-edit', '.preview-file-card', '.preview-image-wrapper']) {
+    const body = ruleFor(css, sel);
+    assert.doesNotMatch(body, /border\s*:\s*1px/, `${sel} must not draw a border box`);
+  }
+  const mainDivider = ruleFor(css, '.preview::before');
+  assert.doesNotMatch(mainDivider, /width\s*:\s*1px/, 'main preview must not draw a vertical line');
+  assert.doesNotMatch(mainDivider, /background\s*:\s*var\(--glass-hairline\)/, 'main divider must not paint');
+  const mainHead = ruleFor(css, '.preview-head');
+  assert.doesNotMatch(mainHead, /border-bottom\s*:\s*1px/, 'main preview head must not draw a bottom line');
+  const mainFoot = ruleFor(css, '.preview-foot');
+  assert.doesNotMatch(mainFoot, /border-top\s*:\s*1px/, 'main preview foot must not draw a top line');
+});
+

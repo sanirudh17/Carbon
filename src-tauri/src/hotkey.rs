@@ -287,9 +287,11 @@ fn uncloak_overlay_if_current(app: &AppHandle, token: Option<u64>) {
             use windows::Win32::Graphics::Dwm::DwmFlush;
             let _ = DwmFlush();
         }
+        crate::vibrancy::set_window_border_suppressed(&win);
         // I2 OS-ALPHA MASKING: Start at alpha 0, uncloak DWM, ramp to 255 over 100ms
         set_window_alpha(&win, 0);
         set_window_cloaked(&win, false);
+        crate::vibrancy::set_window_border_suppressed(&win);
         ramp_window_alpha(win.clone(), 0, 255, 100, expected_token, true);
         crate::paste::log_diag("[SHOW_OVERLAY] uncloaked after forced present with OS-alpha ramp (0->255 over 100ms)");
     }
@@ -357,9 +359,11 @@ fn uncloak_enlarged_if_current(app: &AppHandle, token: Option<u64>) {
             use windows::Win32::Graphics::Dwm::DwmFlush;
             let _ = DwmFlush();
         }
+        crate::vibrancy::set_window_border_suppressed(&win);
         // I2 OS-ALPHA MASKING: Start at alpha 0, uncloak DWM, ramp to 255 over 100ms
         set_window_alpha(&win, 0);
         set_window_cloaked(&win, false);
+        crate::vibrancy::set_window_border_suppressed(&win);
         MAIN_HAS_PAINTED.store(true, Ordering::SeqCst);
         ramp_window_alpha(win.clone(), 0, 255, 100, expected_token, false);
         crate::paste::log_diag("[SHOW_MAIN] uncloaked after forced present with OS-alpha ramp (0->255 over 100ms)");
@@ -932,6 +936,7 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     // Supported show path: guarantees the WebView2 controller is marked
     // visible (the raw SetWindowPos above cannot do that).
     let _ = overlay_win.show();
+    crate::vibrancy::set_window_border_suppressed(&overlay_win);
 
     if overlay_win.is_minimized().unwrap_or(false) {
         let _ = overlay_win.unminimize();
