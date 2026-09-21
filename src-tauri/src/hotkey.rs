@@ -482,6 +482,18 @@ pub fn disable_window_dwm_transitions(win: &tauri::WebviewWindow) {
                 &no_border as *const _ as *const std::ffi::c_void,
                 std::mem::size_of::<u32>() as u32,
             );
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_NOOWNERZORDER,
+            };
+            let _ = SetWindowPos(
+                native,
+                HWND(std::ptr::null_mut()),
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+            );
         }
     }
 }

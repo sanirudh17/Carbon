@@ -86,6 +86,9 @@ pub fn set_window_border_suppressed(window: &WebviewWindow) {
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_NOOWNERZORDER,
+        };
         if let Ok(w_hwnd) = window.hwnd() {
             unsafe {
                 let hwnd = windows::Win32::Foundation::HWND(w_hwnd.0 as _);
@@ -96,6 +99,15 @@ pub fn set_window_border_suppressed(window: &WebviewWindow) {
                     DWMWA_BORDER_COLOR,
                     &no_border as *const _ as *const std::ffi::c_void,
                     std::mem::size_of::<u32>() as u32,
+                );
+                let _ = SetWindowPos(
+                    hwnd,
+                    windows::Win32::Foundation::HWND(std::ptr::null_mut()),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
                 );
             }
         }
@@ -171,6 +183,7 @@ pub fn apply_window_material(window: &WebviewWindow, material: WindowMaterial) {
                 }
             }
         }
+        set_window_border_suppressed(window);
     }
     #[cfg(target_os = "macos")]
     {

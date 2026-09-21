@@ -111,38 +111,33 @@
 }
 
 body.win-overlay,
-html.win-overlay body {
+html.win-overlay,
+html.win-overlay body,
+html.win-overlay #root {
   --glass-base: rgba(14, 14, 16, 0.72);
   /* Same base tint as the library window (was the bluer --glass-panel-bg):
      both windows now composite from one identical base, so the preview
      panes read as the same color and transparency. */
-  background: var(--glass-base);
-  /* 8px matches the DWM ROUND arc exactly: a larger CSS arc leaves a
-     blur-only band outside the CSS curve at the top corners (the mild
-     protruding tabs). */
   border-radius: 8px;
   overflow: hidden;
   border: none !important;
   outline: none !important;
 }
 
-html.win-overlay {
-  border: none !important;
-  outline: none !important;
+body.win-overlay,
+html.win-overlay body {
+  background: var(--glass-base);
 }
 
 body.win-library,
-html.win-library body {
+html.win-library,
+html.win-library body,
+html.win-library #root {
   --glass-base: rgba(14, 14, 16, 0.72);
   /* Same 8px DWM-arc match as the overlay: the library's top corners
      showed the same mild intrusion with a 14px CSS arc. */
   border-radius: 8px;
   overflow: hidden;
-  border: none !important;
-  outline: none !important;
-}
-
-html.win-library {
   border: none !important;
   outline: none !important;
 }
