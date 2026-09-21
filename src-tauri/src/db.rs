@@ -31,6 +31,20 @@ fn generate_pin_salt() -> String {
 
 static RECOVERY_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+/// ADDENDUM v36 A2: monotonic store version. Bumped exactly once per
+/// entry-list mutation (insert / merge-append / dedup-bump / text edit /
+/// delete / OCR fill) so windows can compare `store version > cache
+/// version` on show and refresh-before-uncloak only when stale.
+static STORE_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn bump_store_version() -> u64 {
+    STORE_VERSION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+}
+
+pub fn store_version() -> u64 {
+    STORE_VERSION.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 fn generate_recovery_code() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
@@ -582,6 +596,7 @@ impl DbState {
         )
         .map_err(|e| e.to_string())?;
 
+        bump_store_version();
         Ok(())
     }
 
@@ -1281,6 +1296,7 @@ impl DbState {
         )
         .map_err(|e| e.to_string())?;
 
+        bump_store_version();
         Ok(())
     }
 
@@ -1299,6 +1315,7 @@ impl DbState {
         )
         .map_err(|e| e.to_string())?;
 
+        bump_store_version();
         Ok(new_pinned == 1)
     }
 
@@ -1316,6 +1333,7 @@ impl DbState {
         }
 
         tx.commit().map_err(|e| e.to_string())?;
+        bump_store_version();
         Ok(())
     }
 
@@ -1328,6 +1346,7 @@ impl DbState {
         )
         .map_err(|e| e.to_string())?;
 
+        bump_store_version();
         Ok(())
     }
 
@@ -1458,6 +1477,7 @@ impl DbState {
                 })
                 .map_err(|e| e.to_string())?;
 
+            bump_store_version();
             return Ok(Some(updated_item));
         }
 
@@ -1512,6 +1532,7 @@ impl DbState {
             params![ocr_text, id],
         )
         .map_err(|e| e.to_string())?;
+        bump_store_version();
         Ok(())
     }
 
@@ -1546,6 +1567,7 @@ impl DbState {
         drop(stmt);
         drop(conn);
 
+        bump_store_version();
         self.get_entry_by_id(id)?
             .ok_or_else(|| "Failed to reload merged clip".to_string())
     }
@@ -1584,6 +1606,7 @@ impl DbState {
         conn.execute("DELETE FROM entries WHERE id = ?1", params![id])
             .map_err(|e| e.to_string())?;
 
+        bump_store_version();
         Ok(())
     }
 
@@ -1623,6 +1646,7 @@ impl DbState {
         }
 
         tx.commit().map_err(|e| e.to_string())?;
+        bump_store_version();
         Ok(())
     }
 

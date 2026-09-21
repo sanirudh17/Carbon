@@ -2451,6 +2451,13 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                     onChange={(e) => handleContentEdit(e.target.value)}
                     onBlur={handleContentBlurCommit}
                     onKeyDown={(e) => {
+                      // v36 A1: save-key commits in place (stays in edit mode).
+                      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void commitPendingEdit('save-key');
+                        return;
+                      }
                       e.stopPropagation();
                       if (e.key === 'Escape') {
                         e.currentTarget.blur();

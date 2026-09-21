@@ -295,6 +295,8 @@ export const QuickOverlay: React.FC = () => {
       setItems(res || []);
       setInitialLoaded(true);
       setSelectedIndex(0);
+      // v36 A2: a full re-read absorbs every mutation to date.
+      bumpCacheVersion();
     } catch (err) {
       console.error('Failed to fetch clips:', err);
       setInitialLoaded(true);
@@ -317,16 +319,21 @@ export const QuickOverlay: React.FC = () => {
   // Live mirror of the cached list for open-path staleness checks (the
   // once-registered event handlers below close over first-render state).
   const itemsRef = useRef<ClipItem[]>([]);
-  // ADDENDUM v35 W2: last capture stamp + deferred-show wait state.
-  // clipboard-updated stamps every capture (push, even while hidden); the
-  // overlay-opened path compares it against the cached list and, when the
-  // newest capture is missing, awaits the in-flight push (<=150ms) before
-  // uncloaking instead of painting stale and popping in late.
-  const lastCaptureRef = useRef<{ id: string | null; at: number } | null>(null);
-  const awaitingFreshRef = useRef<{ id: string; token?: number } | null>(null);
-  const freshTimerRef = useRef<number | null>(null);
+  // ADDENDUM v36 A2: cache version. Bumped once per applied store mutation
+  // (push / full re-read / entry-updated) so the open path can compare
+  // `store version > cache version` against the payload's store_version.
+  // May lag the store on coalesced fetches (safe: falls to refresh, never
+  // to stale) and may lead right after a re-read (safe: cache is fresh by
+  // construction).
+  const cacheVersionRef = useRef(0);
+  const bumpCacheVersion = () => {
+    cacheVersionRef.current += 1;
+  };
   const justRefreshedRef = useRef(false);
-  const FRESH_WAIT_MS = 150;
+  const lastStoreVersionRef = useRef(0);
+  // A2 bound: refresh-before-uncloak waits at most 50ms; on timeout the
+  // window uncloaks with cache and the single post-show settle refreshes.
+  const SHOW_REFRESH_MS = 50;
   itemsRef.current = items;
 
   useEffect(() => {
@@ -770,10 +777,8 @@ export const QuickOverlay: React.FC = () => {
     });
   };
 
-  // ── ADDENDUM v35 W2: push-first freshness + show-gate settle ──
+  // ── ADDENDUM v36 A2: version-gated freshness + single-settle show ──
   // Single-settle show runner: exactly one executeWindowShow per open.
-  // The deferred path (stale cache) and the immediate path share it, so a
-  // resolved wait can never double-flash.
   const afterRevealFresh = () => {
     overlayPhaseRef.current = 'shown';
     focusSearchInput();
@@ -809,36 +814,29 @@ export const QuickOverlay: React.FC = () => {
     lastHideAtRef.current = performance.now();
   };
 
-  // Resolve a deferred show when the awaited capture lands via push.
-  const settleFreshWait = (arrivedId: string | null, via: string) => {
-    const waiting = awaitingFreshRef.current;
-    if (!waiting) return;
-    if (arrivedId && arrivedId !== waiting.id) return;
-    if (freshTimerRef.current !== null) {
-      window.clearTimeout(freshTimerRef.current);
-      freshTimerRef.current = null;
-    }
-    awaitingFreshRef.current = null;
-    justRefreshedRef.current = true;
-    logClient(`overlay-opened fresh-wait resolved via ${via} id=${waiting.id}`);
-    beginOverlayShow(waiting.token);
-  };
-
-  const deferShowForFreshness = (id: string, token?: number) => {
-    if (freshTimerRef.current !== null) window.clearTimeout(freshTimerRef.current);
-    awaitingFreshRef.current = { id, token };
-    logClient(`overlay-opened deferred: newest capture id=${id} missing from cache, awaiting push <=${FRESH_WAIT_MS}ms`);
-    freshTimerRef.current = window.setTimeout(() => {
-      freshTimerRef.current = null;
-      const waiting = awaitingFreshRef.current;
-      awaitingFreshRef.current = null;
-      if (waiting) {
-        // Timeout: uncloak with cache; the row inserts on arrival via the
-        // clipboard-updated push (single settle, no double flash).
-        logClient('overlay-opened fresh-wait timeout: uncloaking with cache');
-        beginOverlayShow(waiting.token);
+  // v36 A2: stale cache refreshes BEFORE uncloak, bounded at SHOW_REFRESH_MS.
+  // On timeout the window uncloaks with cache and the single post-show
+  // settle refreshes (justRefreshed stays false → afterRevealFresh fetches).
+  const refreshStaleBeforeShow = (storeVersion: number, token?: number) => {
+    void (async () => {
+      let settled = false;
+      try {
+        await Promise.race([
+          fetchItems().then(() => {
+            settled = true;
+          }),
+          new Promise((resolve) => window.setTimeout(resolve, SHOW_REFRESH_MS)),
+        ]);
+      } catch {
+        settled = false;
       }
-    }, FRESH_WAIT_MS);
+      cacheVersionRef.current = Math.max(cacheVersionRef.current, storeVersion);
+      justRefreshedRef.current = settled;
+      logClient(
+        `overlay show refresh-before-uncloak settled=${settled} cache_version=${cacheVersionRef.current} store_version=${storeVersion}`
+      );
+      beginOverlayShow(token);
+    })();
   };
 
   useEffect(() => {
@@ -861,6 +859,7 @@ export const QuickOverlay: React.FC = () => {
         setItems(data);
         setInitialLoaded(true);
         setSelectedIndex(0);
+        bumpCacheVersion();
       }
     };
 
@@ -884,14 +883,12 @@ export const QuickOverlay: React.FC = () => {
         return () => {};
       });
 
-    // W2.1 push, don't poll: every capture inserts at the top immediately,
-    // even while hidden (same subscription the main window uses). Bumps and
-    // merges of existing ids move the fresh copy to the top instead of
-    // being ignored, so order never diverges from main.
+    // v36 A2: every applied push bumps the cache version (one bump per
+    // store mutation observed). Bumps/merges of existing ids move the fresh
+    // copy to the top instead of being ignored.
     const unlistenUpdated = safeListen<ClipItem | null>('clipboard-updated', (e) => {
       const item = e.payload;
       if (item && typeof item === 'object' && item.id) {
-        lastCaptureRef.current = { id: item.id, at: Date.now() };
         if (searchRef.current.trim()) {
           fetchLatest();
         } else {
@@ -903,12 +900,10 @@ export const QuickOverlay: React.FC = () => {
             return [item, ...prev];
           });
           setSelectedIndex(0);
+          bumpCacheVersion();
         }
-        settleFreshWait(item.id, 'clipboard-updated');
       } else {
-        lastCaptureRef.current = { id: null, at: Date.now() };
         fetchLatest();
-        settleFreshWait(null, 'clipboard-updated-unit');
       }
     });
 
@@ -917,11 +912,7 @@ export const QuickOverlay: React.FC = () => {
         setItems(e.payload);
         setInitialLoaded(true);
         setSelectedIndex(0);
-        // W2.2: the open-time push may itself carry the awaited capture.
-        const waiting = awaitingFreshRef.current;
-        if (waiting && e.payload.some((i) => i.id === waiting.id)) {
-          settleFreshWait(waiting.id, 'overlay-data');
-        }
+        bumpCacheVersion();
       }
     });
 
@@ -949,6 +940,7 @@ export const QuickOverlay: React.FC = () => {
       token?: number;
       target_app?: string | null;
       hide_gen?: number;
+      store_version?: number;
     } | number>('overlay-opened', (e) => {
       logClient('Received overlay-opened event.');
       const payload = e?.payload;
@@ -958,19 +950,18 @@ export const QuickOverlay: React.FC = () => {
       const appName = typeof payload === 'object' && payload !== null && 'target_app' in payload
         ? payload.target_app
         : undefined;
+      // v36 A2: store version rides the open payload (older Rust emits omit
+      // it → 0 → never stale → immediate show, backward compatible).
+      const storeVersion = typeof payload === 'object' && payload !== null && typeof payload.store_version === 'number'
+        ? payload.store_version
+        : 0;
+      lastStoreVersionRef.current = storeVersion;
 
       if (appName !== undefined) {
         setTargetApp(appName);
       }
 
-      // W2.2 belt-and-braces: if the last capture (by id + timestamp) is
-      // newer than the overlay's cached newest entry, await the in-flight
-      // push (<=150ms) before uncloaking. Healthy path: zero invokes, zero
-      // added latency — the gate opens immediately as before.
-      const lastCap = lastCaptureRef.current;
-      const cached = itemsRef.current;
-      const stale = !!lastCap?.id && !cached.some((i) => i.id === lastCap.id);
-      if (stale && lastCap?.id) {
+      const resetForShow = () => {
         setPasteNotice(null);
         if (pasteNoticeTimerRef.current) {
           window.clearTimeout(pasteNoticeTimerRef.current);
@@ -988,29 +979,24 @@ export const QuickOverlay: React.FC = () => {
         if (appName === undefined) {
           loadTargetApp();
         }
-        deferShowForFreshness(lastCap.id, token);
+      };
+
+      // v36 A2/A3 freshness: if store version > overlay cache version,
+      // refresh before uncloak (bounded 50ms; else the single post-show
+      // settle refreshes). Healthy path: zero added latency. No stale rows,
+      // no double insert (one show runner, one conditional refetch).
+      const cacheVersion = cacheVersionRef.current;
+      const stale = storeVersion > cacheVersion;
+      logClient(
+        `overlay show cache_version=${cacheVersion} store_version=${storeVersion} stale=${stale} rows=${itemsRef.current.length}`
+      );
+      resetForShow();
+      if (stale) {
+        refreshStaleBeforeShow(storeVersion, token);
         return;
       }
-
+      cacheVersionRef.current = Math.max(cacheVersion, storeVersion);
       beginOverlayShow(token);
-
-      setPasteNotice(null);
-      if (pasteNoticeTimerRef.current) {
-        window.clearTimeout(pasteNoticeTimerRef.current);
-        pasteNoticeTimerRef.current = null;
-      }
-      if (searchRef.current.trim() !== '') {
-        skipSearchFetchRef.current = true;
-      }
-      setSearch('');
-      setActionPanelOpen(false);
-      setActionIndex(0);
-      setSnSearch('');
-      setSnActionOpen(false);
-      setSnActionIndex(0);
-      if (appName === undefined) {
-        loadTargetApp();
-      }
     });
 
     const unlistenCancelHide = safeListen<{ token?: number; hide_gen?: number } | number>(
@@ -1120,10 +1106,13 @@ export const QuickOverlay: React.FC = () => {
 
     // W1.2: every window's preview + list row updates from the shared
     // entry-updated broadcast (store + DB already committed by the sender).
+    // v36 A2: applying it bumps the cache version (edit matrix A1:
+    // overlay->overlay, overlay->main, main->overlay all reflect in place).
     const unlistenEntryUpdated = safeListen<ClipItem>(ENTRY_UPDATED_EVENT, (e) => {
       const updated = e.payload;
       if (!updated || typeof updated !== 'object' || !updated.id) return;
       setItems((prev) => applyEntryUpdatedToList(prev, updated));
+      bumpCacheVersion();
       // W1.1 diagnostic: what this window's preview re-reads on update.
       invoke('log_client_event', {
         event: `[EDIT] window=overlay re-read id=${updated.id} chars=${(updated.text_content || '').length}`,
@@ -1132,11 +1121,6 @@ export const QuickOverlay: React.FC = () => {
 
     return () => {
       delete window.__carbonSetData;
-      if (freshTimerRef.current !== null) {
-        window.clearTimeout(freshTimerRef.current);
-        freshTimerRef.current = null;
-      }
-      awaitingFreshRef.current = null;
       unlistenUpdated.then((fn) => fn());
       unlistenData.then((fn) => fn());
       unlistenSnData.then((fn) => fn());
@@ -2103,6 +2087,15 @@ export const QuickOverlay: React.FC = () => {
                             value={editingContent}
                             onChange={(e) => handleContentEdit(e.target.value)}
                             onBlur={handleContentBlurCommit}
+                            onKeyDown={(e) => {
+                              // v36 A1: save-key commits in place (stays in edit mode).
+                              if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                void commitPendingEdit('save-key');
+                                return;
+                              }
+                            }}
                             placeholder="Edit clip text..."
                           />
                         </div>

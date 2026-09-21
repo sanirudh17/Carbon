@@ -96,30 +96,25 @@ test('Picker Open - frontend fires zero invokes before the paint gate (parity wi
   // would contend IPC + re-render with the 2-rAF paint gate. Rust pushes
   // overlay-data + overlay-snippets with the open, so the first frame already
   // has data — exactly like the main window's 0-invoke open.
-  // ADDENDUM v35 W2.2: the handler settles through ONE shared show runner
+  // ADDENDUM v36 A2: the handler settles through ONE shared show runner
   // (beginOverlayShow). Healthy path opens immediately with zero invokes;
-  // the stale-cache branch only awaits the in-flight PUSH (clipboard-updated
-  // / overlay-data) bounded by FRESH_WAIT_MS — never a fetch invoke — so no
-  // IPC contends with the gate. Timeout uncloaks with cache (single settle).
+  // the stale branch (store version > cache version) runs a bounded
+  // refresh-before-uncloak (SHOW_REFRESH_MS=50, single post-show settle on
+  // timeout) — never a blind fetch, so no IPC contends with the gate.
   assert.ok(handler.includes('beginOverlayShow('), 'handler must settle through the single show runner');
   const gateIdx = handler.indexOf('beginOverlayShow(');
   const preGate = handler.slice(0, gateIdx);
-  assert.doesNotMatch(preGate, /fetchItems\(\)/, 'no clip fetch may precede the paint gate');
   assert.doesNotMatch(preGate, /fetchSnippets\(\)/, 'no snippet fetch may precede the paint gate');
   assert.doesNotMatch(preGate, /get_settings/, 'no settings round-trip may precede the paint gate');
 
-  // The stale branch must defer (not fetch): bounded push-wait only.
+  // The stale branch must refresh bounded (not fetch blindly, not wait on pushes).
   assert.ok(
-    handler.includes('deferShowForFreshness('),
-    'stale cache must defer to the bounded push-wait, not fetch'
+    handler.includes('refreshStaleBeforeShow('),
+    'stale cache must refresh bounded before uncloak'
   );
   assert.ok(
-    overlayTsx.includes('FRESH_WAIT_MS = 150'),
-    'fresh-wait must be bounded at <=150ms'
-  );
-  assert.ok(
-    overlayTsx.includes('settleFreshWait('),
-    'in-flight pushes must resolve the deferred show (single settle)'
+    overlayTsx.includes('SHOW_REFRESH_MS = 50'),
+    'stale refresh must be bounded at <=50ms'
   );
 
   // The search-reset must not trigger a redundant [search]-effect fetch:
