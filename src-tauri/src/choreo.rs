@@ -22,11 +22,11 @@ pub fn cloak_window(app_handle: &AppHandle, window_label: String) -> Result<(), 
 
 /// Natively hides the overlay window.
 pub fn hide_overlay(app_handle: &AppHandle) -> Result<(), String> {
-    hotkey::invalidate_overlay_show_gen();
     if hotkey::get_overlay_phase() == hotkey::OverlayPhase::Showing {
         crate::paste::log_diag("[HIDE_OVERLAY] Skipped stale hide: re-show already won the race.");
         return Ok(());
     }
+    hotkey::invalidate_overlay_show_gen();
     hotkey::hide_overlay_window(app_handle);
     Ok(())
 }

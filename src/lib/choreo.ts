@@ -217,7 +217,7 @@ export function executeWindowShow(
         // Allow Chromium's compositor to submit the unhidden DirectComposition frame
         // to DWM before requesting Rust to lift the cloak gate.
         requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
+          const proceed = () => {
             if (cancelled || epoch !== showEpoch) return;
 
             const tAckReq = performance.now();
@@ -237,7 +237,15 @@ export function executeWindowShow(
             traceChoreo(`${windowName} first user-interactable reached in ${(tInteractable - tHotkey).toFixed(1)}ms`);
 
             if (onRevealed) onRevealed();
-          });
+          };
+
+          if (windowName === 'overlay') {
+            proceed();
+          } else {
+            requestAnimationFrame(() => {
+              proceed();
+            });
+          }
         });
         return;
       }
@@ -298,14 +306,11 @@ export function executeWindowHide(
     html.classList.remove('wm-hiding');
   };
 
-  // For overlay: instant hide with zero fading animation
+  // For overlay: fast 35ms hide animation
   if (windowName === 'overlay') {
     invoke('cloak_window', { windowLabel: windowName }).catch(() => {});
-    html.classList.add('no-anim');
-    html.classList.add('wm-hidden');
-    void html.offsetWidth;
-    html.classList.remove('no-anim');
-    finish();
+    html.classList.add('wm-hiding');
+    timer = window.setTimeout(finish, 35);
     return { cancel };
   }
 

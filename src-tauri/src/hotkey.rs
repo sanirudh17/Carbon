@@ -195,9 +195,15 @@ pub fn ramp_window_alpha(
     token: u64,
     is_overlay: bool,
 ) {
+    if duration_ms == 0 {
+        set_window_alpha(&window, target);
+        return;
+    }
     std::thread::spawn(move || {
-        let steps = 10;
-        let step_delay = std::time::Duration::from_millis(duration_ms / steps);
+        let start_time = std::time::Instant::now();
+        let total = std::time::Duration::from_millis(duration_ms);
+        let steps: u32 = if duration_ms <= 40 { 3 } else { 10 };
+        let step_duration = total / steps;
         for i in 1..=steps {
             let cur_gen = if is_overlay {
                 OVERLAY_SHOW_GEN.load(Ordering::SeqCst)
@@ -209,7 +215,11 @@ pub fn ramp_window_alpha(
             }
             let a = (start as f64 + (target as f64 - start as f64) * (i as f64 / steps as f64)).round() as u8;
             set_window_alpha(&window, a);
-            std::thread::sleep(step_delay);
+            let target_elapsed = step_duration * i;
+            let current_elapsed = start_time.elapsed();
+            if target_elapsed > current_elapsed {
+                std::thread::sleep(target_elapsed - current_elapsed);
+            }
         }
         set_window_alpha(&window, target);
     });
@@ -295,11 +305,12 @@ fn uncloak_overlay_if_current(app: &AppHandle, token: Option<u64>) {
             let _ = DwmFlush();
         }
         crate::vibrancy::set_window_border_suppressed(&win);
-        // Instant uncloak at full alpha: zero fade animation for snappy pop up
-        set_window_alpha(&win, 255);
+        disable_window_dwm_transitions(&win);
+        set_window_alpha(&win, 0);
         set_window_cloaked(&win, false);
         crate::vibrancy::set_window_border_suppressed(&win);
-        crate::paste::log_diag("[SHOW_OVERLAY] uncloaked instantly at full alpha (zero fade animation)");
+        ramp_window_alpha(win.clone(), 0, 255, 30, expected_token, true);
+        crate::paste::log_diag("[SHOW_OVERLAY] uncloaked with fast 30ms alpha ramp");
     }
 }
 
@@ -819,6 +830,19 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
         set_overlay_phase(OverlayPhase::Showing);
         let overlay_gen = OVERLAY_SHOW_GEN.fetch_add(1, Ordering::SeqCst) + 1;
         let cancel_gen = OVERLAY_HIDE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+        set_window_cloaked(&overlay_win, true);
+        let _ = overlay_win.show();
+        if overlay_win.is_minimized().unwrap_or(false) {
+            let _ = overlay_win.unminimize();
+        }
+        set_window_cloaked(&overlay_win, true);
+        let _ = overlay_win.set_focus();
+        let target_app = crate::paste::get_target_app_name();
+        let opened_payload = OverlayOpenedPayload {
+            token: overlay_gen,
+            target_app,
+            hide_gen: cancel_gen,
+        };
         #[derive(Serialize, Clone, Debug)]
         struct OverlayCancelHidePayload {
             token: u64,
@@ -832,7 +856,7 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
                 hide_gen: cancel_gen,
             },
         );
-        let _ = overlay_win.set_focus();
+        let _ = app_handle.emit("overlay-opened", &opened_payload);
         return;
     }
 
@@ -840,9 +864,7 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
         || phase == OverlayPhase::Showing
         || (is_visible && !OVERLAY_CLOAKED.load(Ordering::SeqCst));
     if overlay_is_open {
-        crate::paste::log_diag("[HOTKEY] Overlay is visible/showing. Cloaking immediately and requesting webview hide (toggle)...");
-        set_window_cloaked(&overlay_win, true);
-        OVERLAY_CLOAKED.store(true, Ordering::SeqCst);
+        crate::paste::log_diag("[HOTKEY] Overlay is visible/showing. Requesting fast hide via webview (toggle)...");
         set_overlay_phase(OverlayPhase::Hiding);
         request_webview_overlay_hide(app_handle);
         return;
@@ -1193,6 +1215,10 @@ fn request_webview_overlay_hide(app: &AppHandle) {
 static HIDING_OVERLAY: AtomicBool = AtomicBool::new(false);
 
 pub fn hide_overlay_window(app: &AppHandle) {
+    if get_overlay_phase() == OverlayPhase::Showing {
+        crate::paste::log_diag("[HIDE_OVERLAY] hide_overlay_window skipped: overlay is showing.");
+        return;
+    }
     OVERLAY_SHOW_GEN.fetch_add(1, Ordering::SeqCst);
     // Prevent re-entrant calls (the Focused(false) event fires when we hide)
     if HIDING_OVERLAY.swap(true, Ordering::SeqCst) {

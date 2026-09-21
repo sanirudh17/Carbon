@@ -459,12 +459,28 @@ html[data-material="solid"].wm-hidden {
   opacity: 1 !important;
 }
 
-/* Quick overlay: instant show/hide with zero animation transition */
-html.win-overlay.wm-hiding,
-html.win-overlay.wm-hidden,
-html.win-overlay #root.wm-fade-target,
-html.win-overlay .overlay-content,
-html.win-overlay .overlay {
+/* Quick overlay: fast 35ms animation on show and hide */
+html.win-overlay:not(.wm-hidden):not(.wm-hiding) {
+  animation: ovFadeIn 35ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes ovFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+html.win-overlay.wm-hiding {
+  opacity: 0 !important;
+  transition: opacity 35ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+html.win-overlay.wm-hidden {
+  opacity: 0 !important;
+}
+
+html.win-overlay.no-anim,
+html.win-overlay.no-anim * {
+  animation: none !important;
   transition: none !important;
 }
 

@@ -252,9 +252,9 @@ test('TAB-NEAT - Async preview media never pops white while decoding', () => {
   assert.ok(css.includes('rgba(10, 10, 12, 0.35)'), 'placeholder must be dark, never white');
 });
 
-test('reveal parity - overlay pops directly at full alpha without fading animation', () => {
-  // The overlay uncloaks directly at full alpha (255) with zero fade ramp
-  // or content animation for snappy, instant reveal.
+test('reveal parity - overlay pops with fast 30ms alpha ramp and clean reveal', () => {
+  // The overlay uncloaks with an ultra-fast 30ms OS alpha ramp for snappy,
+  // instantaneous appearance without sluggish delays.
   const choreo = fs.readFileSync(path.join(SRC_DIR, 'lib', 'choreo.ts'), 'utf8');
   assert.ok(!choreo.includes('armOverlayReveal'), 'no overlay-only reveal helper may exist');
   assert.ok(!choreo.includes('ov-reveal'), 'no reveal class may be armed');
@@ -262,8 +262,8 @@ test('reveal parity - overlay pops directly at full alpha without fading animati
   assert.ok(!css.includes('ov-reveal-in'), 'no reveal keyframes may remain');
   const hotkey = fs.readFileSync(path.join(SRC_TAURI_DIR, 'hotkey.rs'), 'utf8');
   assert.ok(
-    hotkey.includes('set_window_alpha(&win, 255);'),
-    'overlay uncloaks directly at full alpha (255)'
+    hotkey.includes('ramp_window_alpha(win.clone(), 0, 255, 30, expected_token, true);'),
+    'overlay uncloaks with fast 30ms alpha ramp'
   );
   assert.ok(
     hotkey.includes('ramp_window_alpha(win.clone(), 0, 255, 100, expected_token, false);'),
@@ -288,10 +288,10 @@ test('first-paint hardening - background application is verified and retried hid
   assert.ok(hotkey.includes('background retry attempt'), 'prepare_main_surface must retry on failure');
   assert.ok(hotkey.includes('do not touch mid-show') || hotkey.includes('live surface now'), 'retry must skip visible windows');
   assert.ok(hotkey.includes('1..=3'), 'retry must be bounded');
-  // Overlay uncloaks instantly at full alpha (zero fade animation).
+  // Overlay uncloaks with fast 30ms alpha ramp.
   assert.ok(
-    hotkey.includes('set_window_alpha(&win, 255);'),
-    'overlay uncloaks directly at full alpha (255)'
+    hotkey.includes('ramp_window_alpha(win.clone(), 0, 255, 30, expected_token, true);'),
+    'overlay uncloaks with fast 30ms alpha ramp'
   );
 });
 
