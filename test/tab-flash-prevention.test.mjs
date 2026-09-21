@@ -96,12 +96,31 @@ test('Picker Open - frontend fires zero invokes before the paint gate (parity wi
   // would contend IPC + re-render with the 2-rAF paint gate. Rust pushes
   // overlay-data + overlay-snippets with the open, so the first frame already
   // has data — exactly like the main window's 0-invoke open.
-  const showIdx = handler.indexOf("executeWindowShow('overlay'");
-  assert.ok(showIdx !== -1, 'handler must run the paint-gated show');
-  const preShow = handler.slice(0, showIdx);
-  assert.doesNotMatch(preShow, /fetchItems\(\)/, 'no clip fetch may precede the paint gate');
-  assert.doesNotMatch(preShow, /fetchSnippets\(\)/, 'no snippet fetch may precede the paint gate');
-  assert.doesNotMatch(preShow, /get_settings/, 'no settings round-trip may precede the paint gate');
+  // ADDENDUM v35 W2.2: the handler settles through ONE shared show runner
+  // (beginOverlayShow). Healthy path opens immediately with zero invokes;
+  // the stale-cache branch only awaits the in-flight PUSH (clipboard-updated
+  // / overlay-data) bounded by FRESH_WAIT_MS — never a fetch invoke — so no
+  // IPC contends with the gate. Timeout uncloaks with cache (single settle).
+  assert.ok(handler.includes('beginOverlayShow('), 'handler must settle through the single show runner');
+  const gateIdx = handler.indexOf('beginOverlayShow(');
+  const preGate = handler.slice(0, gateIdx);
+  assert.doesNotMatch(preGate, /fetchItems\(\)/, 'no clip fetch may precede the paint gate');
+  assert.doesNotMatch(preGate, /fetchSnippets\(\)/, 'no snippet fetch may precede the paint gate');
+  assert.doesNotMatch(preGate, /get_settings/, 'no settings round-trip may precede the paint gate');
+
+  // The stale branch must defer (not fetch): bounded push-wait only.
+  assert.ok(
+    handler.includes('deferShowForFreshness('),
+    'stale cache must defer to the bounded push-wait, not fetch'
+  );
+  assert.ok(
+    overlayTsx.includes('FRESH_WAIT_MS = 150'),
+    'fresh-wait must be bounded at <=150ms'
+  );
+  assert.ok(
+    overlayTsx.includes('settleFreshWait('),
+    'in-flight pushes must resolve the deferred show (single settle)'
+  );
 
   // The search-reset must not trigger a redundant [search]-effect fetch:
   // overlay-data already delivered the full unfiltered list.

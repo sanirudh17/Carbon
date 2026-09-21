@@ -8,6 +8,11 @@ import { ClipPreview, ClipMetaStrip, getQrCopyLabel, getSpecificTypeLabel, isMar
 import { getActionsForClip, getPasteActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
 import { matchesHotkeyCombo } from '../utils/hotkeys';
 import { setClipDragData, shouldNativeDrag, beginNativeDrag } from '../utils/clipDrag';
+import {
+  ENTRY_UPDATED_EVENT,
+  commitEntryText,
+  applyEntryUpdatedToList,
+} from '../lib/entryEdit';
 import { SnippetsView } from './SnippetsView';
 import {
   SearchIcon,
@@ -192,9 +197,23 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   }, []);
   const [editingContent, setEditingContent] = useState('');
 
+  // ADDENDUM v35 W1: single shared edit-buffer commit path (parity with overlay).
+  // onChange only stages into the buffer; blur / selection-change flushes.
+  const editDirtyRef = useRef<{ id: string; text: string } | null>(null);
+  const commitPendingEdit = useCallback((reason: string) => {
+    const pending = editDirtyRef.current;
+    if (!pending) return Promise.resolve();
+    editDirtyRef.current = null;
+    return commitEntryText(pending.id, pending.text, 'main').catch((e) => {
+      console.error(`[main] commit-if-dirty (${reason}) failed:`, e);
+    });
+  }, []);
+
   // Keep editingContent in sync with selectedItem text_content so the edit pane
-  // never shows empty content when a valid text item is selected
+  // never shows empty content when a valid text item is selected.
+  // W1.3: never clobber an uncommitted buffer — the buffer wins until flush.
   useEffect(() => {
+    if (editDirtyRef.current && selectedItem && editDirtyRef.current.id === selectedItem.id) return;
     setEditingContent(selectedItem?.text_content || '');
   }, [selectedItem?.id, selectedItem?.text_content]);
 
@@ -619,8 +638,19 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     });
     const target = items[selectedIndex];
     if (target && target.id !== selectedItem?.id) {
+      // W1.3: flush any pending edit buffer BEFORE switching selection.
+      const pending = editDirtyRef.current;
+      if (pending && pending.id !== target.id) {
+        const stale = pending;
+        editDirtyRef.current = null;
+        void commitEntryText(stale.id, stale.text, 'main').catch((e) => {
+          console.error('[main] selection-flush commit failed:', e);
+        });
+      }
       setSelectedItem(target);
-      setEditingContent(target.text_content || '');
+      if (!editDirtyRef.current || editDirtyRef.current.id !== target.id) {
+        setEditingContent(target.text_content || '');
+      }
       setRenderMode(true);
     }
     return () => cancelAnimationFrame(raf);
@@ -640,6 +670,29 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       fetchItems();
     });
 
+    // W1.2: every window's preview + list row updates from the shared
+    // entry-updated broadcast (store + DB already committed by the sender).
+    const unlistenEntryUpdated = listen<ClipItem>(ENTRY_UPDATED_EVENT, (e) => {
+      const updated = e.payload;
+      if (!updated || typeof updated !== 'object' || !updated.id) return;
+      setItems((prev) => applyEntryUpdatedToList(prev, updated));
+      setSelectedItem((prev) => {
+        if (!prev || prev.id !== updated.id) return prev;
+        // Don't clobber an uncommitted local buffer; the broadcast echo
+        // reconciles once the buffer flushes.
+        if (editDirtyRef.current && editDirtyRef.current.id === updated.id) return prev;
+        return {
+          ...prev,
+          text_content: updated.text_content ?? prev.text_content,
+          title: updated.title ?? prev.title,
+          updated_at: updated.updated_at ?? prev.updated_at,
+        };
+      });
+      invoke('log_client_event', {
+        event: `[EDIT] window=main re-read id=${updated.id} chars=${(updated.text_content || '').length}`,
+      }).catch(() => {});
+    });
+
     // Refresh clips whenever window gets focus
     let unlistenFocus: (() => void) | undefined;
     getCurrentWindow()
@@ -656,6 +709,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       unlistenUpdated.then((fn) => fn());
       unlistenQueue.then((fn) => fn());
       unlistenCollections.then((fn) => fn());
+      unlistenEntryUpdated.then((fn) => fn());
       unlistenFocus?.();
     };
   }, []);
@@ -696,6 +750,15 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   }, []);
 
   const handleRowClick = useCallback((item: ClipItem, idx: number, e: React.MouseEvent) => {
+    // W1.3: flush pending edit buffer BEFORE switching (commit-if-dirty).
+    const pending = editDirtyRef.current;
+    if (pending && pending.id !== item.id) {
+      const stale = pending;
+      editDirtyRef.current = null;
+      void commitEntryText(stale.id, stale.text, 'main').catch((err) => {
+        console.error('[main] row-click flush commit failed:', err);
+      });
+    }
     if (e.ctrlKey || e.metaKey) {
       setSelectedIds((prev) => {
         const next = new Set(prev);
@@ -827,6 +890,16 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
   const handlePaste = async (item: ClipItem, plainText?: boolean, transform?: string) => {
     try {
+      // W1.4: flush any pending edit first so Enter pastes the edited content.
+      const pending = editDirtyRef.current;
+      if (pending && pending.id === item.id) {
+        editDirtyRef.current = null;
+        try {
+          await commitEntryText(pending.id, pending.text, 'main');
+        } catch (e) {
+          console.error('Failed to flush pending edit before paste:', e);
+        }
+      }
       await invoke('paste_clip', { id: item.id, plainText: plainText ?? false, transform });
     } catch (err) {
       console.error('Failed to paste clip in enlarged window:', err);
@@ -884,27 +957,15 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   };
 
   const handleContentEdit = async (newText: string) => {
+    // W1.2: stage-only — commit happens on blur / selection-change / paste.
     setEditingContent(newText);
     if (selectedItem) {
-      const updatedItem = {
-        ...selectedItem,
-        text_content: newText,
-        title: newText.split('\n')[0].trim() || selectedItem.title,
-      };
-      setSelectedItem(updatedItem);
-      try {
-        await invoke('update_clip_text', { id: selectedItem.id, text: newText });
-        setItems((prev) =>
-          prev.map((i) =>
-            i.id === selectedItem.id
-              ? { ...i, text_content: newText, title: updatedItem.title }
-              : i
-          )
-        );
-      } catch (err) {
-        console.error('Failed to update text content:', err);
-      }
+      editDirtyRef.current = { id: selectedItem.id, text: newText };
     }
+  };
+
+  const handleContentBlurCommit = () => {
+    void commitPendingEdit('blur');
   };
 
   const handleCopyOnly = async (item: ClipItem) => {
@@ -2388,6 +2449,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                     spellCheck={false}
                     value={editingContent}
                     onChange={(e) => handleContentEdit(e.target.value)}
+                    onBlur={handleContentBlurCommit}
                     onKeyDown={(e) => {
                       e.stopPropagation();
                       if (e.key === 'Escape') {

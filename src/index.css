@@ -546,7 +546,13 @@ input, textarea, select, button {
      here used to double-stack to ~0.91 opaque, making the overlay flat dark. */
   background: transparent;
   border: none;
-  box-shadow: var(--glass-highlight), var(--glass-shadow);
+  /* ADDENDUM v35 W3: window roots carry NO perimeter border and NO inset
+     highlight — edge definition comes from the outer shadow + acrylic/base
+     contrast only (W3.1 discrimination: zeroing this inset removes the
+     light rim => CSS source; the DWM side is already suppressed via
+     DWMWA_COLOR_NONE and decorations:false frameless, so no NCCALCSIZE
+     handling is needed). Inner floating surfaces keep their hairlines. */
+  box-shadow: var(--glass-shadow);
   display: flex;
   flex-direction: column;
 }
@@ -1227,7 +1233,9 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   height: 100vh;
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: var(--glass-highlight), var(--glass-shadow);
+  /* ADDENDUM v35 W3: same as .overlay above — no inset highlight on the
+     window root (both materials); shadow + base contrast define the edge. */
+  box-shadow: var(--glass-shadow);
   background: transparent;
   display: flex;
   border: none;
@@ -2882,6 +2890,18 @@ section:last-child {
   padding: 16px 18px;
   overflow: hidden;
   background-clip: padding-box;
+}
+
+/* ADDENDUM v35 W5: LINK-type preview card auto-heights to content instead
+   of a fixed tall empty box. It hugs short URLs (min 96px) and caps long
+   ones at 40% of the pane with internal scroll. */
+.preview-link-card {
+  flex: 0 0 auto;
+  min-height: 96px;
+  max-height: 40%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
 }
 
 /* Rendered rich text (headers, lists, bold — not raw source).

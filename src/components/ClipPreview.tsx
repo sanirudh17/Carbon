@@ -501,6 +501,21 @@ export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ 
   const sanitizedHtml = richPreview.html;
   const sourceTheme = richPreview.theme;
 
+  // ADDENDUM v35 W4 (silent canary, no behavior change): log when a
+  // rich-text entry falls back to plain rendering (e.g. the Gemini one-off
+  // where sanitization yields no HTML). No UI, ticket reference only.
+  useEffect(() => {
+    if (item.content_type === 'rich_text' && !sanitizedHtml) {
+      const msg =
+        `[RICH-FALLBACK] id=${item.id} app=${item.source_app || 'unknown'} ` +
+        `html_bytes=${(item.html_content || '').length} ticket=v35-W4`;
+      try {
+        console.warn(msg);
+      } catch {}
+      invoke('log_client_event', { event: msg }).catch(() => {});
+    }
+  }, [item.id, item.content_type, item.source_app, item.html_content, sanitizedHtml]);
+
   // Sensitive data masking check
   if (item.is_sensitive && !revealed) {
     return (
@@ -650,8 +665,9 @@ export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ 
 
     // Plain text / code / link / email (and raw fallback)
     if (item.content_type === 'link' || item.content_type === 'email') {
+      // W5: auto-height card (min 96px, max 40% pane), not a fixed tall box.
       return (
-        <div className="preview-text plain" style={{ wordBreak: 'break-all' }}>
+        <div className="preview-text plain preview-link-card" style={{ wordBreak: 'break-all' }}>
           {text}
         </div>
       );

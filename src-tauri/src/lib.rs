@@ -366,8 +366,20 @@ fn update_clip_text(
     state: State<'_, AppState>,
     id: String,
     text: String,
+    app_handle: AppHandle,
 ) -> Result<(), String> {
-    state.db.update_entry_text(&id, &text)
+    state.db.update_entry_text(&id, &text)?;
+    crate::hotkey::invalidate_prewarm_cache();
+    // ADDENDUM v35 W1.2: single source of truth — every commit broadcasts
+    // `entry-updated` to ALL windows so overlay and main previews/list rows
+    // update from the same event instead of optimistic per-mount state.
+    if let Ok(Some(updated)) = state.db.get_entry_by_id(&id) {
+        let _ = app_handle.emit("entry-updated", &updated);
+    } else {
+        let _ = app_handle.emit("entry-updated", &serde_json::json!({ "id": id }));
+    }
+    paste::log_diag(&format!("[EDIT] commit id={} bytes={}", id, text.len()));
+    Ok(())
 }
 
 #[tauri::command]
