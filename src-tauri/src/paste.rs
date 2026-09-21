@@ -852,6 +852,7 @@ pub fn restore_target_window() {
         log_diag(&format!("[RESTORE_THREAD] Spawned for HWND 0x{:X}. Sleeping 30ms initial...", hwnd_val));
         thread::sleep(Duration::from_millis(30));
         let target = HWND(hwnd_val as *mut _);
+        let mut succeeded = false;
         for attempt in 1..=8 {
             log_diag(&format!("[RESTORE_THREAD] Attempt {} for HWND: {}", attempt, get_window_diag_info(target)));
             if try_bring_to_foreground(target) {
@@ -860,9 +861,21 @@ pub fn restore_target_window() {
                     attempt,
                     get_window_diag_info(unsafe { GetForegroundWindow() })
                 ));
+                succeeded = true;
                 break;
             }
             thread::sleep(Duration::from_millis(25));
+        }
+        if !succeeded {
+            // ADDENDUM v36 D2: the OS rejected every attempt — log it
+            // explicitly instead of going quiet. Restore still goes ONLY
+            // through this thread (no taskbar flash, no activation flicker:
+            // no FlashWindow anywhere, cloak-first hide).
+            log_diag(&format!(
+                "[RESTORE_THREAD] SetForegroundWindow REJECTED for HWND 0x{:X} after 8 attempts. Current FG: {}",
+                hwnd_val,
+                get_window_diag_info(unsafe { GetForegroundWindow() })
+            ));
         }
     });
 }
@@ -897,6 +910,14 @@ fn try_bring_to_foreground(hwnd: HWND) -> bool {
 
         let top_res = BringWindowToTop(hwnd);
         let set_fg_res = SetForegroundWindow(hwnd);
+        if !set_fg_res.as_bool() {
+            // v36 D2: explicit rejection record (caller retries via the
+            // restore thread; pid-match below may still count success).
+            log_diag(&format!(
+                "[TRY_FG] SetForegroundWindow REJECTED for {}. BringTop: {:?}",
+                hwnd_info, top_res
+            ));
+        }
 
         let fg_after = GetForegroundWindow();
         let is_exact = fg_after == hwnd;

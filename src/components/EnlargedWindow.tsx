@@ -725,6 +725,9 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       window.__carbonDraggingClipIds = ids;
       void beginNativeDrag(e, item).finally(() => {
         setDraggingId(null);
+        // v36 D1: a cancelled native drag (Esc) fires no drop/dragleave —
+        // clear any armed collection highlight so no state lingers.
+        setDropTargetColId(null);
         window.__carbonDraggingClipIds = null;
       });
       return;
@@ -748,6 +751,29 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     setDropTargetColId(null);
     window.__carbonDraggingClipIds = null;
   }, []);
+
+  // ADDENDUM v36 D1: honest cursors at collection drop targets — copy for
+  // supported payloads, no-drop otherwise. Unsupported flavors must never
+  // preventDefault (the browser then shows the native no-drop cursor) and
+  // must never arm the highlight. Fail-open when types are unreadable so a
+  // drop we cannot classify still works.
+  const SUPPORTED_DROP_TYPES = [
+    'carbon/clip-ids',
+    'application/json',
+    'text/plain',
+    'text/html',
+    'text/uri-list',
+    'Files',
+  ];
+  const isSupportedCollectionDrop = (e: React.DragEvent) => {
+    try {
+      const types = Array.from(e.dataTransfer?.types || []) as string[];
+      if (types.length === 0) return true;
+      return types.some((t) => SUPPORTED_DROP_TYPES.includes(t));
+    } catch {
+      return true;
+    }
+  };
 
   const handleRowClick = useCallback((item: ClipItem, idx: number, e: React.MouseEvent) => {
     // W1.3: flush pending edit buffer BEFORE switching (commit-if-dirty).
@@ -1794,10 +1820,18 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
         <div
           className="side-collections-list"
           onDragOver={(e) => {
+            if (!isSupportedCollectionDrop(e)) {
+              e.dataTransfer.dropEffect = 'none';
+              return;
+            }
             e.preventDefault();
             e.dataTransfer.dropEffect = 'copy';
           }}
           onDragEnter={(e) => {
+            if (!isSupportedCollectionDrop(e)) {
+              e.dataTransfer.dropEffect = 'none';
+              return;
+            }
             e.preventDefault();
             e.dataTransfer.dropEffect = 'copy';
           }}
@@ -1829,12 +1863,20 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   });
                 }}
                 onDragEnter={(e) => {
+                  if (!isSupportedCollectionDrop(e)) {
+                    e.dataTransfer.dropEffect = 'none';
+                    return;
+                  }
                   e.preventDefault();
                   e.stopPropagation();
                   e.dataTransfer.dropEffect = 'copy';
                   setDropTargetColId(col.id);
                 }}
                 onDragOver={(e) => {
+                  if (!isSupportedCollectionDrop(e)) {
+                    e.dataTransfer.dropEffect = 'none';
+                    return;
+                  }
                   e.preventDefault();
                   e.stopPropagation();
                   e.dataTransfer.dropEffect = 'copy';
