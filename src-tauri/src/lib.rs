@@ -1156,6 +1156,7 @@ pub fn run() {
                     token: overlay_gen,
                     target_app: None,
                     hide_gen: 0,
+                    store_version: crate::db::store_version(),
                 });
             }
         }))
