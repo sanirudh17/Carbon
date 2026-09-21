@@ -295,12 +295,11 @@ fn uncloak_overlay_if_current(app: &AppHandle, token: Option<u64>) {
             let _ = DwmFlush();
         }
         crate::vibrancy::set_window_border_suppressed(&win);
-        // I2 OS-ALPHA MASKING: Start at alpha 0, uncloak DWM, ramp to 255 over 100ms
-        set_window_alpha(&win, 0);
+        // Instant uncloak at full alpha: zero fade animation for snappy pop up
+        set_window_alpha(&win, 255);
         set_window_cloaked(&win, false);
         crate::vibrancy::set_window_border_suppressed(&win);
-        ramp_window_alpha(win.clone(), 0, 255, 100, expected_token, true);
-        crate::paste::log_diag("[SHOW_OVERLAY] uncloaked after forced present with OS-alpha ramp (0->255 over 100ms)");
+        crate::paste::log_diag("[SHOW_OVERLAY] uncloaked instantly at full alpha (zero fade animation)");
     }
 }
 
@@ -841,7 +840,9 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
         || phase == OverlayPhase::Showing
         || (is_visible && !OVERLAY_CLOAKED.load(Ordering::SeqCst));
     if overlay_is_open {
-        crate::paste::log_diag("[HOTKEY] Overlay is visible/showing. Requesting choreographed fade-hide via webview (toggle)...");
+        crate::paste::log_diag("[HOTKEY] Overlay is visible/showing. Cloaking immediately and requesting webview hide (toggle)...");
+        set_window_cloaked(&overlay_win, true);
+        OVERLAY_CLOAKED.store(true, Ordering::SeqCst);
         set_overlay_phase(OverlayPhase::Hiding);
         request_webview_overlay_hide(app_handle);
         return;

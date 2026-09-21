@@ -298,6 +298,17 @@ export function executeWindowHide(
     html.classList.remove('wm-hiding');
   };
 
+  // For overlay: instant hide with zero fading animation
+  if (windowName === 'overlay') {
+    invoke('cloak_window', { windowLabel: windowName }).catch(() => {});
+    html.classList.add('no-anim');
+    html.classList.add('wm-hidden');
+    void html.offsetWidth;
+    html.classList.remove('no-anim');
+    finish();
+    return { cancel };
+  }
+
   // Cloak FIRST: the 90ms fade then plays invisibly behind the cloak
   // instead of exposing the bare acrylic slab (close flash). The fade
   // timing and cancel semantics below are unchanged, so re-show races behave

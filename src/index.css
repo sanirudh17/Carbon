@@ -459,6 +459,15 @@ html[data-material="solid"].wm-hidden {
   opacity: 1 !important;
 }
 
+/* Quick overlay: instant show/hide with zero animation transition */
+html.win-overlay.wm-hiding,
+html.win-overlay.wm-hidden,
+html.win-overlay #root.wm-fade-target,
+html.win-overlay .overlay-content,
+html.win-overlay .overlay {
+  transition: none !important;
+}
+
 /* ── I6 INSTANT TEXT/LABEL CHANGES ──
    Footer hints, keys, labels, and counters swap instantly with zero
    opacity or transform transitions. */

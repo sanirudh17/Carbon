@@ -252,10 +252,9 @@ test('TAB-NEAT - Async preview media never pops white while decoding', () => {
   assert.ok(css.includes('rgba(10, 10, 12, 0.35)'), 'placeholder must be dark, never white');
 });
 
-test('reveal parity - overlay pops exactly like the main window (OS ramp only)', () => {
-  // The overlay must not stack its own content fade on top of the OS
-  // ramp: that double motion read as sluggish next to the main window.
-  // Both windows reveal via the 100ms OS-alpha ramp and nothing else.
+test('reveal parity - overlay pops directly at full alpha without fading animation', () => {
+  // The overlay uncloaks directly at full alpha (255) with zero fade ramp
+  // or content animation for snappy, instant reveal.
   const choreo = fs.readFileSync(path.join(SRC_DIR, 'lib', 'choreo.ts'), 'utf8');
   assert.ok(!choreo.includes('armOverlayReveal'), 'no overlay-only reveal helper may exist');
   assert.ok(!choreo.includes('ov-reveal'), 'no reveal class may be armed');
@@ -263,15 +262,15 @@ test('reveal parity - overlay pops exactly like the main window (OS ramp only)',
   assert.ok(!css.includes('ov-reveal-in'), 'no reveal keyframes may remain');
   const hotkey = fs.readFileSync(path.join(SRC_TAURI_DIR, 'hotkey.rs'), 'utf8');
   assert.ok(
-    hotkey.includes('ramp_window_alpha(win.clone(), 0, 255, 100, expected_token, true);'),
-    'overlay ramp must match main at 100ms'
+    hotkey.includes('set_window_alpha(&win, 255);'),
+    'overlay uncloaks directly at full alpha (255)'
   );
   assert.ok(
     hotkey.includes('ramp_window_alpha(win.clone(), 0, 255, 100, expected_token, false);'),
     'main ramp must stay 100ms'
   );
-  // Hide machinery untouched: 90ms hide fades stay.
-  assert.ok(css.includes('opacity 90ms'), 'hide fades must stay at 90ms');
+  // Shared hide fade rule stays for main window.
+  assert.ok(css.includes('opacity 90ms'), 'shared hide fades must stay at 90ms');
 });
 
 test('first-paint hardening - background application is verified and retried hidden-side', () => {
@@ -289,10 +288,10 @@ test('first-paint hardening - background application is verified and retried hid
   assert.ok(hotkey.includes('background retry attempt'), 'prepare_main_surface must retry on failure');
   assert.ok(hotkey.includes('do not touch mid-show') || hotkey.includes('live surface now'), 'retry must skip visible windows');
   assert.ok(hotkey.includes('1..=3'), 'retry must be bounded');
-  // Overlay reveal ramp untouched by this change (parity with main: 100ms).
+  // Overlay uncloaks instantly at full alpha (zero fade animation).
   assert.ok(
-    hotkey.includes('ramp_window_alpha(win.clone(), 0, 255, 100, expected_token, true);'),
-    'overlay ramp must match main at 100ms'
+    hotkey.includes('set_window_alpha(&win, 255);'),
+    'overlay uncloaks directly at full alpha (255)'
   );
 });
 
