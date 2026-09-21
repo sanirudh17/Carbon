@@ -186,7 +186,6 @@ export const QuickOverlay: React.FC = () => {
   tabRef.current = tab;
 
   const [items, setItems] = useState<ClipItem[]>(() => (typeof window !== 'undefined' && window.__carbonInitialData) || []);
-  const [initialLoaded, setInitialLoaded] = useState(() => Boolean(typeof window !== 'undefined' && window.__carbonInitialData && window.__carbonInitialData.length > 0));
   const [pasteQueue, setPasteQueue] = useState<ClipItem[]>([]);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [collections, setCollections] = useState<Collection[]>([]);
@@ -228,7 +227,6 @@ export const QuickOverlay: React.FC = () => {
 
   // ── Snippets tab state ────────────────────────────────────────────
   const [snSnippets, setSnSnippets] = useState<Snippet[]>(() => (typeof window !== 'undefined' && window.__carbonInitialSnippets) || []);
-  const [snInitialLoaded, setSnInitialLoaded] = useState(() => Boolean(typeof window !== 'undefined' && window.__carbonInitialSnippets));
   const [snSearch, setSnSearch] = useState('');
   const [snTagFilter, setSnTagFilter] = useState('__all__');
   const [snSelectedId, setSnSelectedId] = useState<string | null>(null);
@@ -293,11 +291,9 @@ export const QuickOverlay: React.FC = () => {
         collectionId: null,
       });
       setItems(res || []);
-      setInitialLoaded(true);
       setSelectedIndex(0);
     } catch (err) {
       console.error('Failed to fetch clips:', err);
-      setInitialLoaded(true);
     }
   };
 
@@ -344,8 +340,6 @@ export const QuickOverlay: React.FC = () => {
       }
     } catch (err) {
       console.error('Failed to fetch snippets:', err);
-    } finally {
-      setSnInitialLoaded(true);
     }
   };
 
@@ -823,11 +817,12 @@ export const QuickOverlay: React.FC = () => {
 
     loadTargetApp();
     focusSearchInput();
+    fetchItems();
+    fetchSnippets();
 
     window.__carbonSetData = (data: ClipItem[]) => {
       if (Array.isArray(data)) {
         setItems(data);
-        setInitialLoaded(true);
         setSelectedIndex(0);
       }
     };
@@ -835,7 +830,6 @@ export const QuickOverlay: React.FC = () => {
     window.__carbonSetSnippets = (data: Snippet[]) => {
       if (Array.isArray(data)) {
         setSnSnippets(data);
-        setSnInitialLoaded(true);
         setSnSelectedId((prev) => {
           if (data.length === 0) return null;
           return prev && data.some((s) => s.id === prev) ? prev : data[0].id;
@@ -879,7 +873,6 @@ export const QuickOverlay: React.FC = () => {
     const unlistenData = safeListen<ClipItem[]>('overlay-data', (e) => {
       if (Array.isArray(e.payload)) {
         setItems(e.payload);
-        setInitialLoaded(true);
         setSelectedIndex(0);
       }
     });
@@ -891,7 +884,6 @@ export const QuickOverlay: React.FC = () => {
       if (Array.isArray(e.payload)) {
         const list = e.payload;
         setSnSnippets(list);
-        setSnInitialLoaded(true);
         setSnSelectedId((prev) => {
           if (list.length === 0) return null;
           return prev && list.some((s) => s.id === prev) ? prev : list[0].id;
@@ -1818,28 +1810,17 @@ export const QuickOverlay: React.FC = () => {
         <div className="overlay-body">
           <div className={`overlay-list ${tab === 'snippets' ? 'inactive-tab' : ''}`}>
             {displayItems.length === 0 ? (
-              initialLoaded ? (
-                <div className="empty">
-                  <div className="big">No entries found</div>
-                  <div className="sub">Nothing matched your current filter and search query</div>
-                  {hotkeyStatus?.enlarged && (
-                    <div className="sugg" style={{ marginTop: 8 }}>
-                      <span onClick={() => invoke('toggle_enlarged')} style={{ cursor: 'pointer', textDecoration: 'underline' }}>
-                        Open full history ({hotkeyStatus.enlarged})
-                      </span>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="ov-loading" aria-label="Loading clips">
-                  <div className="sk" />
-                  <div className="sk" />
-                  <div className="sk" />
-                  <div className="sk" />
-                  <div className="sk" />
-                  <div className="sk" />
-                </div>
-              )
+              <div className="empty">
+                <div className="big">No entries found</div>
+                <div className="sub">Nothing matched your current filter and search query</div>
+                {hotkeyStatus?.enlarged && (
+                  <div className="sugg" style={{ marginTop: 8 }}>
+                    <span onClick={() => invoke('toggle_enlarged')} style={{ cursor: 'pointer', textDecoration: 'underline' }}>
+                      Open full history ({hotkeyStatus.enlarged})
+                    </span>
+                  </div>
+                )}
+              </div>
             ) : (
               (() => {
                 const groups = groupItemsByDate(displayItems);
@@ -1875,19 +1856,10 @@ export const QuickOverlay: React.FC = () => {
           {/* Snippets list (always mounted; hidden when the Clips tab is active) */}
           <div className={`overlay-list sn-overlay-list ${tab === 'clips' ? 'inactive-tab' : ''}`}>
             {snSnippets.length === 0 ? (
-              snInitialLoaded ? (
-                <div className="empty">
-                  <div className="big">No snippets yet</div>
-                  <div className="sub">Create snippets from the full window, then recall them here.</div>
-                </div>
-              ) : (
-                <div className="ov-loading" aria-label="Loading snippets">
-                  <div className="sk" />
-                  <div className="sk" />
-                  <div className="sk" />
-                  <div className="sk" />
-                </div>
-              )
+              <div className="empty">
+                <div className="big">No snippets yet</div>
+                <div className="sub">Create snippets from the full window, then recall them here.</div>
+              </div>
             ) : snFiltered.length === 0 ? (
               <div className="empty">
                 <div className="big">No snippets found</div>

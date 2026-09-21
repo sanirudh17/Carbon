@@ -167,10 +167,17 @@ pub fn set_window_alpha(window: &tauri::WebviewWindow, alpha: u8) {
         unsafe {
             let native = HWND(hwnd.0 as *mut _);
             let ex = GetWindowLongW(native, GWL_EXSTYLE);
-            if (ex & (WS_EX_LAYERED.0 as i32)) == 0 {
-                let _ = SetWindowLongW(native, GWL_EXSTYLE, ex | (WS_EX_LAYERED.0 as i32));
+            if alpha == 255 {
+                if (ex & (WS_EX_LAYERED.0 as i32)) != 0 {
+                    let _ = SetWindowLongW(native, GWL_EXSTYLE, ex & !(WS_EX_LAYERED.0 as i32));
+                }
+                crate::vibrancy::set_window_border_suppressed(window);
+            } else {
+                if (ex & (WS_EX_LAYERED.0 as i32)) == 0 {
+                    let _ = SetWindowLongW(native, GWL_EXSTYLE, ex | (WS_EX_LAYERED.0 as i32));
+                }
+                let _ = SetLayeredWindowAttributes(native, COLORREF(0), alpha, LWA_ALPHA);
             }
-            let _ = SetLayeredWindowAttributes(native, COLORREF(0), alpha, LWA_ALPHA);
         }
     }
 }
@@ -1062,6 +1069,7 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
         set_window_cloaked(&main_win, true);
         let _ = main_win.unminimize();
         let show_res = main_win.show();
+        crate::vibrancy::set_window_border_suppressed(&main_win);
         // Re-assert cloak immediately after show/unminimize: Win32 ShowWindow /
         // SetWindowPos can clear DWMWA_CLOAK on visibility transitions.
         set_window_cloaked(&main_win, true);
@@ -1084,6 +1092,7 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
         set_window_cloaked(&main_win, true);
         let _ = main_win.unminimize();
         let show_res = main_win.show();
+        crate::vibrancy::set_window_border_suppressed(&main_win);
         // Re-assert cloak immediately after show/unminimize: Win32 ShowWindow /
         // SetWindowPos can clear DWMWA_CLOAK on visibility transitions.
         set_window_cloaked(&main_win, true);

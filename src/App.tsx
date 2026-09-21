@@ -392,8 +392,8 @@ export function App() {
       // is intentionally hidden here so "Check for latest updates" only
       // updates the Settings row, never the top popup.
       return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--app-window-bg, transparent)' }}>
-          <div style={{ flex: 1, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--app-window-bg, transparent)', border: 'none', outline: 'none' }}>
+          <div style={{ flex: 1, overflow: 'hidden', border: 'none', outline: 'none' }}>
             <Settings
               onBack={() => setActiveTab('enlarged')}
               onThemeToggle={toggleTheme}
@@ -404,9 +404,9 @@ export function App() {
       );
     }
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--app-window-bg, transparent)' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--app-window-bg, transparent)', border: 'none', outline: 'none' }}>
         {bannerEl}
-        <div style={{ flex: 1, overflow: 'hidden' }}>
+        <div style={{ flex: 1, overflow: 'hidden', border: 'none', outline: 'none' }}>
           <EnlargedWindow onOpenSettings={() => setActiveTab('settings')} />
         </div>
       </div>
