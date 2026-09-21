@@ -317,16 +317,10 @@ export const QuickOverlay: React.FC = () => {
   // Live mirror of the cached list for open-path staleness checks (the
   // once-registered event handlers below close over first-render state).
   const itemsRef = useRef<ClipItem[]>([]);
-  // ADDENDUM v35 W2: last capture stamp + deferred-show wait state.
-  // clipboard-updated stamps every capture (push, even while hidden); the
-  // overlay-opened path compares it against the cached list and, when the
-  // newest capture is missing, awaits the in-flight push (<=150ms) before
-  // uncloaking instead of painting stale and popping in late.
-  const lastCaptureRef = useRef<{ id: string | null; at: number } | null>(null);
-  const awaitingFreshRef = useRef<{ id: string; token?: number } | null>(null);
-  const freshTimerRef = useRef<number | null>(null);
-  const justRefreshedRef = useRef(false);
-  const FRESH_WAIT_MS = 150;
+  // v37: post-reveal freshness backstop (single 150ms idle timer, cancelled
+  // on hide). The reveal itself carries zero invokes — Rust pushed
+  // overlay-data + overlay-snippets with the open — exactly like main.
+  const backstopRef = useRef<number | null>(null);
   itemsRef.current = items;
 
   useEffect(() => {
@@ -761,6 +755,12 @@ export const QuickOverlay: React.FC = () => {
     // Already fading out: keep current exit
     if (pendingHideRef.current) return;
 
+    // v37: a pending freshness backstop must never fire over a closed window.
+    if (backstopRef.current !== null) {
+      window.clearTimeout(backstopRef.current);
+      backstopRef.current = null;
+    }
+
     overlayPhaseRef.current = 'hiding';
     setTargetApp(null);
     pendingHideRef.current = executeWindowHide('overlay', () => {
@@ -770,31 +770,31 @@ export const QuickOverlay: React.FC = () => {
     });
   };
 
-  // ── ADDENDUM v35 W2: push-first freshness + show-gate settle ──
-  // Single-settle show runner: exactly one executeWindowShow per open.
-  // The deferred path (stale cache) and the immediate path share it, so a
-  // resolved wait can never double-flash.
+  // ── v37: instant reveal, zero invokes (mirror of the main open) ──
+  // Rust pushed overlay-data + overlay-snippets WITH the open, so the first
+  // frame already has data. The reveal does focus + phase flip only; list
+  // and snippet freshness rides the live push subscriptions while hidden,
+  // plus ONE idle backstop (cold start, or a capture that landed mid-gate).
   const afterRevealFresh = () => {
     overlayPhaseRef.current = 'shown';
     focusSearchInput();
-    // Post-reveal refresh, deferred off the paint gate: Rust already
-    // pushed overlay-data + overlay-snippets with the open, so the first
-    // frame paints instantly with zero invoke round-trips — matching the
-    // main window's 0-invoke open. Refresh here only when the pre-show
-    // wait did NOT just settle fresh data (cold-start empty cache still
-    // refreshes even after a timeout).
-    if (!justRefreshedRef.current || itemsRef.current.length === 0) {
-      fetchItems();
+    if (backstopRef.current !== null) {
+      window.clearTimeout(backstopRef.current);
+      backstopRef.current = null;
     }
-    justRefreshedRef.current = false;
-    fetchSnippets();
-    // Re-sync live settings (snippets flags) without touching the
-    // tab — the overlay reopens on the last-used tab.
-    invoke<AppSettings>('get_settings')
-      .then((s) => {
-        if (s) applyOverlaySettings(s);
-      })
-      .catch(() => {});
+    if (itemsRef.current.length === 0) {
+      // Cold start (cache was None): fill immediately, still off the gate.
+      fetchItems();
+      fetchSnippets();
+      return;
+    }
+    const epoch = showEpochRef.current;
+    backstopRef.current = window.setTimeout(() => {
+      backstopRef.current = null;
+      if (epoch !== showEpochRef.current || overlayPhaseRef.current !== 'shown') return;
+      fetchItems();
+      fetchSnippets();
+    }, 150);
   };
 
   const beginOverlayShow = (token?: number) => {
@@ -807,38 +807,6 @@ export const QuickOverlay: React.FC = () => {
       afterRevealFresh();
     }, 0, token);
     lastHideAtRef.current = performance.now();
-  };
-
-  // Resolve a deferred show when the awaited capture lands via push.
-  const settleFreshWait = (arrivedId: string | null, via: string) => {
-    const waiting = awaitingFreshRef.current;
-    if (!waiting) return;
-    if (arrivedId && arrivedId !== waiting.id) return;
-    if (freshTimerRef.current !== null) {
-      window.clearTimeout(freshTimerRef.current);
-      freshTimerRef.current = null;
-    }
-    awaitingFreshRef.current = null;
-    justRefreshedRef.current = true;
-    logClient(`overlay-opened fresh-wait resolved via ${via} id=${waiting.id}`);
-    beginOverlayShow(waiting.token);
-  };
-
-  const deferShowForFreshness = (id: string, token?: number) => {
-    if (freshTimerRef.current !== null) window.clearTimeout(freshTimerRef.current);
-    awaitingFreshRef.current = { id, token };
-    logClient(`overlay-opened deferred: newest capture id=${id} missing from cache, awaiting push <=${FRESH_WAIT_MS}ms`);
-    freshTimerRef.current = window.setTimeout(() => {
-      freshTimerRef.current = null;
-      const waiting = awaitingFreshRef.current;
-      awaitingFreshRef.current = null;
-      if (waiting) {
-        // Timeout: uncloak with cache; the row inserts on arrival via the
-        // clipboard-updated push (single settle, no double flash).
-        logClient('overlay-opened fresh-wait timeout: uncloaking with cache');
-        beginOverlayShow(waiting.token);
-      }
-    }, FRESH_WAIT_MS);
   };
 
   useEffect(() => {
@@ -884,14 +852,13 @@ export const QuickOverlay: React.FC = () => {
         return () => {};
       });
 
-    // W2.1 push, don't poll: every capture inserts at the top immediately,
+    // Push, don't poll: every capture inserts at the top immediately,
     // even while hidden (same subscription the main window uses). Bumps and
     // merges of existing ids move the fresh copy to the top instead of
     // being ignored, so order never diverges from main.
     const unlistenUpdated = safeListen<ClipItem | null>('clipboard-updated', (e) => {
       const item = e.payload;
       if (item && typeof item === 'object' && item.id) {
-        lastCaptureRef.current = { id: item.id, at: Date.now() };
         if (searchRef.current.trim()) {
           fetchLatest();
         } else {
@@ -904,11 +871,8 @@ export const QuickOverlay: React.FC = () => {
           });
           setSelectedIndex(0);
         }
-        settleFreshWait(item.id, 'clipboard-updated');
       } else {
-        lastCaptureRef.current = { id: null, at: Date.now() };
         fetchLatest();
-        settleFreshWait(null, 'clipboard-updated-unit');
       }
     });
 
@@ -917,11 +881,6 @@ export const QuickOverlay: React.FC = () => {
         setItems(e.payload);
         setInitialLoaded(true);
         setSelectedIndex(0);
-        // W2.2: the open-time push may itself carry the awaited capture.
-        const waiting = awaitingFreshRef.current;
-        if (waiting && e.payload.some((i) => i.id === waiting.id)) {
-          settleFreshWait(waiting.id, 'overlay-data');
-        }
       }
     });
 
@@ -963,35 +922,10 @@ export const QuickOverlay: React.FC = () => {
         setTargetApp(appName);
       }
 
-      // W2.2 belt-and-braces: if the last capture (by id + timestamp) is
-      // newer than the overlay's cached newest entry, await the in-flight
-      // push (<=150ms) before uncloaking. Healthy path: zero invokes, zero
-      // added latency — the gate opens immediately as before.
-      const lastCap = lastCaptureRef.current;
-      const cached = itemsRef.current;
-      const stale = !!lastCap?.id && !cached.some((i) => i.id === lastCap.id);
-      if (stale && lastCap?.id) {
-        setPasteNotice(null);
-        if (pasteNoticeTimerRef.current) {
-          window.clearTimeout(pasteNoticeTimerRef.current);
-          pasteNoticeTimerRef.current = null;
-        }
-        if (searchRef.current.trim() !== '') {
-          skipSearchFetchRef.current = true;
-        }
-        setSearch('');
-        setActionPanelOpen(false);
-        setActionIndex(0);
-        setSnSearch('');
-        setSnActionOpen(false);
-        setSnActionIndex(0);
-        if (appName === undefined) {
-          loadTargetApp();
-        }
-        deferShowForFreshness(lastCap.id, token);
-        return;
-      }
-
+      // v37: the gate opens IMMEDIATELY on every open — no pre-gate wait,
+      // no pre-gate fetch, exactly like the main window. Freshness rides
+      // the live push subscriptions (applied even while hidden) plus the
+      // single idle backstop after reveal.
       beginOverlayShow(token);
 
       setPasteNotice(null);
@@ -1132,11 +1066,10 @@ export const QuickOverlay: React.FC = () => {
 
     return () => {
       delete window.__carbonSetData;
-      if (freshTimerRef.current !== null) {
-        window.clearTimeout(freshTimerRef.current);
-        freshTimerRef.current = null;
+      if (backstopRef.current !== null) {
+        window.clearTimeout(backstopRef.current);
+        backstopRef.current = null;
       }
-      awaitingFreshRef.current = null;
       unlistenUpdated.then((fn) => fn());
       unlistenData.then((fn) => fn());
       unlistenSnData.then((fn) => fn());

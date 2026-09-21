@@ -108,13 +108,13 @@ test('ADDENDUM v21 - Static Check: Zero show-time transform animation and Solid 
     'solid mode wm-hidden must have transition: none !important'
   );
 
-  // Verify #content does NOT scale on wm-hidden
-  const contentHiddenIdx = css.indexOf('html.wm-hidden #content');
-  assert.ok(contentHiddenIdx !== -1, 'content wm-hidden rule exists');
-  const contentHiddenBlock = css.slice(contentHiddenIdx, css.indexOf('}', contentHiddenIdx));
-  assert.ok(
-    !contentHiddenBlock.includes('transform: scale(0.985)'),
-    'content wm-hidden must NOT scale down on show-ready hidden state'
+  // v37: the content layer carries NO show/hide states at all — the shared
+  // html mask owns visibility on both windows (plain fade, exactly
+  // mirrored). Any per-content wm-hidden/scale rule is a regression.
+  assert.doesNotMatch(
+    css,
+    /html\.wm-hidden #content|html\.wm-hiding #content|html\.wm-hiding \.overlay-content/,
+    'content must have no hidden/hiding rules (shared html mask only)'
   );
 
   // Verify base #content has no base transition

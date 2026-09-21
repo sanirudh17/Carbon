@@ -96,30 +96,25 @@ test('Picker Open - frontend fires zero invokes before the paint gate (parity wi
   // would contend IPC + re-render with the 2-rAF paint gate. Rust pushes
   // overlay-data + overlay-snippets with the open, so the first frame already
   // has data — exactly like the main window's 0-invoke open.
-  // ADDENDUM v35 W2.2: the handler settles through ONE shared show runner
-  // (beginOverlayShow). Healthy path opens immediately with zero invokes;
-  // the stale-cache branch only awaits the in-flight PUSH (clipboard-updated
-  // / overlay-data) bounded by FRESH_WAIT_MS — never a fetch invoke — so no
-  // IPC contends with the gate. Timeout uncloaks with cache (single settle).
+  // v37: the gate opens IMMEDIATELY on every open (no pre-gate wait at all);
+  // the reveal carries zero invokes (focus + phase only); freshness rides
+  // the live pushes plus ONE idle backstop. No IPC contends with the gate.
   assert.ok(handler.includes('beginOverlayShow('), 'handler must settle through the single show runner');
   const gateIdx = handler.indexOf('beginOverlayShow(');
   const preGate = handler.slice(0, gateIdx);
   assert.doesNotMatch(preGate, /fetchItems\(\)/, 'no clip fetch may precede the paint gate');
   assert.doesNotMatch(preGate, /fetchSnippets\(\)/, 'no snippet fetch may precede the paint gate');
   assert.doesNotMatch(preGate, /get_settings/, 'no settings round-trip may precede the paint gate');
+  assert.doesNotMatch(preGate, /setTimeout/, 'no wait of any kind may precede the paint gate');
 
-  // The stale branch must defer (not fetch): bounded push-wait only.
+  // No deferred-show machinery may remain: the open is never parked.
+  assert.doesNotMatch(overlayTsx, /deferShowForFreshness/, 'no deferred show');
+  assert.doesNotMatch(overlayTsx, /settleFreshWait/, 'no push-wait resolver');
+  assert.doesNotMatch(overlayTsx, /FRESH_WAIT_MS/, 'no fresh-wait bound');
+  // One guarded idle backstop replaces the reveal-time fetches.
   assert.ok(
-    handler.includes('deferShowForFreshness('),
-    'stale cache must defer to the bounded push-wait, not fetch'
-  );
-  assert.ok(
-    overlayTsx.includes('FRESH_WAIT_MS = 150'),
-    'fresh-wait must be bounded at <=150ms'
-  );
-  assert.ok(
-    overlayTsx.includes('settleFreshWait('),
-    'in-flight pushes must resolve the deferred show (single settle)'
+    overlayTsx.includes('backstopRef'),
+    'a single idle backstop must cover post-reveal freshness'
   );
 
   // The search-reset must not trigger a redundant [search]-effect fetch:
@@ -176,34 +171,12 @@ test('Cover Animation - reversible set_overlay_animation command (full | soft)',
 test('Cover Animation - soft mode only trims the hide layer, guards untouched', () => {
   const css = fs.readFileSync(path.join(ROOT_DIR, 'src', 'index.css'), 'utf8');
 
-  // Reversibility: the original full rules must still be present verbatim.
-  assert.ok(
-    css.includes('transform: scale(0.985) !important;'),
-    'full-mode hide zoom must remain for mode "full"'
-  );
-  assert.ok(
-    css.includes('transition: opacity 90ms cubic-bezier(0.16, 1, 0.3, 1),'),
-    'full-mode 90ms hide fade must remain for mode "full"'
-  );
-
-  // Soft mode: opacity-only shorter fade, scoped behind data-anim="soft".
-  const softIdx = css.indexOf('html[data-anim="soft"].wm-hiding #content');
-  assert.ok(softIdx !== -1, 'soft override must exist for the hide content layer');
-  const softBlock = css.slice(softIdx, softIdx + 600);
-  assert.ok(softBlock.includes('transform: none !important;'), 'soft mode must drop the zoom');
-  assert.ok(softBlock.includes('opacity 60ms linear'), 'soft mode must shorten the fade');
-  assert.doesNotMatch(softBlock, /cloak|painted|mask|watchdog/i, 'soft CSS must not touch flash guards');
-
-  // The overlay must always set the attribute (soft fallback), so CSS never
-  // depends on a missing-attribute state.
-  const overlayTsx = fs.readFileSync(
-    path.join(ROOT_DIR, 'src', 'components', 'QuickOverlay.tsx'),
-    'utf8'
-  );
-  assert.ok(
-    overlayTsx.includes('document.documentElement.dataset.anim = anim'),
-    'overlay must apply the animation mode from settings'
-  );
+  // v37: the content-layer zoom is gone in EVERY mode — hide is one plain
+  // html fade, exactly mirrored between picker and library (the zoom is
+  // what made the picker feel slower to close). Both modes resolve to the
+  // same snappy fade; the setting stays reversible and live-applied.
+  assert.doesNotMatch(css, /transform: scale\(0\.985\)/, 'no hide zoom in any mode');
+  assert.ok(css.includes('opacity 90ms'), 'shared 90ms hide fade stays');
 
   // Tab-preview choreography timings are a separate concern — untouched.
   assert.ok(css.includes('--dur-expand: 170ms;'), 'preview expand duration untouched');
