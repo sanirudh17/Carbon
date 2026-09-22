@@ -110,7 +110,9 @@
   --backdrop-dim: rgba(0, 0, 0, 0.30);
 }
 
+body.win-overlay,
 html.win-overlay,
+html.win-overlay body,
 html.win-overlay #root {
   border-radius: 8px;
   overflow: hidden;
@@ -125,19 +127,11 @@ html.win-overlay body {
      both windows now composite from one identical base, so the preview
      panes read as the same color and transparency. */
   background: var(--glass-base);
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.12) !important;
-  box-sizing: border-box;
-  outline: none !important;
 }
 
-[data-theme="light"] body.win-overlay,
-html[data-theme="light"].win-overlay body {
-  border: 1px solid rgba(0, 0, 0, 0.12) !important;
-}
-
+body.win-library,
 html.win-library,
+html.win-library body,
 html.win-library #root {
   border-radius: 8px;
   overflow: hidden;
@@ -150,16 +144,6 @@ html.win-library body {
   --glass-base: rgba(14, 14, 16, 0.72);
   /* Same 8px DWM-arc match as the overlay: the library's top corners
      showed the same mild intrusion with a 14px CSS arc. */
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.12) !important;
-  box-sizing: border-box;
-  outline: none !important;
-}
-
-[data-theme="light"] body.win-library,
-html[data-theme="light"].win-library body {
-  border: 1px solid rgba(0, 0, 0, 0.12) !important;
 }
 
 [data-theme="light"] {
@@ -672,6 +656,24 @@ input, textarea, select, button {
 html[data-material="solid"] .overlay::before,
 html[data-material="solid"] .enlarged::before {
   display: none;
+}
+
+/* Uniform 1px continuous perimeter border seamlessly wrapping overlay and main window corners */
+.overlay::after,
+.enlarged::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 99;
+}
+
+[data-theme="light"] .overlay::after,
+[data-theme="light"] .enlarged::after {
+  border-color: rgba(0, 0, 0, 0.12);
 }
 
 .overlay-body {
@@ -2724,15 +2726,25 @@ section:last-child {
 }
 
 /* Information block: hugs its content (no internal gaps) up to the 175px
-   cap, then scrolls — Source / Type / Dimensions / Size / Copied live
-   here. It stays bottom-anchored because the media above flex-grows to
-   absorb all remaining space. v37: no top hairline (see overlay-bar). */
+   cap — Source / Type / Dimensions / Size / Copied live here.
+   It stays bottom-anchored because the media above flex-grows to
+   absorb all remaining space. v37: no top hairline (see overlay-bar).
+   Scrollbar is suppressed to keep the section constant without scrollbar flicker. */
 .overlay-preview .ov-preview-info {
   flex: 0 0 auto;
   height: auto;
   max-height: var(--info-h);
-  overflow-y: auto;
+  overflow: hidden;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   border-top: none;
+}
+
+.overlay-preview .ov-preview-info::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
 }
 
 /* Permanent-pane empty state: keeps the frame stable when nothing is
@@ -3110,6 +3122,16 @@ section:last-child {
   display: flex;
   flex-direction: column;
   gap: 1px;
+  overflow: hidden;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.meta-strip::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
 }
 
 .meta-row {
@@ -6532,6 +6554,16 @@ html[data-material="solid"] .sn-content-preview {
   gap: 8px;
   padding: 10px 16px 12px;
   border-top: 1px solid var(--line-soft);
+  overflow: hidden;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.sn-overlay-meta::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
 }
 
 .sn-overlay-used {
