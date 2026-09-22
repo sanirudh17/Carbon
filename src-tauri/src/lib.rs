@@ -378,7 +378,12 @@ fn update_clip_text(
     } else {
         let _ = app_handle.emit("entry-updated", &serde_json::json!({ "id": id }));
     }
-    paste::log_diag(&format!("[EDIT] commit id={} bytes={}", id, text.len()));
+    paste::log_diag(&format!(
+        "[EDIT] commit id={} bytes={} store_version={}",
+        id,
+        text.len(),
+        crate::db::store_version()
+    ));
     Ok(())
 }
 
@@ -1151,6 +1156,7 @@ pub fn run() {
                     token: overlay_gen,
                     target_app: None,
                     hide_gen: 0,
+                    store_version: crate::db::store_version(),
                 });
             }
         }))

@@ -18,21 +18,24 @@ export function entryTitleFor(text: string, fallback = ''): string {
   return first || fallback;
 }
 
-/** Shared commit path: invoke + diagnostic log (W1.1). */
+/** Shared commit path: invoke + diagnostic log (W1.1; v36 A3 adds ms). */
 export async function commitEntryText(
   id: string,
   text: string,
   source: EntrySourceWindow
 ): Promise<void> {
   const bytes = new Blob([text]).size;
+  const t0 = performance.now();
   try {
     await invoke('update_clip_text', { id, text });
+    const ms = (performance.now() - t0).toFixed(1);
     invoke('log_client_event', {
-      event: `[EDIT] window=${source} committed id=${id} chars=${text.length} bytes=${bytes}`,
+      event: `[EDIT] source=${source} committed id=${id} chars=${text.length} bytes=${bytes} ms=${ms}`,
     }).catch(() => {});
   } catch (err) {
+    const ms = (performance.now() - t0).toFixed(1);
     invoke('log_client_event', {
-      event: `[EDIT] window=${source} commit FAILED id=${id} err=${err}`,
+      event: `[EDIT] source=${source} commit FAILED id=${id} ms=${ms} err=${err}`,
     }).catch(() => {});
     throw err;
   }

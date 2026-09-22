@@ -292,6 +292,8 @@ export const QuickOverlay: React.FC = () => {
       });
       setItems(res || []);
       setSelectedIndex(0);
+      // v36 A2: a full re-read absorbs every mutation to date.
+      bumpCacheVersion();
     } catch (err) {
       console.error('Failed to fetch clips:', err);
     }
@@ -317,6 +319,18 @@ export const QuickOverlay: React.FC = () => {
   // on hide). The reveal itself carries zero invokes — Rust pushed
   // overlay-data + overlay-snippets with the open — exactly like main.
   const backstopRef = useRef<number | null>(null);
+  // v36 A2/A3: cache version, bumped once per applied store mutation, and
+  // the last store_version seen on the open payload. The open path compares
+  // `store version > cache version`; a stale open falls to the post-reveal
+  // idle backstop (never a pre-gate wait — v37 instant gate stays intact).
+  // May lag the store on coalesced fetches (safe: falls to refresh, never
+  // to stale) and may lead right after a re-read (safe: cache is fresh by
+  // construction).
+  const cacheVersionRef = useRef(0);
+  const bumpCacheVersion = () => {
+    cacheVersionRef.current += 1;
+  };
+  const lastStoreVersionRef = useRef(0);
   itemsRef.current = items;
 
   useEffect(() => {
@@ -768,7 +782,8 @@ export const QuickOverlay: React.FC = () => {
   // Rust pushed overlay-data + overlay-snippets WITH the open, so the first
   // frame already has data. The reveal does focus + phase flip only; list
   // and snippet freshness rides the live push subscriptions while hidden,
-  // plus ONE idle backstop (cold start, or a capture that landed mid-gate).
+  // plus ONE idle backstop when the v36 A2 store version says the cache
+  // is stale (cold start still fills immediately).
   const afterRevealFresh = () => {
     overlayPhaseRef.current = 'shown';
     focusSearchInput();
@@ -782,11 +797,19 @@ export const QuickOverlay: React.FC = () => {
       fetchSnippets();
       return;
     }
+    // v36 A2: single settle — a fresh cache skips the refetch (no double
+    // insert); only a stale cache falls to the one guarded idle backstop.
+    if (!(lastStoreVersionRef.current > cacheVersionRef.current)) return;
     const epoch = showEpochRef.current;
     backstopRef.current = window.setTimeout(() => {
       backstopRef.current = null;
       if (epoch !== showEpochRef.current || overlayPhaseRef.current !== 'shown') return;
-      fetchItems();
+      fetchItems().then(() => {
+        cacheVersionRef.current = Math.max(
+          cacheVersionRef.current,
+          lastStoreVersionRef.current
+        );
+      });
       fetchSnippets();
     }, 150);
   };
@@ -824,6 +847,7 @@ export const QuickOverlay: React.FC = () => {
       if (Array.isArray(data)) {
         setItems(data);
         setSelectedIndex(0);
+        bumpCacheVersion();
       }
     };
 
@@ -849,7 +873,9 @@ export const QuickOverlay: React.FC = () => {
     // Push, don't poll: every capture inserts at the top immediately,
     // even while hidden (same subscription the main window uses). Bumps and
     // merges of existing ids move the fresh copy to the top instead of
-    // being ignored, so order never diverges from main.
+    // being ignored, so order never diverges from main. v36 A2: every
+    // applied push bumps the cache version (one bump per store mutation
+    // observed).
     const unlistenUpdated = safeListen<ClipItem | null>('clipboard-updated', (e) => {
       const item = e.payload;
       if (item && typeof item === 'object' && item.id) {
@@ -864,6 +890,7 @@ export const QuickOverlay: React.FC = () => {
             return [item, ...prev];
           });
           setSelectedIndex(0);
+          bumpCacheVersion();
         }
       } else {
         fetchLatest();
@@ -874,6 +901,7 @@ export const QuickOverlay: React.FC = () => {
       if (Array.isArray(e.payload)) {
         setItems(e.payload);
         setSelectedIndex(0);
+        bumpCacheVersion();
       }
     });
 
@@ -900,6 +928,7 @@ export const QuickOverlay: React.FC = () => {
       token?: number;
       target_app?: string | null;
       hide_gen?: number;
+      store_version?: number;
     } | number>('overlay-opened', (e) => {
       logClient('Received overlay-opened event.');
       const payload = e?.payload;
@@ -909,6 +938,12 @@ export const QuickOverlay: React.FC = () => {
       const appName = typeof payload === 'object' && payload !== null && 'target_app' in payload
         ? payload.target_app
         : undefined;
+      // v36 A2: store version rides the open payload (older Rust emits omit
+      // it → 0 → never stale → immediate show, backward compatible).
+      const storeVersion = typeof payload === 'object' && payload !== null && typeof payload.store_version === 'number'
+        ? payload.store_version
+        : 0;
+      lastStoreVersionRef.current = storeVersion;
 
       if (appName !== undefined) {
         setTargetApp(appName);
@@ -917,9 +952,18 @@ export const QuickOverlay: React.FC = () => {
       // v37: the gate opens IMMEDIATELY on every open — no pre-gate wait,
       // no pre-gate fetch, exactly like the main window. Freshness rides
       // the live push subscriptions (applied even while hidden) plus the
-      // single idle backstop after reveal.
+      // single idle backstop after reveal. v36 A3: every open logs
+      // cache/store versions so staleness is observable, and a fresh
+      // open advances the cache to the store (single settle).
+      const cacheVersion = cacheVersionRef.current;
+      const stale = storeVersion > cacheVersion;
+      logClient(
+        `overlay show cache_version=${cacheVersion} store_version=${storeVersion} stale=${stale} rows=${itemsRef.current.length}`
+      );
+      if (!stale) {
+        cacheVersionRef.current = Math.max(cacheVersion, storeVersion);
+      }
       beginOverlayShow(token);
-
       setPasteNotice(null);
       if (pasteNoticeTimerRef.current) {
         window.clearTimeout(pasteNoticeTimerRef.current);
@@ -1046,10 +1090,13 @@ export const QuickOverlay: React.FC = () => {
 
     // W1.2: every window's preview + list row updates from the shared
     // entry-updated broadcast (store + DB already committed by the sender).
+    // v36 A2: applying it bumps the cache version (edit matrix A1:
+    // overlay->overlay, overlay->main, main->overlay all reflect in place).
     const unlistenEntryUpdated = safeListen<ClipItem>(ENTRY_UPDATED_EVENT, (e) => {
       const updated = e.payload;
       if (!updated || typeof updated !== 'object' || !updated.id) return;
       setItems((prev) => applyEntryUpdatedToList(prev, updated));
+      bumpCacheVersion();
       // W1.1 diagnostic: what this window's preview re-reads on update.
       invoke('log_client_event', {
         event: `[EDIT] window=overlay re-read id=${updated.id} chars=${(updated.text_content || '').length}`,
@@ -2008,6 +2055,15 @@ export const QuickOverlay: React.FC = () => {
                             value={editingContent}
                             onChange={(e) => handleContentEdit(e.target.value)}
                             onBlur={handleContentBlurCommit}
+                            onKeyDown={(e) => {
+                              // v36 A1: save-key commits in place (stays in edit mode).
+                              if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                void commitPendingEdit('save-key');
+                                return;
+                              }
+                            }}
                             placeholder="Edit clip text..."
                           />
                         </div>

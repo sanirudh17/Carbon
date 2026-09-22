@@ -102,6 +102,11 @@ pub struct OverlayOpenedPayload {
     pub token: u64,
     pub target_app: Option<String>,
     pub hide_gen: u64,
+    /// ADDENDUM v36 A2: monotonic store version at open time. The overlay
+    /// compares it against its cache version and refreshes-before-uncloak
+    /// (bounded 50ms) only when the store is newer — no stale rows, no
+    /// blind refetch on every show.
+    pub store_version: u64,
 }
 
 /// Unified overlay split-frame geometry (logical px, Tinycast-adapted): the
@@ -854,6 +859,7 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
             token: overlay_gen,
             target_app,
             hide_gen: cancel_gen,
+            store_version: crate::db::store_version(),
         };
         #[derive(Serialize, Clone, Debug)]
         struct OverlayCancelHidePayload {
@@ -999,6 +1005,7 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
         token: overlay_gen,
         target_app,
         hide_gen: show_hide_gen,
+        store_version: crate::db::store_version(),
     };
     let _ = app_handle.emit("overlay-opened", &opened_payload);
     // Fast path only: emit the cached snapshot if one exists and NEVER query
@@ -1011,21 +1018,11 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
         let _ = app_handle.emit("overlay-data", &cached);
         crate::paste::log_diag("[HOTKEY] overlay-data served (instant)");
     }
-
-    let app_clone = app_handle.clone();
-    std::thread::spawn(move || {
-        if let Some(state) = app_clone.try_state::<crate::AppState>() {
-            // Fresh query — updates cache and pushes latest data (covers
-            // cold-start where cache was still None and post-open updates).
-            if let Ok(entries) = state.db.get_overlay_entries(250) {
-                *OVERLAY_PREWARM_CACHE.lock().unwrap() = Some(entries.clone());
-                let _ = app_clone.emit("overlay-data", &entries);
-            }
-            if let Ok(snips) = state.db.list_snippets() {
-                let _ = app_clone.emit("overlay-snippets", &snips);
-            }
-        }
-    });
+    // v36 B1: no DB refresh on the show path — the pre-serve was refreshed
+    // at the previous HIDE (see hide_overlay_window), mirroring the main
+    // pipeline which does zero DB work before show(). Snippets ride the
+    // prewarm snapshot; staleness is covered by the frontend's bounded
+    // version-gated refresh (A2).
 }
 
 /// Re-asserts the main window's non-white surface immediately before show, on
@@ -1256,6 +1253,19 @@ pub fn hide_overlay_window(app: &AppHandle) {
 
     set_overlay_phase(OverlayPhase::Hidden);
     HIDING_OVERLAY.store(false, Ordering::SeqCst);
+
+    // ADDENDUM v36 B1: pre-serve overlay data at HIDE, not show. The next
+    // show's hotkey path only emits the snapshot (zero DB work, mirroring
+    // the main pipeline); the refresh happens here, off every critical path.
+    let app_clone = app.clone();
+    std::thread::spawn(move || {
+        if let Some(state) = app_clone.try_state::<crate::AppState>() {
+            if let Ok(entries) = state.db.get_overlay_entries(250) {
+                *OVERLAY_PREWARM_CACHE.lock().unwrap() = Some(entries.clone());
+                crate::paste::log_diag("[HOTKEY] overlay pre-serve refreshed at hide");
+            }
+        }
+    });
     crate::paste::log_diag("[HIDE_OVERLAY] Complete.");
 }
 

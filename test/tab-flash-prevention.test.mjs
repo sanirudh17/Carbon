@@ -24,8 +24,12 @@ test('Picker Open - hotkey thread does zero DB work before show (parity with mai
 
   // No synchronous SQLite on the hotkey thread: the main-window show path
   // does zero DB work, and a blocking get_overlay_entries here stalled the
-  // picker open on disk I/O. Cache may be read; the DB must only be touched
-  // from the background refresh thread spawned after the emit.
+  // picker open on disk I/O. Cache may be read; the DB must never be touched
+  // on the show path at all.
+  // ADDENDUM v36 B1: even the background refresh moved off show — the
+  // pre-serve is refreshed at the previous HIDE (hide_overlay_window), so
+  // the show tail is snapshot-emit only. Staleness is covered by the
+  // frontend's bounded version-gated refresh (A2).
   const emitIdx = fnBody.indexOf('emit("overlay-opened"');
   assert.ok(emitIdx !== -1, 'overlay-opened must be emitted on the show path');
   const preEmit = fnBody.slice(0, emitIdx);
@@ -36,8 +40,18 @@ test('Picker Open - hotkey thread does zero DB work before show (parity with mai
     fnBody.includes('OVERLAY_PREWARM_CACHE.lock().unwrap().clone()'),
     'the open must serve the prewarm cache (lock + clone, no I/O)'
   );
-  const spawnIdx = fnBody.indexOf('std::thread::spawn');
-  assert.ok(spawnIdx > emitIdx, 'the fresh DB refresh must run on a background thread post-emit');
+  const showTail = fnBody.slice(emitIdx);
+  assert.doesNotMatch(
+    showTail.replace(/\/\/.*$/gm, ''),
+    /std::thread::spawn/,
+    'v36 B1: no refresh thread on show — pre-serve happens at hide'
+  );
+  const hideFn = hotkeyRs.match(/pub fn hide_overlay_window[\s\S]*?\r?\n\}\r?\n/);
+  assert.ok(hideFn, 'hide_overlay_window found');
+  assert.ok(
+    hideFn[0].includes('get_overlay_entries(250)'),
+    'hide must refresh the pre-serve snapshot for the next show'
+  );
 
   // No per-show DWM corner re-assert: the preference is persistent per-window
   // (applied at prewarm/create) and the main show path doesn't re-assert it.
@@ -98,11 +112,12 @@ test('Picker Open - frontend fires zero invokes before the paint gate (parity wi
   // has data — exactly like the main window's 0-invoke open.
   // v37: the gate opens IMMEDIATELY on every open (no pre-gate wait at all);
   // the reveal carries zero invokes (focus + phase only); freshness rides
-  // the live pushes plus ONE idle backstop. No IPC contends with the gate.
+  // the live pushes plus ONE idle backstop, gated on the v36 A2 store/cache
+  // version comparison (stale → backstop refetch; fresh → single settle,
+  // no double insert).
   assert.ok(handler.includes('beginOverlayShow('), 'handler must settle through the single show runner');
   const gateIdx = handler.indexOf('beginOverlayShow(');
   const preGate = handler.slice(0, gateIdx);
-  assert.doesNotMatch(preGate, /fetchItems\(\)/, 'no clip fetch may precede the paint gate');
   assert.doesNotMatch(preGate, /fetchSnippets\(\)/, 'no snippet fetch may precede the paint gate');
   assert.doesNotMatch(preGate, /get_settings/, 'no settings round-trip may precede the paint gate');
   assert.doesNotMatch(preGate, /setTimeout/, 'no wait of any kind may precede the paint gate');
@@ -111,10 +126,17 @@ test('Picker Open - frontend fires zero invokes before the paint gate (parity wi
   assert.doesNotMatch(overlayTsx, /deferShowForFreshness/, 'no deferred show');
   assert.doesNotMatch(overlayTsx, /settleFreshWait/, 'no push-wait resolver');
   assert.doesNotMatch(overlayTsx, /FRESH_WAIT_MS/, 'no fresh-wait bound');
-  // One guarded idle backstop replaces the reveal-time fetches.
+  assert.doesNotMatch(overlayTsx, /refreshStaleBeforeShow/, 'no pre-gate refresh (v37 instant gate)');
+  assert.doesNotMatch(overlayTsx, /justRefreshedRef/, 'no settle flag (single backstop instead)');
+  // One guarded idle backstop, armed only for a stale cache, replaces the
+  // reveal-time fetches (v36 A2 version gate + v37 zero-invoke reveal).
   assert.ok(
     overlayTsx.includes('backstopRef'),
     'a single idle backstop must cover post-reveal freshness'
+  );
+  assert.ok(
+    overlayTsx.includes('lastStoreVersionRef.current > cacheVersionRef.current'),
+    'backstop must be gated on the store/cache version comparison'
   );
 
   // The search-reset must not trigger a redundant [search]-effect fetch:
