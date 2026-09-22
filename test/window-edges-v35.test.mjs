@@ -5,8 +5,11 @@ import path from 'node:path';
 
 // ADDENDUM v35 W3 — seamless window edges (remove the white rim).
 // Window roots (overlay + main, both materials) carry NO perimeter border
-// and NO inset highlight; edge definition comes from the outer shadow +
-// acrylic/base contrast only. Inner floating surfaces keep their hairlines.
+// (including the ::after hairline), NO inset highlight, and NO OS shadow
+// (Tauri shadow:false — the DWM drop shadow rendered as a wide white margin
+// around the transparent frameless windows). Edge definition comes from the
+// in-CSS dark var(--glass-shadow) + acrylic/base contrast only. Inner
+// floating surfaces keep their hairlines.
 // W5 (same commit): LINK-type preview card auto-heights to content.
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '..');
@@ -24,20 +27,29 @@ function blockFor(src, selectorRe) {
   return src.slice(open, close);
 }
 
-test('W3.2 overlay root: no inset highlight, shadow-only edge', () => {
+test('W3.2 overlay root: no inset highlight, no hairline, CSS shadow edge', () => {
   const css = readCss();
   const body = blockFor(css, /\.overlay,\s*\.overlay-window\s*\{/);
   assert.doesNotMatch(body, /glass-highlight/, 'overlay root must not paint an inset highlight');
-  assert.ok(body.includes('var(--glass-shadow)'), 'overlay edge stays defined by the outer shadow');
+  assert.ok(body.includes('var(--glass-shadow)'), 'overlay edge stays defined by the CSS shadow');
   assert.ok(body.includes('border: none'), 'overlay root must carry no perimeter border');
 });
 
-test('W3.2 main root: no inset highlight, shadow-only edge', () => {
+test('W3.2 main root: no inset highlight, no hairline, CSS shadow edge', () => {
   const css = readCss();
   const body = blockFor(css, /\.enlarged\s*\{/);
   assert.doesNotMatch(body, /glass-highlight/, 'main root must not paint an inset highlight');
-  assert.ok(body.includes('var(--glass-shadow)'), 'main edge stays defined by the outer shadow');
+  assert.ok(body.includes('var(--glass-shadow)'), 'main edge stays defined by the CSS shadow');
   assert.ok(body.includes('border: none'), 'main root must carry no perimeter border');
+});
+
+test('W3.2b overlay ::after pseudo-border must not paint a white hairline', () => {
+  const css = readCss();
+  const m = css.match(/\.overlay::after,\s*\.enlarged::after\s*\{[^}]*\}/);
+  assert.ok(m, 'overlay ::after rule must exist (kept as a no-op)');
+  assert.doesNotMatch(m[0], /border:\s*1px/, 'no 1px perimeter hairline on ::after');
+  assert.ok(m[0].includes('border: none'), '::after must draw no border');
+  assert.doesNotMatch(css, /border-color:\s*rgba\(0,\s*0,\s*0,\s*0\.12\)/, 'no light-theme hairline either');
 });
 
 test('W3.2 inner surfaces keep their hairlines (not flattened)', () => {
@@ -56,7 +68,7 @@ test('W3.3 frameless discipline intact: no NC border can paint', () => {
   );
   for (const win of conf.app.windows.filter((w) => w.label === 'overlay' || w.label === 'main')) {
     assert.equal(win.decorations, false, `${win.label} must stay frameless (no NC border)`);
-    assert.equal(win.shadow, true, `${win.label} must keep its OS shadow`);
+    assert.equal(win.shadow, false, `${win.label} must not draw the OS shadow (white margin)`);
   }
   const vibrancy = fs.readFileSync(
     path.join(ROOT_DIR, 'src-tauri', 'src', 'vibrancy.rs'),

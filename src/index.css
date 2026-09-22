@@ -658,22 +658,17 @@ html[data-material="solid"] .enlarged::before {
   display: none;
 }
 
-/* Uniform 1px continuous perimeter border seamlessly wrapping overlay and main window corners */
+/* No perimeter hairline: window roots and overlay draw no white border */
 .overlay::after,
 .enlarged::after {
   content: "";
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: none;
   box-sizing: border-box;
   pointer-events: none;
   z-index: 99;
-}
-
-[data-theme="light"] .overlay::after,
-[data-theme="light"] .enlarged::after {
-  border-color: rgba(0, 0, 0, 0.12);
 }
 
 .overlay-body {
