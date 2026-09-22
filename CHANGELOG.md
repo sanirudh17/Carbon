@@ -2,6 +2,35 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
+## [0.1.14] — 2026-09-22
+
+### Fixed
+- **Seamless window edges (no white border or margin)** — removed the 1px white perimeter hairline on the quick overlay and main window, and disabled the OS drop shadow on both windows (it rendered as a wide white margin around the transparent frameless surfaces). Edge definition now comes from the in-app dark shadow plus acrylic/base contrast only. DWM border suppression and 8px corner rounding are unchanged.
+- **Snappy overlay open/close** — overlay show/hide no longer plays fading or scaling content animations; open and close are instant, matching the main window. Rapid hotkey spam and click bursts toggle cleanly without lag or dropped taps. The overlay reveals on a fast 30ms OS alpha ramp while the main window keeps its 100ms ramp, both through one shared uncloak path.
+- **Instant overlay refresh with zero stale rows** — the overlay opens immediately with data pushed by Rust alongside the open (no pre-open wait, no IPC on the critical path). Captures insert at the top of the list instantly even while the overlay is hidden; a monotonic store version detects a stale cache and triggers exactly one guarded idle refresh after reveal, never a double insert.
+- **Edit reflection across both windows** — committing an edit (on blur or Ctrl/Cmd+S) from either the quick overlay or the main window updates the row and preview in place in both windows via a shared entry-updated broadcast; the shared commit path logs source window and duration.
+- **Overlay skeleton and painted lines removed** — the loading skeleton animation is gone, the read section and overlay chrome carry no painted hairlines between panes, and shared structural borders (meta strip, pills, controls) are untouched.
+- **Corner-only rim elimination** — locked the four corner suspects (DWM border, controller background, CSS ring, radius mismatch) so a magnified corner crop over dark wallpaper paints no rim: controller default stays fully transparent, window roots carry no inset highlight or perimeter border, and DWM owns the single 8px rounded corners.
+- **Timing parity between windows** — the overlay pre-serves its snapshot at hide time (refreshing the warm cache) so the show path does zero database work, mirroring the main window's pipeline; both windows gate on first present with settle 0, uncloak through the shared ack-gated path, and hide with the same 90ms fade.
+- **Honest drop cursors and clean drag state** — collection drop targets classify payloads and show a no-drop cursor for unsupported ones (without highlighting), and every drop or cancel clears the target highlight so no leftover state remains.
+- **Foreground restore rejections are logged** — restore-the-target-app attempts log SetForegroundWindow rejections and exhaustion after 8 attempts; no path flashes the taskbar.
+- **Info scrollbar hidden** — the preview info block no longer shows a scrollbar.
+
+### Changed
+- The v36 pick-overlay-parity workstream (edit reflection, store version, drop cursors, timing parity) is merged with the v37 instant-gate design: the open path keeps its zero-wait gate, and the store/cache version comparison now gates the single post-reveal backstop instead of a pre-open refresh.
+
+## [0.1.13] — 2026-09-16
+
+### Fixed
+- **Drag and paste stability** — drag payloads are hardened against hostile DataTransfer (the original main drag-and-drop behavior was restored and then guarded: `text/html` stripped from all payloads to stop target-tab crashes, rich-text clips offer plain unformatted text only, unsupported types never starve the rest of the payload). Paste releases its single-shot guard before the deselect tail, deselect is scoped to the paste target and the browser-gated collapse no longer triple-taps, and copy/default-arrow cursors show on drag surfaces with double-tap deselect ignored in chat shells. The overlay stays visible for any in-flight drag including DOM drags.
+- **OS file drag-out** — image and file clips drag out of Carbon to Explorer and other apps via the proven Tauri drag plugin; in-process harness tests lock the payload contract (no clip type ever yields an empty transfer).
+- **Paste confirmation and elevation** — paste waits on a bounded confirmation with send-time proof; when the target needs admin rights, the clip stays on the clipboard with a visible hint instead of failing silently.
+- **Rich-text legibility** — per-node computed-contrast enforcement (AA, 4.5:1 minimum) runs across preview content with a CI contrast matrix; light-on-transparent fragments are darkened by content scan, dark-source captures render on a dark card, and pasted HTML restores with byte-accurate CF_HTML fidelity alongside a plain-text fallback.
+- **Overlay unified frame** — the quick overlay is a fixed 750x475 frame with a permanent preview pane (no Tab toggle), a preview-dominant split with edge-to-edge text, an information block pinned to the bottom that hugs its content, and media using the full pane without stretched voids.
+- **Tab-toggle flash eliminated** — the white flash and non-client border flash on the Tab preview toggle are suppressed, and the preview transition is smooth.
+- **Cold-launch flash hardening** — overlay reveal uses a unified 100ms OS alpha ramp identical to the main window, the frontend fires ready only post-paint, and DWM cloak failures are logged loudly for the cold-chain audit trail.
+- **Drag focus and preview polish** — drag focus guard, dark-card edge blending, prewarm snapshot trim, and instant overlay focus on open.
+
 ## [0.1.12] — 2026-09-12
 
 ### Fixed
