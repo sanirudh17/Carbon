@@ -222,7 +222,7 @@ export function sanitizeRichHtml(html: string): string {
             parent.removeChild(child);
             // Promoted children were not in this Array.from snapshot —
             // clean the parent again after this pass (bounded by tag depth).
-            clean(parent);
+            clean(parent as Element);
           }
           return;
         }
