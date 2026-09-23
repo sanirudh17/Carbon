@@ -706,6 +706,7 @@ fn process_clipboard_change(
                                         Some((last_id.clone(), now, last_type.clone()));
                                     let _ = app_handle.emit("clipboard-updated", &merged_item);
                                     let _ = app_handle.emit("clip-merged", &merged_item);
+                                    crate::hotkey::note_overlay_clip(&merged_item);
                                     let _ = db_state.trim_history(settings.retention_days, settings.max_entries);
                                     handled = true;
                                 }
@@ -729,6 +730,7 @@ fn process_clipboard_change(
                         *LAST_CAPTURED_CLIP.lock().unwrap() =
                             Some((existing_bumped.id.clone(), now, existing_bumped.content_type.clone()));
                         let _ = app_handle.emit("clipboard-updated", &existing_bumped);
+                        crate::hotkey::note_overlay_clip(&existing_bumped);
                         handled = true;
                     }
                 }
@@ -740,6 +742,7 @@ fn process_clipboard_change(
                         *LAST_CAPTURED_CLIP.lock().unwrap() =
                             Some((new_item.id.clone(), now, new_item.content_type.clone()));
                         let _ = app_handle.emit("clipboard-updated", &new_item);
+                        crate::hotkey::note_overlay_clip(&new_item);
                     }
                 }
                 crate::paste::set_selected_text_snapshot(None);

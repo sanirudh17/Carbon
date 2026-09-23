@@ -217,6 +217,19 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     setEditingContent(selectedItem?.text_content || '');
   }, [selectedItem?.id, selectedItem?.text_content]);
 
+  // Second painted stamp after the HEAVY tree commits (parity with
+  // QuickOverlay). App-level initPaintGate can fire on an empty shell —
+  // the show gate then opens before EnlargedWindow has committed, and the
+  // first uncloak composites a blank/late surface on the large main pane.
+  useEffect(() => {
+    let r1 = requestAnimationFrame(() => {
+      r1 = requestAnimationFrame(() => {
+        document.documentElement.dataset.painted = '1';
+      });
+    });
+    return () => cancelAnimationFrame(r1);
+  }, []);
+
   // F2 Cold gate for library preview: stamp data-painted-expanded after first expand commit + double rAF
   useEffect(() => {
     if (!selectedItem) return;

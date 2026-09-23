@@ -71,6 +71,39 @@ pub fn choreo_notify_painted(app_handle: AppHandle, window_label: String, token:
     note_window_painted(&app_handle, &window_label, token);
 }
 
+/// Frontend show-gate bound: if the paint gate never opens (>300ms), the
+/// frontend calls this to force a flash-safe reset instead of leaving a
+/// cloaked-visible window stuck forever (the "main never appears" state).
+#[tauri::command]
+pub fn choreo_show_recovery(app_handle: AppHandle, window_label: String) -> Result<(), String> {
+    match window_label.as_str() {
+        "main" | "enlarged" => {
+            crate::paste::log_diag(
+                "[SHOW_MAIN] show recovery: gate bound exceeded — flash-safe cloak+hide+reset.",
+            );
+            hotkey::invalidate_enlarged_show_gen();
+            if let Some(win) = app_handle.get_webview_window("main") {
+                hotkey::set_window_cloaked(&win, true);
+                hotkey::MAIN_HAS_PAINTED.store(false, std::sync::atomic::Ordering::SeqCst);
+                let _ = win.eval("document.documentElement.classList.add('wm-hidden')");
+                let _ = win.hide();
+            }
+        }
+        "overlay" => {
+            crate::paste::log_diag(
+                "[SHOW_OVERLAY] show recovery: gate bound exceeded — flash-safe hide.",
+            );
+            hotkey::invalidate_overlay_show_gen();
+            // hide_overlay_window skips while phase == Showing (exactly the
+            // stuck state we are recovering from) — drop the phase first.
+            hotkey::set_overlay_phase(hotkey::OverlayPhase::Hidden);
+            hotkey::hide_overlay_window(&app_handle);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     // Unified split frame: the overlay owns a FIXED 750x475 frame. There is

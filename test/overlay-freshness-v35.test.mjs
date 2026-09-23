@@ -66,3 +66,37 @@ test('v37 backstop is cancelled on hide/unmount (never fires over closed UI)', (
   const clears = (src.match(/if \(backstopRef\.current !== null\) \{\r?\n\s*window\.clearTimeout\(backstopRef\.current\);/g) || []).length;
   assert.ok(clears >= 2, `hide + unmount must disarm the backstop (found ${clears})`);
 });
+
+test('SYNC - overlay prewarm cache stays fresh on every capture (no stale open)', () => {
+  const hotkey = fs.readFileSync(path.join(ROOT_DIR, 'src-tauri', 'src', 'hotkey.rs'), 'utf8');
+  assert.ok(
+    hotkey.includes('pub(crate) fn note_overlay_clip'),
+    'note_overlay_clip must upsert into OVERLAY_PREWARM_CACHE'
+  );
+  assert.ok(
+    hotkey.includes('cache.retain(|c| c.id != item.id);'),
+    'note_overlay_clip must dedup by id before insert-at-top'
+  );
+  const watcher = fs.readFileSync(path.join(ROOT_DIR, 'src-tauri', 'src', 'clipboard_watcher.rs'), 'utf8');
+  const noteCalls = (watcher.match(/crate::hotkey::note_overlay_clip\(/g) || []).length;
+  assert.ok(
+    noteCalls >= 3,
+    `all three capture emits (merge/bump/insert) must refresh the prewarm cache (found ${noteCalls})`
+  );
+});
+
+test('SYNC - overlay-data never clobbers fresher live-pushed clips', () => {
+  const src = readOverlay();
+  const handler = src.slice(src.indexOf("safeListen<ClipItem[]>('overlay-data'"));
+  assert.ok(handler.includes('snapshotFresher'), 'overlay-data must gate on snapshot freshness');
+  assert.ok(
+    handler.includes('localHead'),
+    'stale open must keep local head when snapshot misses it'
+  );
+  assert.ok(
+    !/overlay-data[\s\S]{0,400}setItems\(e\.payload\);[\s\S]{0,80}setSelectedIndex\(0\);\s*bumpCacheVersion\(\);/.test(
+      handler.replace(/[\s\S]*snapshotFresher[\s\S]*if \(snapshotFresher\)/, '')
+    ),
+    'unconditional setItems on overlay-data is banned'
+  );
+});

@@ -86,16 +86,20 @@ export function App() {
   // module-level emit fired before React committed, so under the dev
   // server (slow transform waterfall + StrictMode double-mount) the
   // backend prewarmed a blank surface and the first open flashed white.
+  // Carry the window label: Rust presents ONLY the window that reported
+  // ready (pill/overlay finishing first used to arm main's one-shot cycle
+  // before main's tree had painted — first main open flashed white).
   // Module-scoped once-flag survives StrictMode remounts; Rust guards too.
   useEffect(() => {
     if (uiReadySent) return;
     uiReadySent = true;
     let cancelled = false;
+    const label = windowLabel;
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         if (cancelled) return;
         import('@tauri-apps/api/event').then(({ emit }) => {
-          emit('carbon-ui-ready').catch(() => {});
+          emit('carbon-ui-ready', { label }).catch(() => {});
         }).catch(() => {});
       });
     });
@@ -304,11 +308,13 @@ export function App() {
       doHide('hide-requested');
     });
 
-    // If initial mount and window is visible, run paint gate
-    getCurrentWindow()
-      .isVisible()
-      .then((vis) => {
-        if (vis) {
+    // If initial mount and window is genuinely revealed, run paint gate.
+    // isVisible() alone is true after the cloaked first-present prewarm
+    // (WS_VISIBLE while cloaked), which used to fire a tokenless show on
+    // every cold boot; is_main_revealed asks the cloak/paint flags instead.
+    invoke<boolean>('is_main_revealed')
+      .then((revealed) => {
+        if (revealed) {
           cancelShow = executeWindowShow('main', undefined, 150);
         }
       })

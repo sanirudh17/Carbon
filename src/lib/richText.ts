@@ -16,8 +16,15 @@ export function escapeHtml(str: string): string {
 // ── Rich text sanitization ─────────────────────────────────────────────
 // The HTML lives in the user's own clipboard; still strip anything
 // executable or window-escaping so a hostile snippet can't run.
-const BANNED_TAGS = new Set([
+// CONTENT-BEARING tags (button/form/input/select/textarea, …) are UNWRAPPED
+// — their inner text stays in the preview. Only true non-content shells
+// (script/style/iframe/head/…) are removed outright. Removing <button>
+// wholesale is what dropped visible labels (e.g. "Assessment") that the
+// plain-text twin still had.
+const REMOVE_TAGS = new Set([
   'script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'base',
+]);
+const UNWRAP_TAGS = new Set([
   'form', 'input', 'button', 'select', 'textarea', 'svg', 'math', 'head',
 ]);
 const BANNED_PROTOCOLS = ['javascript:', 'vbscript:'];
@@ -202,9 +209,22 @@ export function sanitizeRichHtml(html: string): string {
     const clean = (node: Element) => {
       for (const child of Array.from(node.children)) {
         const tag = child.tagName.toLowerCase();
-        if (BANNED_TAGS.has(tag) || tag === 'head') {
+        if (REMOVE_TAGS.has(tag)) {
           child.remove();
           continue;
+        }
+        // Unwrap interactive/form shells (and <head>): keep the children
+        // (text) in place so visible labels aren't dropped with the tag.
+        if (UNWRAP_TAGS.has(tag)) {
+          const parent = child.parentNode;
+          if (parent) {
+            while (child.firstChild) parent.insertBefore(child.firstChild, child);
+            parent.removeChild(child);
+            // Promoted children were not in this Array.from snapshot —
+            // clean the parent again after this pass (bounded by tag depth).
+            clean(parent);
+          }
+          return;
         }
         if (tag === 'img') {
           const src = child.getAttribute('src')?.trim() || '';

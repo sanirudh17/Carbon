@@ -498,7 +498,22 @@ export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ 
         : { html: '', theme: 'light' as const, overrides: 0 },
     [item.html_content]
   );
-  const sanitizedHtml = richPreview.html;
+  // StartFragment/EndFragment or an over-aggressive strip can drop real
+  // body text the plain twin still has. If the rendered HTML yields
+  // substantially less text than item.text_content, recover by dropping
+  // HTML for this preview (raw mode still shows the full plain twin).
+  const richLostText = useMemo(() => {
+    if (!item.html_content || !richPreview.html || !item.text_content) return false;
+    const htmlText = richPreview.html
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&[a-z#0-9]+;/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const plain = item.text_content.replace(/\s+/g, ' ').trim();
+    if (plain.length < 48) return false;
+    return plain.length - htmlText.length > 48 && htmlText.length < plain.length * 0.85;
+  }, [item.html_content, richPreview.html, item.text_content]);
+  const sanitizedHtml = richLostText ? '' : richPreview.html;
   const sourceTheme = richPreview.theme;
 
   // ADDENDUM v35 W4 (silent canary, no behavior change): log when a
@@ -625,7 +640,7 @@ export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ 
                     background: '#14161a',
                     padding: '14px 16px',
                     margin: '-10px -12px',
-                    overflow: 'hidden',
+                    overflow: 'visible',
                   }
                 : {
                     background: '#ffffff',
@@ -633,7 +648,7 @@ export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ 
                     padding: '14px 16px',
                     borderRadius: '8px',
                     border: '1px solid #e5e7eb',
-                    overflow: 'hidden',
+                    overflow: 'visible',
                     backgroundClip: 'padding-box',
                   }
             }

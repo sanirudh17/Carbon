@@ -899,9 +899,20 @@ export const QuickOverlay: React.FC = () => {
 
     const unlistenData = safeListen<ClipItem[]>('overlay-data', (e) => {
       if (Array.isArray(e.payload)) {
-        setItems(e.payload);
-        setSelectedIndex(0);
-        bumpCacheVersion();
+        // A prewarm snapshot must never clobber clips already applied via
+        // live clipboard-updated pushes while hidden (stale open → visible
+        // repopulate). Apply when cold, when the snapshot contains our
+        // current head (equal/fresher), or when it has strictly more rows.
+        // Otherwise keep the live list — it is newer than the snapshot.
+        const local = itemsRef.current;
+        const localHead = local[0]?.id;
+        const snapshotHasLocalHead = Boolean(localHead) && e.payload.some((p) => p.id === localHead);
+        const snapshotFresher = local.length === 0 || snapshotHasLocalHead || e.payload.length > local.length;
+        if (snapshotFresher) {
+          setItems(e.payload);
+          setSelectedIndex(0);
+          bumpCacheVersion();
+        }
       }
     });
 

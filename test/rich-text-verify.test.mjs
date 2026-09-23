@@ -70,12 +70,39 @@ test('RichText VERIFY - sanitizer keeps author fidelity (incl. white-on-black)',
   for (const tag of ['script', 'iframe', 'object', 'embed']) {
     assert.ok(tsx.includes(`'${tag}'`), `sanitizer must ban <${tag}>`);
   }
-  // Structure tags must NOT be banned — pre/code/tables are the fidelity.
-  const bannedMatch = tsx.match(/const BANNED_TAGS = new Set\(\[([\s\S]*?)\]\)/);
-  assert.ok(bannedMatch, 'BANNED_TAGS set found');
-  for (const tag of ['pre', 'code', 'table', 'span', 'div']) {
-    assert.doesNotMatch(bannedMatch[1], new RegExp(`'${tag}'`), `<${tag}> must survive sanitizing`);
+  // Structure tags must NOT be removed — pre/code/tables are the fidelity.
+  const removeMatch = tsx.match(/const REMOVE_TAGS = new Set\(\[([\s\S]*?)\]\)/);
+  assert.ok(removeMatch, 'REMOVE_TAGS set found');
+  for (const tag of ['pre', 'code', 'table', 'span', 'div', 'button', 'form']) {
+    assert.doesNotMatch(removeMatch[1], new RegExp(`'${tag}'`), `<${tag}> must not be hard-removed`);
   }
+  // Interactive/form shells are UNWRAPPED (text kept), not deleted —
+  // removing <button> wholesale dropped visible labels the plain twin had.
+  const unwrapMatch = tsx.match(/const UNWRAP_TAGS = new Set\(\[([\s\S]*?)\]\)/);
+  assert.ok(unwrapMatch, 'UNWRAP_TAGS set found');
+  for (const tag of ['button', 'form', 'input', 'select', 'textarea']) {
+    assert.ok(unwrapMatch[1].includes(`'${tag}'`), `<${tag}> must be unwrapped (text preserved)`);
+  }
+  assert.ok(tsx.includes('parent.insertBefore'), 'unwrap must promote children in place');
+  assert.ok(tsx.includes('clean(parent)'), 'promoted children must be re-sanitized');
+});
+
+test('RichText VERIFY - preview card never clips (overflow visible both themes)', () => {
+  const preview = fs.readFileSync(path.join(SRC_DIR, 'components', 'ClipPreview.tsx'), 'utf8');
+  assert.ok(
+    preview.includes("overflow: 'visible'"),
+    'white card must use overflow: visible'
+  );
+  assert.ok(
+    preview.includes('richLostText'),
+    'render must fall back to plain twin when HTML loses text vs text_content'
+  );
+  const css = fs.readFileSync(path.join(SRC_DIR, 'index.css'), 'utf8');
+  assert.ok(/\.rich-doc\s*\{[^}]*overflow-wrap:\s*anywhere/s.test(css), '.rich-doc must wrap long words');
+  assert.ok(
+    /\.preview-render\s*\{[^}]*overflow-wrap:\s*anywhere/s.test(css),
+    '.preview-render must wrap long words'
+  );
 });
 
 test('RichText VERIFY - paste restores formatting (CF_HTML + text fallback)', () => {

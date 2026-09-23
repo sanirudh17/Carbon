@@ -286,7 +286,13 @@ test('first-paint hardening - background application is verified and retried hid
   );
   const hotkey = fs.readFileSync(path.join(SRC_TAURI_DIR, 'hotkey.rs'), 'utf8');
   assert.ok(hotkey.includes('background retry attempt'), 'prepare_main_surface must retry on failure');
-  assert.ok(hotkey.includes('do not touch mid-show') || hotkey.includes('live surface now'), 'retry must skip visible windows');
+  // v38: the visible-window bail-out was the bug — a window that came up
+  // with Chromium's white default stuck could never recover. The retry must
+  // apply to live surfaces too (both setters are hidden-side attributes).
+  assert.ok(
+    hotkey.includes('No is_visible() bail-out') && !hotkey.includes('live surface now'),
+    'retry must apply even when the window is already visible (white-default recovery)'
+  );
   assert.ok(hotkey.includes('1..=3'), 'retry must be bounded');
   // Overlay uncloaks with fast 30ms alpha ramp.
   assert.ok(
@@ -299,7 +305,11 @@ test('ui-ready fires post-paint, never at module evaluation', () => {
   const main = fs.readFileSync(path.join(SRC_DIR, 'main.tsx'), 'utf8');
   assert.ok(!main.includes('carbon-ui-ready'), 'main.tsx must not emit readiness at module scope');
   const app = fs.readFileSync(path.join(SRC_DIR, 'App.tsx'), 'utf8');
-  assert.ok(app.includes("emit('carbon-ui-ready')"), 'App must emit readiness');
+  assert.ok(app.includes("emit('carbon-ui-ready'"), 'App must emit readiness');
+  assert.ok(
+    /emit\('carbon-ui-ready',\s*\{\s*label\s*\}/.test(app),
+    'readiness must carry the window label (per-window first present)'
+  );
   assert.ok(app.includes('requestAnimationFrame'), 'readiness must wait for paint frames');
   assert.ok(app.includes('uiReadySent'), 'readiness must be once-guarded for StrictMode');
 });

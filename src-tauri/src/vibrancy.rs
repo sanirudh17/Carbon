@@ -292,6 +292,39 @@ pub fn set_window_default_background(
     }
 }
 
+/// Applies the material-aware default background AND the transparent
+/// controller background with bounded synchronous retries, preserving the
+/// canonical order (material default first, transparent second).
+/// The WebView2 controller often isn't ready on the first attempt (cold boot:
+/// prewarm runs milliseconds after window creation; reopen-after-idle: the OS
+/// may have torn the controller down) — the COM cast then fails silently and
+/// Chromium's white default sticks, so the first present composites white.
+/// Callers on background threads can afford generous budgets; the
+/// hotkey-thread pre-show path uses a tight inline budget instead
+/// (see prepare_main_surface) so a warm open never waits.
+pub fn ensure_transparent_surface(
+    window: &WebviewWindow,
+    material: WindowMaterial,
+    theme: &str,
+    attempts: u32,
+    sleep_ms: u64,
+) -> bool {
+    let budget = attempts.max(1);
+    for attempt in 0..budget {
+        let mut ok = true;
+        ok = set_window_default_background(window, material, theme) && ok;
+        ok = crate::webview_bg::set_webview_transparent_background(window.as_ref()) && ok;
+        if ok {
+            return true;
+        }
+        if attempt + 1 < budget {
+            std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+        }
+    }
+    crate::paste::log_diag("[VIBRANCY] transparent surface NOT applied after retries — white-default risk remains.");
+    false
+}
+
 /// The creation callback has a Webview rather than a WebviewWindow. It uses
 /// the same controller API; setup replaces this safe transparent default with
 /// Solid's opaque theme match before any warm hidden window is shown.
@@ -328,52 +361,203 @@ pub fn set_webview_default_background<W: tauri::Runtime>(
 }
 
 /// Force each hidden window's WebView2 to present its first frame while the
-/// user can't see it. A cloaked window is excluded from DWM composition, so
+/// user can't see it. A DWM-cloaked window is excluded from composition, so
 /// the cloak-gated prewarm alone never produces a genuine first present —
-/// the first uncloaked present then comes out white (the "first hotkey press
-/// flashes" bug, ported from final-visual-polish). The windows are parked
-/// off-screen and shown WITHOUT activation (SW_SHOWNOACTIVATE) so real
-/// composition happens, then hidden and restored — nothing visible on screen.
-/// Callers must re-cloak afterwards: show/hide cycles can clear the DWM cloak
-/// flag on some drivers.
-pub fn prewarm_first_paint(app: &AppHandle) {
+/// the first uncloaked show then composites a cold (white) surface.
+///
+/// CRITICAL: the skip condition must be the LOGICAL reveal flag, not
+/// `is_visible()`. `prewarm_windows` leaves both windows WS_VISIBLE-but-
+/// cloaked (ShowWindow while DWM-cloaked so WebView2 connects its swapchain);
+/// bailing on `is_visible()` therefore skipped this cycle on every boot and
+/// the first real show flashed white. Only a window the user can actually
+/// see (logically uncloaked, or mid-reveal) must be left alone.
+///
+/// Per-window genuine first present. `only` limits the cycle to one label
+/// so main's heavy tree presents only after MAIN reports ready (not when
+/// pill/overlay finish first — that once-flag inversion left main cold).
+static PRESENTED_MAIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static PRESENTED_OVERLAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Serializes boot present vs show-path rewarm so two threads never park the
+/// same HWND at once. `try_lock` on the show path: if boot is mid-cycle, skip
+/// (that cycle is already warming the surface).
+static PRESENT_CYCLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Park off-screen, physically uncloak, show-without-activate, settle for a
+/// real DWM present, hide, restore, re-cloak. Logical flags stay cloaked.
+/// Shared by boot prewarm and the main show-path idle rewarm.
+fn offscreen_present_cycle(win: &tauri::WebviewWindow, label: &str, settle_ms: u64) {
     #[cfg(target_os = "windows")]
     {
+        use std::sync::atomic::Ordering;
         use std::time::Duration;
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOWNOACTIVATE};
+        let Ok(hwnd) = win.hwnd() else {
+            return;
+        };
+        let orig = win.outer_position().ok();
+        let h_raw: isize = hwnd.0 as isize;
+        let h = HWND(h_raw as *mut _);
+        // Park FIRST while still cloaked: an uncloak at the real on-screen
+        // position could composite one frame before the move lands.
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+            };
+            let _ = SetWindowPos(
+                h,
+                HWND(std::ptr::null_mut()),
+                -32000,
+                -32000,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+        // Physically uncloak while parked: DWM excludes cloaked windows
+        // from composition, so without this the show below still never
+        // produces a real present. Raw DWMWA_CLOAK only — logical flags
+        // stay `cloaked` so hotkey visibility never lies mid-prewarm.
+        unsafe {
+            use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+            let open: i32 = 0;
+            let _ = DwmSetWindowAttribute(
+                h,
+                DWMWA_CLOAK,
+                &open as *const _ as *const std::ffi::c_void,
+                std::mem::size_of::<i32>() as u32,
+            );
+        }
+        unsafe {
+            let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
+        }
+        std::thread::sleep(Duration::from_millis(settle_ms));
+        // Best-effort compose flush before we hide again.
+        unsafe {
+            use windows::Win32::Graphics::Dwm::DwmFlush;
+            let _ = DwmFlush();
+        }
+        unsafe {
+            let _ = ShowWindow(h, SW_HIDE);
+        }
+        if let Some(p) = orig {
+            unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+                };
+                let _ = SetWindowPos(
+                    h,
+                    HWND(std::ptr::null_mut()),
+                    p.x,
+                    p.y,
+                    0,
+                    0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+        }
+        // Physical re-cloak while hidden (logical flags were never
+        // changed). Show/hide cycles can also clear DWMWA_CLOAK on some
+        // drivers — belt-and-braces through the normal path too.
+        crate::hotkey::set_window_cloaked(win, true);
+        let _ = label;
+        let _ = Ordering::SeqCst;
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = (win, label, settle_ms);
+}
+
+pub fn prewarm_first_paint(app: &AppHandle, only: Option<&str>) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::sync::atomic::Ordering;
+        use std::sync::MutexGuard;
         for label in ["main", "overlay"] {
+            if let Some(want) = only {
+                if want != label {
+                    continue;
+                }
+            }
+            let presented = if label == "main" {
+                &PRESENTED_MAIN
+            } else {
+                &PRESENTED_OVERLAY
+            };
             let Some(win) = app.get_webview_window(label) else {
                 continue;
             };
-            if win.is_visible().unwrap_or(false) {
-                continue;
-            }
-            let Ok(hwnd) = win.hwnd() else {
-                continue;
+            // Skip only if the user is actually looking at this window.
+            // WS_VISIBLE alone is the normal post-prewarm state and MUST
+            // NOT skip — that surface still has no genuine DWM present.
+            let revealed = if label == "overlay" {
+                !crate::hotkey::OVERLAY_CLOAKED.load(Ordering::SeqCst)
+                    || matches!(
+                        crate::hotkey::get_overlay_phase(),
+                        crate::hotkey::OverlayPhase::Showing
+                            | crate::hotkey::OverlayPhase::Shown
+                    )
+            } else {
+                !crate::hotkey::MAIN_CLOAKED.load(Ordering::SeqCst)
             };
-            let orig = win.outer_position().ok();
-            let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                x: -32000,
-                y: -32000,
-            }));
-            let h_raw: isize = hwnd.0 as isize;
-            let h = HWND(h_raw as *mut _);
-            unsafe {
-                let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
+            if revealed {
+                continue;
             }
-            std::thread::sleep(Duration::from_millis(80));
-            unsafe {
-                let _ = ShowWindow(h, SW_HIDE);
+            // Once per label: a second caller (late ready + fallback timer)
+            // must not re-run the park/show/hide cycle over a live show.
+            if presented.swap(true, Ordering::SeqCst) {
+                continue;
             }
-            if let Some(p) = orig {
-                let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                    x: p.x,
-                    y: p.y,
-                }));
+            // Main: re-assert the non-white controller immediately before
+            // the genuine present — a cold COM cast can still be racing
+            // prewarm's one-shot setters, and that white default would be
+            // baked into the only first frame the user ever sees.
+            if label == "main" {
+                crate::hotkey::prepare_main_surface(app, &win);
             }
+            let _guard: MutexGuard<'_, ()> = PRESENT_CYCLE.lock().unwrap_or_else(|e| e.into_inner());
+            // Main's EnlargedWindow tree is heavy — give it time to reach a
+            // real first present; the overlay frame is much smaller.
+            let settle = if label == "main" { 200 } else { 80 };
+            offscreen_present_cycle(&win, label, settle);
         }
     }
     #[cfg(not(target_os = "windows"))]
-    let _ = app;
+    let _ = (app, only);
+}
+
+/// Show-path idle rewarm (main only). The OS can discard a hidden window's
+/// DirectComposition surface after idle; `prepare_main_surface` re-asserts
+/// controller *colors* but never re-presents, so the next uncloak still
+/// composites a cold frame (the residual white flash). Run the same
+/// park→present→re-cloak cycle while still logically cloaked, before show.
+/// Warm re-present is one-to-two frames; first-ever open waits longer for a
+/// real present. `try_lock`: if the boot cycle is mid-flight, skip (it is
+/// already warming this surface).
+pub fn rewarm_main_surface(app: &AppHandle) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use std::sync::atomic::Ordering;
+        if !crate::hotkey::MAIN_CLOAKED.load(Ordering::SeqCst) {
+            return false;
+        }
+        let Some(win) = app.get_webview_window("main") else {
+            return false;
+        };
+        let Ok(_guard) = PRESENT_CYCLE.try_lock() else {
+            return false;
+        };
+        let already = PRESENTED_MAIN.load(Ordering::SeqCst);
+        let settle = if already { 32 } else { 120 };
+        crate::paste::log_diag(&format!(
+            "[MAIN_SURFACE] rewarm off-screen present (presented={}, settle={}ms)",
+            already, settle
+        ));
+        offscreen_present_cycle(&win, "main", settle);
+        true
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        false
+    }
 }

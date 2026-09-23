@@ -221,6 +221,10 @@ fn queue_paste_next(
         if window.label() == "overlay" {
             hotkey::hide_overlay_window(&app_handle);
         } else {
+            // Flash-safe hide: cloak first and reset the logical flags so
+            // is_main_visible() can't claim a hidden window is open.
+            hotkey::set_window_cloaked(&window, true);
+            hotkey::MAIN_HAS_PAINTED.store(false, std::sync::atomic::Ordering::SeqCst);
             window.hide().ok();
         }
 
@@ -325,6 +329,10 @@ fn paste_clip(
         if window.label() == "overlay" {
             hotkey::hide_overlay_window(&app_handle);
         } else {
+            // Flash-safe hide: cloak first and reset the logical flags so
+            // is_main_visible() can't claim a hidden window is open.
+            hotkey::set_window_cloaked(&window, true);
+            hotkey::MAIN_HAS_PAINTED.store(false, std::sync::atomic::Ordering::SeqCst);
             let hide_res = window.hide();
             paste::log_diag(&format!("[PASTE_CLIP] main win.hide() returned {:?}", hide_res));
         }
@@ -735,12 +743,16 @@ fn enlarged_hide_ack(gen: u64) {
 #[tauri::command]
 fn hide_enlarged(window: WebviewWindow) -> Result<(), String> {
     crate::paste::log_diag("[HIDE_MAIN] hide_enlarged invoked (webview fade done)");
-    hotkey::invalidate_enlarged_show_gen();
-    let _ = window.eval("document.documentElement.classList.add('wm-hidden')");
-    paste::restore_target_window();
-    // Windows stay warm: always hide, never close (instant next open).
-    window.hide().map_err(|e| e.to_string())?;
-    Ok(())
+    // Route through the choreography helper: the old raw hide left
+    // MAIN_CLOAKED at false and MAIN_HAS_PAINTED at true, so
+    // is_main_visible() claimed a hidden window was open and the next
+    // press could take the hide branch of an already-hidden window.
+    crate::choreo::hide_enlarged(&window.app_handle())
+}
+
+#[tauri::command]
+fn is_main_revealed() -> bool {
+    hotkey::is_main_visible()
 }
 
 #[tauri::command]
@@ -1082,6 +1094,10 @@ fn paste_snippet_text(
     if window.label() == "overlay" {
         hotkey::hide_overlay_window(&app_handle);
     } else {
+        // Flash-safe hide: cloak first and reset the logical flags so
+        // is_main_visible() can't claim a hidden window is open.
+        hotkey::set_window_cloaked(&window, true);
+        hotkey::MAIN_HAS_PAINTED.store(false, std::sync::atomic::Ordering::SeqCst);
         let hide_res = window.hide();
         paste::log_diag(&format!(
             "[PASTE_SNIPPET] window.hide() returned {:?}",
@@ -1259,26 +1275,99 @@ pub fn run() {
             // Genuine first-present prewarm (ported from final-visual-polish):
             // cloaked windows are excluded from DWM composition, so the cloak
             // prewarm alone never presents a real first frame — the first
-            // uncloaked show then flashes white. Once the UI reports mounted,
-            // present each hidden window once off-screen (uncloaked) and
-            // re-cloak, so every later show composites a warm surface.
+            // uncloaked show then flashes white. Once THE WINDOW's UI reports
+            // mounted, present that hidden window once off-screen (uncloaked)
+            // and re-cloak, so every later show composites a warm surface.
+            //
+            // Per-label + serialized: the old once-flag fired on ANY webview's
+            // ready (often pill/overlay, which paint first) and raced the
+            // prewarm thread. Main's ShowWindow block could land AFTER its one
+            // present (invalidating it) and main's heavier tree hadn't painted
+            // yet — first main open still flashed white. Overlay is fine because
+            // its prewarm block runs before its present in both orderings.
             {
+                use std::sync::atomic::{AtomicBool, Ordering};
                 let handle = app_handle.clone();
-                app.listen("carbon-ui-ready", move |_| {
-                    static DONE: std::sync::atomic::AtomicBool =
-                        std::sync::atomic::AtomicBool::new(false);
-                    if DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                let prewarm_done = Arc::new(AtomicBool::new(false));
+                {
+                    let handle = handle.clone();
+                    let done = prewarm_done.clone();
+                    std::thread::spawn(move || {
+                        hotkey::prewarm_windows(&handle);
+                        done.store(true, Ordering::SeqCst);
+                    });
+                }
+
+                app.listen("carbon-ui-ready", {
+                    let handle = handle.clone();
+                    let prewarm_done = prewarm_done.clone();
+                    move |event| {
+                    // Only main/overlay need the off-screen present cycle.
+                    // pill/argprompt readiness must not arm it.
+                    let raw = event.payload();
+                    let label: String = serde_json::from_str::<serde_json::Value>(raw)
+                        .ok()
+                        .and_then(|v| {
+                            v.get("label")
+                                .and_then(|l| l.as_str())
+                                .map(|s| s.to_string())
+                        })
+                        .unwrap_or_default();
+                    if label != "main" && label != "overlay" {
                         return;
                     }
                     let handle = handle.clone();
+                    let prewarm_done = prewarm_done.clone();
                     std::thread::spawn(move || {
-                        // Small buffer so the first layout/paint has settled.
+                        // Wait for prewarm_windows' ShowWindow block so this
+                        // present is not immediately invalidated (bounded ~5s).
+                        for _ in 0..250u32 {
+                            if prewarm_done.load(Ordering::SeqCst) {
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(20));
+                        }
+                        // Small buffer so THIS window's first layout/paint has settled.
                         std::thread::sleep(std::time::Duration::from_millis(100));
-                        vibrancy::prewarm_first_paint(&handle);
-                        hotkey::recloak_window(&handle, "overlay");
-                        hotkey::recloak_window(&handle, "main");
+                        vibrancy::prewarm_first_paint(&handle, Some(label.as_str()));
+                        // Only re-cloak if still hidden. After the cloaked
+                        // first-present prewarm a window is natively visible
+                        // (WS_VISIBLE, cloaked), and if the user already opened
+                        // it, recloak_window would re-hide a LIVE uncloaked
+                        // window — the app would vanish after opening.
+                        if let Some(w) = handle.get_webview_window(&label) {
+                            if !w.is_visible().unwrap_or(false) {
+                                hotkey::recloak_window(&handle, &label);
+                            }
+                        }
                     });
+                    }
                 });
+
+                // Fallback: a webview that never navigates / never emits ready
+                // must still get its first present (bounded), or the first open
+                // is the old white flash. Runs after prewarm is done.
+                {
+                    let handle = handle.clone();
+                    let prewarm_done = prewarm_done.clone();
+                    std::thread::spawn(move || {
+                        for _ in 0..300u32 {
+                            if prewarm_done.load(Ordering::SeqCst) {
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(20));
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(4000));
+                        for label in ["main", "overlay"] {
+                            vibrancy::prewarm_first_paint(&handle, Some(label));
+                            if let Some(w) = handle.get_webview_window(label) {
+                                if !w.is_visible().unwrap_or(false) {
+                                    hotkey::recloak_window(&handle, label);
+                                }
+                            }
+                        }
+                    });
+                }
             }
 
             // Build Tray Icon
@@ -1421,6 +1510,7 @@ pub fn run() {
             enlarged_hide_ack,
             enlarged_painted,
             hide_enlarged,
+            is_main_revealed,
             toggle_overlay,
             toggle_enlarged,
             toggle_pause_capture,
@@ -1456,6 +1546,7 @@ pub fn run() {
             log_client_event,
             choreo::choreo_hide_overlay,
             choreo::choreo_hide_enlarged,
+            choreo::choreo_show_recovery,
             choreo::choreo_notify_painted
         ])
         .run(tauri::generate_context!())

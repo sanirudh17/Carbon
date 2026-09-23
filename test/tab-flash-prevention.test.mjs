@@ -241,8 +241,14 @@ test('Main First-Open Flash: every show re-asserts the non-white surface pre-clo
   for (const m of showBody.matchAll(/prepare_main_surface\(app_handle, &main_win\)/g)) {
     const tail = showBody.slice(m.index);
     const showIdx = tail.indexOf('main_win.show()');
-    assert.ok(showIdx !== -1 && showIdx < 800, 'surface prep must precede show() in its branch');
+    assert.ok(showIdx !== -1 && showIdx < 1200, 'surface prep must precede show() in its branch');
+    // Idle discard: the off-screen re-present must also land in this branch,
+    // after the color re-assert and before the show (color alone never presents).
+    const rewarmIdx = tail.indexOf('rewarm_main_surface(app_handle)');
+    assert.ok(rewarmIdx !== -1 && rewarmIdx < showIdx, 'surface rewarm must precede show() in its branch');
   }
+  const rewarmCalls = (showBody.match(/rewarm_main_surface\(app_handle\)/g) || []).length;
+  assert.equal(rewarmCalls, 2, 'both main show branches must rewarm the surface');
 });
 
 test('Main First-Open Flash: second-launch path matches the hotkey pre-show discipline', () => {
@@ -260,6 +266,161 @@ test('Main First-Open Flash: second-launch path matches the hotkey pre-show disc
   assert.ok(
     branch.includes("classList.add('wm-hidden')"),
     'second-launch main show must arm the mask until the paint gate lifts'
+  );
+});
+
+test('Main Flash: visible lifetime never toggles WS_EX_LAYERED (glass rebuild = white frame)', () => {
+  const hotkeyRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'hotkey.rs'), 'utf8');
+
+  // Removing WS_EX_LAYERED rebuilds the DWM acrylic composition surface — a
+  // white frame in glass mode. The reveal ramp must therefore END layered,
+  // and the ONLY removal site must be the cloaked steady-state restore.
+  const removals = hotkeyRs.match(/ex & !\(WS_EX_LAYERED/g) || [];
+  assert.equal(removals.length, 1, 'exactly one layered-removal site may exist (the cloaked restore helper)');
+  assert.ok(hotkeyRs.includes('fn clear_window_layered'), 'layered restore helper must exist');
+
+  // The restore must run on the cloak path, guarded on success: a failed
+  // cloak may leave the window visible, where stripping would rebuild right
+  // on screen.
+  const cloakMatch = hotkeyRs.match(/pub fn set_window_cloaked\(window[\s\S]*?\r?\n\}\r?\n/);
+  assert.ok(cloakMatch, 'set_window_cloaked (windows) found');
+  assert.ok(
+    cloakMatch[0].includes('clear_window_layered(window)'),
+    'cloaking must restore the non-layered steady state'
+  );
+  assert.ok(
+    cloakMatch[0].includes('cloaked && cloak_ok'),
+    'the restore must be guarded on cloak success'
+  );
+});
+
+test('Main Flash: transparent surface retries bound the cold-controller race', () => {
+  const vibrancyRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'vibrancy.rs'), 'utf8');
+  const helperMatch = vibrancyRs.match(/pub fn ensure_transparent_surface[\s\S]*?\r?\n\}\r?\n/);
+  assert.ok(helperMatch, 'ensure_transparent_surface helper found');
+  const helper = helperMatch[0];
+  const defaultIdx = helper.indexOf('set_window_default_background');
+  const transparentIdx = helper.indexOf('set_webview_transparent_background');
+  assert.ok(defaultIdx !== -1 && transparentIdx !== -1, 'helper must set both backgrounds');
+  assert.ok(defaultIdx < transparentIdx, 'material-aware default must come first');
+  assert.ok(helper.includes('attempts') && helper.includes('sleep'), 'helper must retry on a bounded budget');
+
+  // Prewarm runs milliseconds after window creation (controller rarely
+  // ready): both windows must retry hidden-side instead of failing silently
+  // and leaving Chromium's white default stuck for the first present.
+  const hotkeyRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'hotkey.rs'), 'utf8');
+  const prewarmCalls = hotkeyRs.match(/ensure_transparent_surface\(&/g) || [];
+  assert.equal(prewarmCalls.length, 2, 'prewarm must retry the surface for overlay + main');
+
+  // The pre-show path cannot wait on a background thread (reveal would
+  // already have happened): the retry must be synchronous and bounded.
+  const prepMatch = hotkeyRs.match(/fn prepare_main_surface[\s\S]*?\r?\n\}\r?\n/);
+  assert.ok(prepMatch, 'prepare_main_surface helper found');
+  assert.ok(prepMatch[0].includes('for _ in 0..'), 'pre-show surface prep must retry synchronously');
+  assert.ok(prepMatch[0].includes('from_millis(50)'), 'pre-show retry budget must stay tight (warm opens never wait)');
+});
+
+test('Main Flash: prewarm_first_paint runs the genuine first present', () => {
+  const vibrancyRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'vibrancy.rs'), 'utf8');
+  // Cycle lives in offscreen_present_cycle (shared by boot prewarm + show rewarm);
+  // prewarm_first_paint still owns the reveal flags, once-per-label gate, and
+  // prepare_main_surface. Assert BOTH.
+  const cycleMatch = vibrancyRs.match(/fn offscreen_present_cycle[\s\S]*?\r?\n\}\r?\n/);
+  assert.ok(cycleMatch, 'offscreen_present_cycle function found');
+  const body = cycleMatch[0];
+  const prewarmMatch = vibrancyRs.match(/pub fn prewarm_first_paint[\s\S]*?\r?\n\}\r?\n/);
+  assert.ok(prewarmMatch, 'prewarm_first_paint function found');
+  const prewarm = prewarmMatch[0];
+
+  // prewarm_windows leaves both windows WS_VISIBLE-but-DWM-cloaked. The old
+  // is_visible() bail therefore skipped this cycle on every boot — the first
+  // uncloaked show composited a cold white surface. The skip must be the
+  // LOGICAL reveal flag (OVERLAY_CLOAKED / MAIN_CLOAKED), never is_visible().
+  assert.doesNotMatch(prewarm, /is_visible\(\)/, 'no is_visible() bail-out (it skipped every boot)');
+  assert.ok(prewarm.includes('OVERLAY_CLOAKED'), 'overlay skip must use the logical reveal flag');
+  assert.ok(prewarm.includes('MAIN_CLOAKED'), 'main skip must use the logical reveal flag');
+
+  // Per-window gate: only the label that reported ready presents, and the
+  // cycle is once-per-label (PRESENTED_*). Main must re-assert the
+  // non-white controller immediately before its genuine present.
+  assert.ok(prewarm.includes('only: Option<&str>'), 'cycle must accept a single-label filter');
+  assert.ok(
+    prewarm.includes('PRESENTED_MAIN') && prewarm.includes('PRESENTED_OVERLAY'),
+    'once-per-label flags'
+  );
+  assert.ok(
+    prewarm.includes('prepare_main_surface(app, &win)'),
+    'main must re-assert the non-white surface before the present'
+  );
+  assert.ok(
+    vibrancyRs.includes('rewarm_main_surface'),
+    'show-path idle rewarm must exist'
+  );
+
+  // A DWM-cloaked window is excluded from composition: the cycle must
+  // physically uncloak while parked off-screen, present, then re-cloak —
+  // otherwise the ShowWindow below still produces no genuine present.
+  assert.ok(body.includes('DWMWA_CLOAK'), 'cycle must manage the raw DWM cloak');
+  assert.ok(body.includes('set_window_cloaked(win, true)'), 'cycle must re-cloak on exit');
+  assert.ok(body.includes('SW_SHOWNOACTIVATE'), 'show must not activate');
+  // Park FIRST with raw SetWindowPos (async Tauri set_position races the show).
+  assert.ok(body.includes('SetWindowPos'), 'park/restore must be raw Win32 on this thread');
+  assert.ok(body.includes('-32000'), 'window must park off-screen before uncloak');
+  // Match call sites, not `use` imports (SW_SHOWNOACTIVATE is imported early).
+  const parkIdx = body.indexOf('SetWindowPos(');
+  const uncloakIdx = body.indexOf('DwmSetWindowAttribute(');
+  const showIdx = body.indexOf('ShowWindow(h, SW_SHOWNOACTIVATE)');
+  assert.ok(parkIdx !== -1 && uncloakIdx !== -1 && showIdx !== -1, 'park, uncloak, show all present');
+  assert.ok(parkIdx < uncloakIdx && uncloakIdx < showIdx, 'order must be park → uncloak → show (no on-screen present)');
+});
+
+test('Main Flash: first present waits for prewarm + that window ready (not any webview)', () => {
+  const libRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'lib.rs'), 'utf8');
+  assert.ok(
+    libRs.includes('done.store(true, Ordering::SeqCst)'),
+    'prewarm_windows thread must signal completion'
+  );
+  assert.ok(
+    libRs.includes('if prewarm_done.load(Ordering::SeqCst)'),
+    'present cycle must wait for prewarm (ShowWindow before present)'
+  );
+  assert.ok(
+    /carbon-ui-ready[\s\S]{0,900}label != "main" && label != "overlay"/.test(libRs),
+    'non-main/overlay readiness must not arm the present cycle'
+  );
+  assert.ok(
+    libRs.includes('prewarm_first_paint(&handle, Some(label.as_str()))'),
+    'present must be limited to the label that reported ready'
+  );
+  assert.ok(
+    libRs.includes('std::time::Duration::from_millis(4000)'),
+    'fallback timer presents windows that never emit ready'
+  );
+  // The old once-flag on ANY webview is gone.
+  assert.doesNotMatch(
+    libRs,
+    /carbon-ui-ready[\s\S]{0,200}static DONE/,
+    'app-global once-flag must be replaced by per-label present'
+  );
+
+  // Overlay show-path parity: border re-asserted immediately AFTER main show()
+  // while still cloaked (mirror of overlay hotkey.rs:1134).
+  const hotkeyRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'hotkey.rs'), 'utf8');
+  const showMatch = hotkeyRs.match(/pub fn handle_enlarged_hotkey[\s\S]*?\r?\n\}\r?\n/);
+  assert.ok(showMatch, 'handle_enlarged_hotkey found');
+  const borderAfterShow = (showMatch[0].match(
+    /main_win\.show\(\);[\s\S]{0,600}set_window_border_suppressed\(&main_win\)/g
+  ) || []).length;
+  assert.equal(borderAfterShow, 2, 'both main show branches re-suppress border after show');
+
+  // Main content stamped painted after EnlargedWindow commits (parity overlay).
+  const enlarged = fs.readFileSync(
+    path.join(ROOT_DIR, 'src', 'components', 'EnlargedWindow.tsx'),
+    'utf8'
+  );
+  assert.ok(
+    enlarged.includes("document.documentElement.dataset.painted = '1'"),
+    'EnlargedWindow must stamp data-painted after its heavy tree commits'
   );
 });
 

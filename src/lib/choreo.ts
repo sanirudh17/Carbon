@@ -254,6 +254,12 @@ export function executeWindowShow(
       if (!warned && performance.now() - tHotkey > 300) {
         traceChoreo(`${windowName} show gate bounded wait (300ms) reached; initiating flash-safe recovery`);
         warned = true;
+        cancelled = true;
+        if (rafId) cancelAnimationFrame(rafId);
+        if (windowName === 'overlay' || windowName === 'main') {
+          invoke('choreo_show_recovery', { windowLabel: windowName }).catch(() => {});
+        }
+        return;
       }
 
       wait();

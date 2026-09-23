@@ -99,6 +99,8 @@
   --app-window-bg: transparent;
 
   /* ── Floating-surface Material Tokens (ADDENDUM v14) ── */
+  /* Translucent frosted glass: floats intentionally sample the backdrop via
+     blur + alpha so both windows keep the drop-transparency effect. */
   --surface-float-glass: rgba(18, 18, 22, 0.62);
   --surface-float-solid: #15161B;
   --surface-float: var(--surface-float-glass);
@@ -220,6 +222,7 @@ html.win-library body {
   --app-window-bg: transparent;
 
   /* ── Floating-surface Material Tokens (Light) (ADDENDUM v14) ── */
+  /* Parity with dark: same frosted-glass alpha contract. */
   --surface-float-glass: rgba(255, 255, 255, 0.70);
   --surface-float-solid: #FFFFFF;
   --surface-float: var(--surface-float-glass);
@@ -2939,13 +2942,22 @@ section:last-child {
 }
 
 /* Rendered rich text (headers, lists, bold — not raw source).
-   Deliberately bare: no card/box — rendered markdown floats as plain text. */
+   Deliberately bare: no card/box — rendered markdown floats as plain text.
+   overflow-wrap + white-space:normal override author nowrap/pre so long
+   lines wrap inside the pane instead of being clipped by the card. */
 .rich-doc {
   font-family: var(--font);
   font-size: 13.5px;
   line-height: 1.7;
   color: var(--text);
   word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.rich-doc :not(pre):not(code) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 100%;
 }
 
 .rich-doc :is(h1, h2, h3, h4, h5, h6) {
@@ -3004,7 +3016,12 @@ section:last-child {
    that assumes a white page (black body text, diagrams with their own white
    background) stays readable regardless of the app's dark theme. */
 .rich-doc-light { color: #1f2937; }
-.rich-doc-light :is(h1, h2, h3, h4, h5, h6, p, li, td, th, div, span) { color: inherit; }
+.rich-doc-light :is(h1, h2, h3, h4, h5, h6, p, li, td, th, div, span) {
+  color: inherit;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
 .rich-doc-light a { color: #1d4ed8; }
 /* v29-B: code/pre/quote inherit the card ink instead of forcing their own —
    an author's inline color (e.g. a red error token in a pasted snippet)
@@ -3025,7 +3042,12 @@ section:last-child {
    surface in BOTH app themes (the white card would erase them). All pairs
    clear AA: body ~14:1, links ~7:1, quotes ~7:1. */
 .rich-doc-dark { color: #e8eaed; }
-.rich-doc-dark :is(h1, h2, h3, h4, h5, h6, p, li, td, th, div, span) { color: inherit; }
+.rich-doc-dark :is(h1, h2, h3, h4, h5, h6, p, li, td, th, div, span) {
+  color: inherit;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
 .rich-doc-dark a { color: #8ab4f8; }
 /* v29-B: same inherit rule as the light card — author inline colors pass
    through, colorless text inherits #e8eaed. */
@@ -3200,6 +3222,7 @@ section:last-child {
   overflow-y: auto;
   overflow-x: auto;
   padding: 14px 16px;
+  overflow-wrap: anywhere;
 }
 /* Focused document state: clicking the rendered preview focuses it so
    arrow keys scroll long documents instead of jumping clips. */
@@ -5945,6 +5968,20 @@ html[data-material="solid"] .sn-content-preview {
   animation: cDropdownIn 120ms var(--ease-out);
 }
 
+/* Quick Overlay dropdowns hang over the dark preview pane (body slab 0.72 +
+   preview tint) while the main window's menus reveal native acrylic and
+   bright list rows directly — at the shared 0.62 alpha the overlay menu
+   composites to a near-uniform panel and reads as solid. Keep the lifted
+   base color but trim the alpha so preview content and native material
+   bleed through with the same frosted transparency as the main window. */
+html.win-overlay .c-dropdown-list {
+  background: rgba(32, 33, 40, 0.50);
+}
+
+html[data-theme="light"].win-overlay .c-dropdown-list {
+  background: rgba(255, 255, 255, 0.55);
+}
+
 .c-dropdown-list.align-start,
 .c-dropdown-list.align-left,
 .c-dropdown-list.origin-left {
@@ -6461,9 +6498,12 @@ html[data-material="solid"] .sn-content-preview {
 }
 
 /* The trigger hard-codes 34px elsewhere; inside the compact overlay bar it
-   must fill the 28px wrapper instead of overflowing ~6px low. */
+   must fill the 28px wrapper instead of overflowing ~6px low.
+   Same distinct surrounding box as the CLIPS app filter (--elev-hover). */
 .sn-tag-dd-overlay .c-dropdown-trigger {
   height: 100%;
+  border: 1px solid var(--line);
+  background: var(--elev-hover);
 }
 
 /* ═══ Raycast-style compact filter controls (overlay searchbars) ═══ */
@@ -6522,9 +6562,9 @@ html[data-material="solid"] .sn-content-preview {
 
 .main-top .searchbar .sn-tag-dd .c-dropdown-trigger {
   height: 100%;
-  /* Subtle border so the control reads as its own box inside the bar */
+  /* Same distinct box as the overlay CLIPS app filter (--elev-hover) */
   border-color: var(--line);
-  background: transparent;
+  background: var(--elev-hover);
 }
 
 .overlay > .searchbar.has-app-filter,
