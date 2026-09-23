@@ -2,6 +2,20 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
+## [0.1.15] — 2026-09-23
+
+### Fixed
+- **Residual main-window white flash on first open and after idle** — the main window now re-presents its DirectComposition surface off-screen (while still cloaked) on every show branch, after re-asserting the transparent controller colors and before `show()`. Windows discards hidden composition surfaces after roughly 30 seconds of idle; color re-assert alone never creates a present, so the uncloak ramp used to composite a cold (white) frame. A shared present-cycle lock and per-label once-flags keep the boot present and the show-path rewarm from racing each other, and the rewarm is skipped when the boot cycle is already mid-flight. The cold first-ever open is additionally covered by a label-scoped first present: the frontend now reports which window finished painting, the backend waits for prewarm plus that specific window's ready event (with a 4-second fallback for windows that never emit ready) before performing the genuine first off-screen present, so an unrelated webview can no longer satisfy the readiness gate.
+- **Rich-text clipping and content loss** — the sanitizer now distinguishes tags that must be removed entirely (script, style, iframe, object, embed, link, meta, base) from tags that must be unwrapped so their children survive (form, input, button, select, textarea, svg, math, head). Unwrapping re-enters cleanup on the parent so nested junk is fully processed instead of leaving an empty shell. When a rich preview would render materially less text than the clipping's plain-text source (HTML is more than 48 characters short and under 85 percent of the source length), the preview falls back to the plain-text twin rather than silently dropping content.
+- **Preview card clipping in both themes** — the preview surface no longer clips overflowing content in either the light or dark theme (`overflow: visible` on both document surfaces), and long unbroken tokens wrap outside of `pre`/`code` (`overflow-wrap: anywhere` plus wrap rules for prose) so wide URLs and identifiers no longer push content out of the card.
+- **Overlay opening with stale rows after a capture** — every clipboard capture (plain insert, bump-to-top, and merge) now retains the item by id at the top of the overlay prewarm cache (capped at 250 entries), so the overlay opens with the freshest list even when it never re-queried the database. The overlay's `overlay-data` handler is guarded by a snapshot-fresher check: a late or empty payload can no longer clobber a list that the live push already advanced (applies only when the local list is empty, the snapshot contains the local head, or the snapshot is strictly longer).
+- **DWM hairline flashing on main-window show** — the non-client border suppression is re-asserted immediately after `show()` on both main-window show branches (overlay-swap and cold open), not only before it, so a frame recalculation between show and uncloak cannot repaint the OS border during the reveal ramp.
+- **Main window painted stamp parity** — the enlarged window stamps its content as painted on mount after a double requestAnimationFrame, matching the quick overlay, so the paint gate observes genuine first paint rather than assuming it.
+
+### Changed
+- Present-cycle extraction: the park, uncloak, settle, hide, restore, and re-cloak sequence is a single shared `offscreen_present_cycle` helper used by both the boot prewarm and the show-path rewarm, with module-level present-once flags per window label.
+- The `carbon-ui-ready` event payload now includes the emitting window label; the backend rejects ready events from labels that are not main or overlay.
+
 ## [0.1.14] — 2026-09-22
 
 ### Fixed
