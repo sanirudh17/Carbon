@@ -39,7 +39,7 @@ test('B1 pre-serve at HIDE: show path does zero DB work, hide refreshes cache', 
     'hide must refresh the pre-serve snapshot for the next show'
   );
   assert.ok(
-    hideRegion.includes('OVERLAY_PREWARM_CACHE'),
+    hideRegion.includes('OVERLAY_PREWARM_CACHE') || hideRegion.includes('commit_overlay_refresh'),
     'hide must write the refreshed snapshot to the prewarm cache'
   );
 });
@@ -68,18 +68,20 @@ test('B1 hide fade + uncloak ramp are one shared implementation', () => {
   const fades = (choreo.match(/setTimeout\(finish, 90\)/g) || []).length;
   assert.equal(fades, 1, 'exactly one 90ms hide fade shared by both windows');
   const hotkey = readHotkey();
-  // Both windows uncloak through the ONE shared ramp fn; durations stay
-  // per-design: overlay pops on a fast 30ms ramp (snappy v37, locked by
-  // choreo/driver-v23 tests), main rides the 100ms ramp.
-  const ramps = (hotkey.match(/ramp_window_alpha\(win\.clone\(\), 0, 255, (?:30|100)/g) || []).length;
-  assert.equal(ramps, 2, 'both windows share the one OS-alpha ramp call shape');
+  // Both windows uncloak through the ONE shared ramp fn; the overlay pops on
+  // a fixed fast 30ms ramp, main picks adaptively (30 warm / 100 cold mask).
+  // A fixed 30ms reflashed on skipped-rewarm opens; a fixed 100ms felt slow.
   assert.ok(
     hotkey.includes('ramp_window_alpha(win.clone(), 0, 255, 30, expected_token, true);'),
     'overlay keeps its fast 30ms ramp'
   );
   assert.ok(
-    hotkey.includes('ramp_window_alpha(win.clone(), 0, 255, 100, expected_token, false);'),
-    'main keeps its 100ms ramp'
+    hotkey.includes('let ramp_ms = if main_surface_warm() { 30 } else { 100 };'),
+    'main must pick the ramp from the shared warm predicate (warm pop, cold mask)'
+  );
+  assert.ok(
+    hotkey.includes('ramp_window_alpha(win.clone(), 0, 255, ramp_ms, expected_token, false);'),
+    'main must uncloak through the adaptive ramp'
   );
   assert.ok(
     hotkey.includes('fn uncloak_overlay_if_current') && hotkey.includes('fn uncloak_enlarged_if_current'),

@@ -173,6 +173,16 @@ test('RichText v28-A - per-node AA enforcement pipeline exists', () => {
   const css = fs.readFileSync(path.join(SRC_DIR, 'index.css'), 'utf8');
   assert.ok(css.includes('.rich-doc-light mark'), 'light card must neutralize mark');
   assert.ok(css.includes('.rich-doc-dark mark'), 'dark card must neutralize mark');
+  // QWEN chips: the model must know Carbon's own code/pre chip backgrounds
+  // (class-styled chip bgs are stripped, so the engine paints Carbon's while
+  // the model used to see the site bubble behind). Translucent backdrops must
+  // composite over the card instead of parsing as opaque.
+  assert.ok(ts.includes('CARBON_CHIP_BG'), 'model must know the card chip backgrounds');
+  assert.ok(ts.includes('compositeOverBg'), 'translucent backdrops must composite over the card');
+  // Nested translucent chips (span over bubble): each layer must composite
+  // over the EFFECTIVE backdrop below, never straight over the card — or the
+  // picker inks against the wrong surface (dark-on-dark-chip trap).
+  assert.ok(ts.includes('ownEffBg'), 'the pass must thread the effective backdrop down the tree');
 });
 
 test('RichText VERIFY - capture stores HTML for fidelity', () => {

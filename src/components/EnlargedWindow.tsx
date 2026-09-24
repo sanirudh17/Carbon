@@ -102,6 +102,21 @@ function groupItemsByDate(items: ClipItem[]): DateGroup[] {
   return order.map((label) => ({ label, items: groups[label] }));
 }
 
+// Cheap equality for full-history snapshots: same rows in the same order at
+// the same revisions. Lets the open push / focus refetch skip the commit
+// entirely when nothing changed — a redundant full-list commit costs a real
+// open-latency step on large histories (every index shifts, memo bails out
+// on nothing).
+function sameClipList(a: ClipItem[], b: ClipItem[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (x.id !== y.id || x.updated_at !== y.updated_at) return false;
+  }
+  return true;
+}
+
 // ── Memoized list row: keeps keyboard-navigation and clicking renders O(1) ────────
 const EnlargedRow = memo(function EnlargedRow({
   item,
@@ -229,6 +244,29 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     });
     return () => cancelAnimationFrame(r1);
   }, []);
+
+  // Commit-accurate re-stamp for the open-paint gate above: effects run
+  // post-commit, so when a gated snapshot/capture changed the head, the
+  // gate lifts only after the fresh rows actually committed (double rAF
+  // lets Chromium submit the frame first; the timeout covers rAF stalls
+  // while cloaked).
+  useEffect(() => {
+    if (!openPaintPendingRef.current) return;
+    openPaintPendingRef.current = false;
+    let r1 = requestAnimationFrame(() => {
+      r1 = requestAnimationFrame(() => {
+        document.documentElement.dataset.painted = '1';
+      });
+    });
+    const t = window.setTimeout(() => {
+      cancelAnimationFrame(r1);
+      document.documentElement.dataset.painted = '1';
+    }, 200);
+    return () => {
+      cancelAnimationFrame(r1);
+      window.clearTimeout(t);
+    };
+  }, [items]);
 
   // F2 Cold gate for library preview: stamp data-painted-expanded after first expand commit + double rAF
   useEffect(() => {
@@ -423,6 +461,63 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   };
 
   const allCachedItemsRef = useRef<ClipItem[]>([]);
+  // Seed once from the boot prewarm snapshot (same source as the useState
+  // initializer below) so the first open's snapshot compares equal and
+  // skips its commit instead of re-painting identical rows.
+  if (allCachedItemsRef.current.length === 0) {
+    const boot = (typeof window !== 'undefined' && window.__carbonInitialData) || [];
+    if (Array.isArray(boot) && boot.length > 0) {
+      allCachedItemsRef.current = boot;
+    }
+  }
+  // Overlay-A2 parity: cache version = store mutations applied to the local
+  // list. Pushes/edits bump +1 each; full unfiltered re-reads SYNC to the
+  // last observed store version (a blind +1 would invent a lead and absorb
+  // a missed push into a false "fresh" open). Filtered re-reads never sync
+  // (they don't observe the whole store).
+  const mainCacheVersionRef = useRef(0);
+  const lastMainStoreVersionRef = useRef(0);
+  const syncMainCacheVersion = () => {
+    mainCacheVersionRef.current = Math.max(
+      mainCacheVersionRef.current,
+      lastMainStoreVersionRef.current
+    );
+  };
+  // Mirror of the overlay's search/filter refs so the long-lived
+  // clipboard-updated listener upserts only when the unfiltered list is
+  // showing (stale closures would otherwise inject rows into a filtered view).
+  const selectedFilterRef = useRef(selectedFilter);
+  selectedFilterRef.current = selectedFilter;
+  const searchValueRef = useRef(search);
+  searchValueRef.current = search;
+  const sourceAppFilterRef = useRef(sourceAppFilter);
+  sourceAppFilterRef.current = sourceAppFilter;
+  // Long-lived clipboard-updated listener must not close over stale selection
+  // (empty-deps effect) — mirror the filter refs above.
+  const selectedIndexRef = useRef(selectedIndex);
+  selectedIndexRef.current = selectedIndex;
+  const selectedItemRef = useRef(selectedItem);
+  selectedItemRef.current = selectedItem;
+
+  // Open-paint gate coupling: the choreo show gate uncloaks only once
+  // dataset.painted==='1' (stamped once at mount). A heavy list commit can
+  // land AFTER the instant 2-rAF gate, painting the first frame stale and
+  // popping the capture in. Reset to '0' whenever an open snapshot or live
+  // capture changes the head; the commit effect below re-stamps after the
+  // fresh rows land, so the gate waits for the fresh paint (bounded by its
+  // own 300ms recovery + our timeout). Harmless while visible — no gate is
+  // running — and a no-op when nothing actually changed.
+  const openPaintPendingRef = useRef(false);
+  const awaitOpenPaint = () => {
+    openPaintPendingRef.current = true;
+    document.documentElement.dataset.painted = '0';
+    window.setTimeout(() => {
+      if (openPaintPendingRef.current) {
+        openPaintPendingRef.current = false;
+        document.documentElement.dataset.painted = '1';
+      }
+    }, 200);
+  };
 
   const fetchItems = async (filterOverride?: string, unlockedIdsOverride?: Set<string>) => {
     try {
@@ -453,20 +548,40 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       let list = res || [];
       if (activeFilter === 'all' && !search.trim() && !colId) {
         allCachedItemsRef.current = list;
+        // Full unfiltered re-read absorbs every mutation to date (overlay-A2
+        // sync, not +1). Filtered re-reads must NOT sync — they don't observe
+        // the whole store.
+        syncMainCacheVersion();
       }
       if (sourceAppFilter) {
         list = list.filter(
           (i) => i.source_app && i.source_app.toLowerCase() === sourceAppFilter.toLowerCase()
         );
       }
-      setItems(list);
+      // Identical refetch: keep the previous array (and selection objects)
+      // so memo rows AND the preview pane bail out — a post-open refetch
+      // with no changes must be render-free, never a visible step.
+      setItems((prev) => (sameClipList(prev, list) ? prev : list));
       setInitialLoaded(true);
 
       if (list.length > 0) {
         setSelectedIndex((prev) => {
           const nextIdx = prev < list.length ? prev : 0;
-          setSelectedItem(list[nextIdx]);
-          setEditingContent(list[nextIdx].text_content || '');
+          const next = list[nextIdx];
+          setSelectedItem((cur) =>
+            cur &&
+            cur.id === next.id &&
+            cur.updated_at === next.updated_at &&
+            cur.text_content === next.text_content &&
+            cur.title === next.title &&
+            cur.is_pinned === next.is_pinned
+              ? cur
+              : next
+          );
+          setEditingContent((cur) => {
+            const v = next.text_content || '';
+            return cur === v ? cur : v;
+          });
           return nextIdx;
         });
       } else {
@@ -563,6 +678,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
         setItems(data);
         setInitialLoaded(true);
         allCachedItemsRef.current = data;
+        syncMainCacheVersion();
         if (data.length > 0) {
           setSelectedIndex(0);
           setSelectedItem(data[0]);
@@ -670,12 +786,172 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   }, [selectedIndex, items, selectedItem?.id]);
 
   useEffect(() => {
-    const unlistenUpdated = listen('clipboard-updated', () => {
-      fetchRef.current();
+    // Push, don't poll: mirror the overlay — upsert the captured clip to the
+    // top immediately (even while hidden) so the next open already has it.
+    // A full fetchRef here hit MAIN_PREWARM_CACHE (possibly stale) and made
+    // the capture "pop in" a second after open. Filtered/search views still
+    // need a real refetch so the row respects the active query.
+    const unlistenUpdated = listen<ClipItem | null>('clipboard-updated', (e) => {
+      const item = e.payload;
+      const unfiltered =
+        selectedFilterRef.current === 'all' &&
+        !searchValueRef.current.trim() &&
+        !sourceAppFilterRef.current;
+      if (item && typeof item === 'object' && item.id && unfiltered) {
+        const selectedId = selectedItemRef.current?.id;
+        const prevHead = allCachedItemsRef.current[0];
+        setItems((prev) => {
+          const exists = prev.find((i) => i.id === item.id);
+          if (exists) {
+            // Same head revision re-pushed (echo/duplicate event): keep the
+            // previous array so the whole list bails out of re-rendering.
+            if (
+              prev[0]?.id === item.id &&
+              exists.updated_at === item.updated_at &&
+              exists.text_content === item.text_content
+            ) {
+              return prev;
+            }
+            return [{ ...exists, ...item }, ...prev.filter((i) => i.id !== item.id)];
+          }
+          return [item, ...prev];
+        });
+        allCachedItemsRef.current = [
+          item,
+          ...allCachedItemsRef.current.filter((i) => i.id !== item.id),
+        ];
+        // One applied capture = one observed store mutation (overlay-A2).
+        mainCacheVersionRef.current += 1;
+        // A changed head must paint before the next uncloak: arm the
+        // open-paint gate so a copy→quick-open never shows the stale list
+        // first (same-path merges that only touch the head text count too).
+        if (
+          prevHead?.id !== item.id ||
+          (item.text_content !== undefined && prevHead?.text_content !== item.text_content)
+        ) {
+          awaitOpenPaint();
+        }
+        setInitialLoaded(true);
+        // Keep the row the user is on selected (it shifts down by one when a
+        // newer capture lands above it). Only jump to the new capture when
+        // nothing else was selected / the top row was already active.
+        if (!selectedId || selectedId === item.id || selectedIndexRef.current === 0) {
+          setSelectedIndex(0);
+          setSelectedItem(item);
+          setEditingContent(item.text_content || '');
+        } else {
+          setSelectedIndex((prev) => prev + 1);
+        }
+      } else {
+        fetchRef.current();
+      }
     });
 
     const unlistenQueue = listen('queue-updated', () => {
       fetchQueue();
+    });
+
+    // Open-gate arm: the snapshot now rides a background thread (zero
+    // hotkey-thread cost, overlay-fast opens), so it can land AFTER
+    // enlarged-opened. Version-gated (overlay A2): a fresh open never waits —
+    // the gate holds only when the store moved past what this window applied.
+    // The bounded fallback covers the cold case (no snapshot at all).
+    const unlistenOpenGate = listen<{ token?: number; store_version?: number }>('enlarged-opened', (e) => {
+      const raw = e?.payload && typeof e.payload === 'object' ? e.payload.store_version : undefined;
+      if (typeof raw === 'number') {
+        lastMainStoreVersionRef.current = raw;
+      }
+      const stale =
+        typeof raw !== 'number' || raw > mainCacheVersionRef.current;
+      if (!stale) {
+        openPaintPendingRef.current = false;
+        document.documentElement.dataset.painted = '1';
+        return;
+      }
+      openPaintPendingRef.current = true;
+      document.documentElement.dataset.painted = '0';
+      window.setTimeout(() => {
+        if (openPaintPendingRef.current) {
+          openPaintPendingRef.current = false;
+          document.documentElement.dataset.painted = '1';
+        }
+      }, 120);
+    });
+
+    // Open push, not poll: Rust emits the MAIN_PREWARM_CACHE snapshot on
+    // every open from a background thread (zero hotkey-thread cost) right
+    // after enlarged-opened, and the gate above holds uncloak until it
+    // commits — so the first uncloaked frame already has the latest capture
+    // with no stale list that pops the row in after the focus fetch. Same
+    // freshness guards as the overlay: a snapshot must never clobber a
+    // newer live-pushed head.
+    // Filtered/search views keep their query (only the 'all' cache warms).
+    const unlistenOpenData = listen<ClipItem[]>('enlarged-data', (e) => {
+      const snap = e.payload;
+      if (!Array.isArray(snap)) return;
+      const unfilteredView =
+        selectedFilterRef.current === 'all' &&
+        !searchValueRef.current.trim() &&
+        !sourceAppFilterRef.current;
+      const local = allCachedItemsRef.current;
+      // Already displaying this exact snapshot (the common open: the live
+      // push got here first): warm the cache ref and return with NO commit
+      // and NO gate — the open stays instant.
+      if (sameClipList(snap, local)) {
+        allCachedItemsRef.current = snap;
+        setInitialLoaded(true);
+        // Nothing to paint: release the open gate immediately (the open
+        // stays instant).
+        openPaintPendingRef.current = false;
+        document.documentElement.dataset.painted = '1';
+        return;
+      }
+      const localHead = local[0]?.id;
+      const snapshotHasLocalHead = Boolean(localHead) && snap.some((p) => p.id === localHead);
+      const localHeadCreated = local[0]?.created_at;
+      const snapHeadCreated = snap[0]?.created_at;
+      const snapHeadNotOlder =
+        !localHeadCreated || !snapHeadCreated || snapHeadCreated >= localHeadCreated;
+      // Stricter than the overlay: containing our head is not enough — the
+      // snapshot head must also not be OLDER than ours, or a snapshot that
+      // missed an in-flight live push would swallow the newer head.
+      const snapshotFresher =
+        local.length === 0 ||
+        ((snapshotHasLocalHead || snap.length > local.length) && snapHeadNotOlder);
+      if (!unfilteredView || !snapshotFresher) return;
+      // Gate the uncloak on this commit when the head actually changes, so
+      // the first frame already shows the capture (no stale paint + pop-in).
+      const prevHead = local[0];
+      if (
+        snap.length !== local.length ||
+        snap[0]?.id !== prevHead?.id ||
+        (snap[0] && snap[0].text_content !== prevHead?.text_content)
+      ) {
+        awaitOpenPaint();
+      }
+      allCachedItemsRef.current = snap;
+      setItems(snap);
+      setInitialLoaded(true);
+      // Full snapshot absorbs mutations to date (overlay-A2 sync, not +1).
+      syncMainCacheVersion();
+      // Keep the user's row selected when it still exists (the open must not
+      // yank selection to the top); otherwise settle on the fresh capture.
+      const selId = selectedItemRef.current?.id;
+      const pendingEdit = editDirtyRef.current;
+      if (pendingEdit && selId && pendingEdit.id === selId) return;
+      if (selId && snap.some((i) => i.id === selId)) {
+        const idx = snap.findIndex((i) => i.id === selId);
+        setSelectedIndex(idx);
+        setSelectedItem(snap[idx]);
+        setEditingContent(snap[idx].text_content || '');
+      } else if (snap.length > 0) {
+        setSelectedIndex(0);
+        setSelectedItem(snap[0]);
+        setEditingContent(snap[0].text_content || '');
+      } else {
+        setSelectedItem(null);
+        setEditingContent('');
+      }
     });
 
     const unlistenCollections = listen('collections-updated', () => {
@@ -689,6 +965,8 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       const updated = e.payload;
       if (!updated || typeof updated !== 'object' || !updated.id) return;
       setItems((prev) => applyEntryUpdatedToList(prev, updated));
+      // One observed store mutation (overlay-A2 bump).
+      mainCacheVersionRef.current += 1;
       setSelectedItem((prev) => {
         if (!prev || prev.id !== updated.id) return prev;
         // Don't clobber an uncommitted local buffer; the broadcast echo
@@ -720,6 +998,8 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
     return () => {
       unlistenUpdated.then((fn) => fn());
+      unlistenOpenData.then((fn) => fn());
+      unlistenOpenGate.then((fn) => fn());
       unlistenQueue.then((fn) => fn());
       unlistenCollections.then((fn) => fn());
       unlistenEntryUpdated.then((fn) => fn());

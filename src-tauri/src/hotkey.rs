@@ -145,6 +145,10 @@ pub const OVERLAY_HEIGHT: i32 = 475;
 #[derive(Serialize, Clone, Debug)]
 pub struct EnlargedOpenedPayload {
     pub token: u64,
+    /// Monotonic store version at open time (overlay A2 parity). The main
+    /// window compares it against its applied-cache version and holds the
+    /// paint gate only when the store moved — fresh opens never wait.
+    pub store_version: u64,
 }
 
 pub fn next_overlay_show_gen() -> u64 {
@@ -247,8 +251,9 @@ fn clear_window_layered(window: &tauri::WebviewWindow) {
 #[cfg(not(target_os = "windows"))]
 fn clear_window_layered(_window: &tauri::WebviewWindow) {}
 
-/// Smoothly ramps window OS-level alpha from start to target over duration_ms (80-120ms).
-/// Token-guarded: cancels early if window is hidden or re-shown.
+/// Smoothly ramps window OS-level alpha from start to target over duration_ms.
+/// Token-guarded: cancels early if window is hidden or re-shown. Callers pass
+/// 30 (warm pop) or 100 (cold-frame mask); the main uncloak picks adaptively.
 pub fn ramp_window_alpha(
     window: tauri::WebviewWindow,
     start: u8,
@@ -495,7 +500,28 @@ fn uncloak_enlarged_if_current(app: &AppHandle, token: Option<u64>) {
         set_window_cloaked(&win, false);
         crate::vibrancy::set_window_border_suppressed(&win);
         MAIN_HAS_PAINTED.store(true, Ordering::SeqCst);
-        ramp_window_alpha(win.clone(), 0, 255, 100, expected_token, false);
+        // Fresh pixels just composited: the next show-path rewarm may skip
+        // its present cycle until this goes stale (rapid toggles stay fast).
+        // Adaptive reveal mask (read BEFORE stamping): warm surface pops
+        // like the overlay (30ms); cold surface keeps the full 100ms mask
+        // against a cold first present. Threaded + token-guarded either way,
+        // so the duration never blocks presses — it only changes the fade.
+        let ramp_ms = if main_surface_warm() { 30 } else { 100 };
+        note_main_revealed();
+        // Settle-then-ramp: WebView2 presents on its own cadence, so the
+        // pre-uncloak present can still leave DWM one frame behind — the rare
+        // white open-flash on skipped-rewarm opens. Hold alpha 0 for ~one
+        // frame with a second flush before ramping: invisible (alpha is 0),
+        // costs 20ms, and DWM has composed a real frame first. A mid-settle
+        // hide still cancels cleanly (the ramp re-checks the token).
+        #[cfg(target_os = "windows")]
+        unsafe {
+            use windows::Win32::Graphics::Dwm::DwmFlush;
+            let _ = DwmFlush();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let _ = DwmFlush();
+        }
+        ramp_window_alpha(win.clone(), 0, 255, ramp_ms, expected_token, false);
         crate::paste::log_diag("[SHOW_MAIN] uncloaked after forced present with OS-alpha ramp (0->255 over 100ms)");
     }
 }
@@ -523,6 +549,52 @@ pub static LAST_HIDE_MS: AtomicU64 = AtomicU64::new(0);
 /// deliberate same-key re-taps — eating those keeps every deliberate press
 /// toggling exactly once, in arrival order, no matter how fast the user taps.
 pub static LAST_TOGGLE_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Epoch-milliseconds of the last successful main uncloak (first pixels
+/// composited). The show-path idle rewarm exists for OS-discarded surfaces
+/// (minutes of hidden idleness) — a reveal seconds ago means the pixels are
+/// alive, so rapid toggles skip the 32-120ms present cycle. 0 = never.
+static LAST_MAIN_REVEAL_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Epoch-ms of the last background surface-warmth refresh (see
+/// vibrancy::spawn_main_warmth_loop). 0 = never (cold boot behaves as before).
+static LAST_MAIN_WARM_MS: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn note_main_revealed() {
+    LAST_MAIN_REVEAL_MS.store(epoch_ms(), Ordering::SeqCst);
+}
+
+pub(crate) fn note_main_warm() {
+    LAST_MAIN_WARM_MS.store(epoch_ms(), Ordering::SeqCst);
+}
+
+pub(crate) fn main_reveal_age_ms() -> u64 {
+    epoch_ms().saturating_sub(LAST_MAIN_REVEAL_MS.load(Ordering::SeqCst))
+}
+
+/// True while the main surface is known-alive: revealed seconds ago, or
+/// refreshed by the background warmth loop. Show path (rewarm skip) and
+/// reveal ramp both consult this — one predicate, no drift.
+pub(crate) fn main_surface_warm() -> bool {
+    main_reveal_age_ms() < MAIN_WARM_WINDOW_MS
+        || epoch_ms().saturating_sub(LAST_MAIN_WARM_MS.load(Ordering::SeqCst)) < MAIN_WARM_STALE_MS
+}
+
+pub(crate) fn enlarged_show_gen() -> u64 {
+    ENLARGED_SHOW_GEN.load(Ordering::SeqCst)
+}
+
+/// Warm window for the main surface: a reveal inside this window means the
+/// pixels are alive (rapid toggles skip the rewarm cycle and pop fast).
+/// Shared by the rewarm skip and the adaptive reveal ramp.
+pub(crate) const MAIN_WARM_WINDOW_MS: u64 = 45_000;
+
+/// Background warmth-loop period / staleness (see
+/// vibrancy::spawn_main_warmth_loop). The loop re-presents the hidden main
+/// surface every period; each refresh counts for staleness, so coverage is
+/// continuous while the app runs and long-idle opens stop going cold.
+pub(crate) const MAIN_WARM_LOOP_MS: u64 = 45_000;
+pub(crate) const MAIN_WARM_STALE_MS: u64 = 90_000;
 
 fn epoch_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -758,10 +830,27 @@ fn ensure_main_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
 /// show. Also warms the DB cache so the first overlay-data emit is instant.
 pub(crate) static OVERLAY_PREWARM_CACHE: std::sync::Mutex<Option<Vec<crate::db::ClipItem>>> = std::sync::Mutex::new(None);
 pub(crate) static MAIN_PREWARM_CACHE: std::sync::Mutex<Option<Vec<crate::db::ClipItem>>> = std::sync::Mutex::new(None);
+/// Bumped on every note_overlay_clip / note_main_clip upsert (and on
+/// invalidate). Background full refreshes read this before the DB query and
+/// only commit the snapshot if it is unchanged — otherwise a capture that
+/// landed during the read would be clobbered (stale open until the next copy).
+static OVERLAY_CACHE_GEN: AtomicU64 = AtomicU64::new(0);
+static MAIN_CACHE_GEN: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn invalidate_prewarm_cache() {
-    *OVERLAY_PREWARM_CACHE.lock().unwrap() = None;
-    *MAIN_PREWARM_CACHE.lock().unwrap() = None;
+    {
+        let mut guard = OVERLAY_PREWARM_CACHE.lock().unwrap();
+        *guard = None;
+        // Bump under the lock: a hide/focus full refresh that started its DB
+        // read before this invalidate must not commit (it would resurrect
+        // pre-invalidate rows).
+        OVERLAY_CACHE_GEN.fetch_add(1, Ordering::SeqCst);
+    }
+    {
+        let mut guard = MAIN_PREWARM_CACHE.lock().unwrap();
+        *guard = None;
+        MAIN_CACHE_GEN.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 /// Keep the overlay prewarm snapshot in sync on every capture so the next
@@ -777,8 +866,98 @@ pub(crate) fn note_overlay_clip(item: &crate::db::ClipItem) {
             if cache.len() > 250 {
                 cache.truncate(250);
             }
+            // Bump under the same lock as the upsert: a concurrent full
+            // refresh must observe the new gen before it can commit, or it
+            // would overwrite this item with a snapshot that missed it.
+            OVERLAY_CACHE_GEN.fetch_add(1, Ordering::SeqCst);
         }
     }
+}
+
+/// Commit a background full refresh into the prewarm cache, unless a
+/// note_overlay_clip landed during the DB read (then keep the incremental
+/// upsert — the next hide/focus refresh will catch other rows).
+pub(crate) fn commit_overlay_refresh(entries: Vec<crate::db::ClipItem>, gen_before: u64) -> bool {
+    if OVERLAY_CACHE_GEN.load(Ordering::SeqCst) != gen_before {
+        return false;
+    }
+    if let Ok(mut guard) = OVERLAY_PREWARM_CACHE.lock() {
+        if OVERLAY_CACHE_GEN.load(Ordering::SeqCst) != gen_before {
+            return false;
+        }
+        *guard = Some(entries);
+        true
+    } else {
+        false
+    }
+}
+
+pub(crate) fn overlay_cache_gen() -> u64 {
+    OVERLAY_CACHE_GEN.load(Ordering::SeqCst)
+}
+
+/// Keep the main prewarm snapshot in sync on every capture so the next open
+/// / focus fetch never serves a stale list (the "capture pops in at the top
+/// a second after open" bug). Same incremental upsert as the overlay — no DB
+/// round-trip on the clipboard thread. Gen bumps only when a live cache is
+/// updated (a cold None is filled by the next miss-path DB read).
+pub(crate) fn note_main_clip(item: &crate::db::ClipItem) {
+    if let Ok(mut guard) = MAIN_PREWARM_CACHE.lock() {
+        if let Some(cache) = guard.as_mut() {
+            cache.retain(|c| c.id != item.id);
+            cache.insert(0, item.clone());
+            MAIN_CACHE_GEN.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+/// Commit a background / miss-path full refresh into MAIN_PREWARM_CACHE
+/// unless a note_main_clip (or invalidate) landed during the DB read.
+pub(crate) fn commit_main_refresh(entries: Vec<crate::db::ClipItem>, gen_before: u64) -> bool {
+    if MAIN_CACHE_GEN.load(Ordering::SeqCst) != gen_before {
+        return false;
+    }
+    if let Ok(mut guard) = MAIN_PREWARM_CACHE.lock() {
+        if MAIN_CACHE_GEN.load(Ordering::SeqCst) != gen_before {
+            return false;
+        }
+        *guard = Some(entries);
+        true
+    } else {
+        false
+    }
+}
+
+pub(crate) fn main_cache_gen() -> u64 {
+    MAIN_CACHE_GEN.load(Ordering::SeqCst)
+}
+
+/// Push the cached full-history snapshot to the main window on every open,
+/// BEFORE the enlarged-opened reveal — overlay parity (overlay-data is
+/// pushed with the open so the first frame already has data). Without this
+/// the first uncloaked frame is whatever stale state the hidden window had,
+/// and the focus fetch pops the capture in a beat later. Fast path only:
+/// NEVER SQLite on the hotkey thread. Cold (None) means the next focus
+/// fetch will miss-path read the DB (same as the overlay cold path).
+pub(crate) fn push_main_snapshot(app_handle: &AppHandle) {
+    if let Ok(guard) = MAIN_PREWARM_CACHE.lock() {
+        if let Some(cached) = guard.as_ref() {
+            let _ = app_handle.emit_to("main", "enlarged-data", cached);
+            crate::paste::log_diag("[HOTKEY] enlarged-data served (instant)");
+        }
+    }
+}
+
+/// Backgrounded open push: clone + full-history serde_json + emit must never
+/// run on the hotkey thread (it stalled every main open behind serialization
+/// while the overlay's capped push stayed instant). The reveal is emitted
+/// FIRST; the frontend paint gate holds uncloak until this snapshot commits
+/// (bounded fallback), so backgrounding costs no correctness — only latency.
+pub(crate) fn push_main_snapshot_async(app_handle: &AppHandle) {
+    let app = app_handle.clone();
+    std::thread::spawn(move || {
+        push_main_snapshot(&app);
+    });
 }
 
 pub fn prewarm_windows(app: &AppHandle) {
@@ -876,8 +1055,13 @@ pub fn prewarm_windows(app: &AppHandle) {
             }
         }
 
+        let gen_before = OVERLAY_CACHE_GEN.load(Ordering::SeqCst);
         if let Ok(entries) = state.db.get_overlay_entries(250) {
-            *OVERLAY_PREWARM_CACHE.lock().unwrap() = Some(entries.clone());
+            // Generation-guard the cache write: a capture during the DB read
+            // keeps its note_overlay_clip upsert instead of being overwritten.
+            // Always eval into the webview — a live push already has the
+            // capture, and the initial paint needs rows either way.
+            let _ = commit_overlay_refresh(entries.clone(), gen_before);
             if let Ok(json) = serde_json::to_string(&entries) {
                 if let Some(win) = app.get_webview_window("overlay") {
                     let _ = win.eval(&format!(
@@ -887,8 +1071,11 @@ pub fn prewarm_windows(app: &AppHandle) {
                 }
             }
         }
+        let main_gen_before = main_cache_gen();
         if let Ok(all) = state.db.get_all_entries(None, None, false, None) {
-            *MAIN_PREWARM_CACHE.lock().unwrap() = Some(all.clone());
+            // Generation-guard like the overlay: a capture during the read
+            // keeps its note_main_clip upsert instead of being clobbered.
+            let _ = commit_main_refresh(all.clone(), main_gen_before);
             if let Ok(json) = serde_json::to_string(&all) {
                 if let Some(win) = app.get_webview_window("main") {
                     let _ = win.eval(&format!(
@@ -1022,6 +1209,14 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
             },
         );
         let _ = app_handle.emit("overlay-opened", &opened_payload);
+        // Parity with the normal show path: push the cached snapshot with the
+        // re-show so the first frame has data (otherwise the list only updates
+        // on the next capture).
+        let cached_opt = OVERLAY_PREWARM_CACHE.lock().unwrap().clone();
+        if let Some(cached) = cached_opt {
+            let _ = app_handle.emit("overlay-data", &cached);
+            crate::paste::log_diag("[HOTKEY] overlay-data served (re-show during hide)");
+        }
         return;
     }
 
@@ -1263,6 +1458,10 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
     if overlay_was_visible {
         crate::paste::log_diag("[HOTKEY] Overlay was open — showing main instead of toggling.");
         save_target_window(app_handle);
+        // Serialize against the background warmth loop: it skips its tick
+        // while held, so it can never park/hide mid-show. Dropped right
+        // after the post-show re-cloak (before focus/emit).
+        let _present_guard = crate::vibrancy::hold_present_cycle();
         prepare_main_surface(app_handle, &main_win);
         // Idle discard / cold first open: re-present off-screen while still
         // cloaked so the uncloak ramp never composites a cold surface.
@@ -1283,9 +1482,14 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
         // Mirror overlay: re-suppress the DWM border after show while still
         // cloaked — a frame recalc between show and uncloak can repaint it.
         crate::vibrancy::set_window_border_suppressed(&main_win);
+        drop(_present_guard);
         let focus_res = main_win.set_focus();
         crate::paste::log_diag(&format!("[HOTKEY] main_win.show() -> {:?}, set_focus() -> {:?}, post-show is_visible={}", show_res, focus_res, main_win.is_visible().unwrap_or(false)));
-        let _ = app_handle.emit("enlarged-opened", EnlargedOpenedPayload { token: enlarged_gen });
+        // Reveal FIRST so the frontend paint gate starts immediately; the
+        // snapshot follows on a background thread (zero hotkey-thread cost)
+        // and the gate holds uncloak until it commits (overlay-fast opens).
+        let _ = app_handle.emit("enlarged-opened", EnlargedOpenedPayload { token: enlarged_gen, store_version: crate::db::store_version() });
+        push_main_snapshot_async(app_handle);
         return;
     }
     let is_visible = is_main_visible() && main_win.is_visible().unwrap_or(false);
@@ -1296,6 +1500,8 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
     } else {
         save_target_window(app_handle);
         crate::paste::capture_selection_snapshot();
+        // Serialize against the background warmth loop (see swap branch).
+        let _present_guard = crate::vibrancy::hold_present_cycle();
         prepare_main_surface(app_handle, &main_win);
         // Idle discard / cold first open: re-present off-screen while still
         // cloaked so the uncloak ramp never composites a cold surface.
@@ -1316,6 +1522,7 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
         // Mirror overlay: re-suppress the DWM border after show while still
         // cloaked — a frame recalc between show and uncloak can repaint it.
         crate::vibrancy::set_window_border_suppressed(&main_win);
+        drop(_present_guard);
         let focus_res = main_win.set_focus();
         crate::paste::log_diag(&format!("[HOTKEY] main_win.show() -> {:?}, set_focus() -> {:?}, post-show is_visible={}", show_res, focus_res, main_win.is_visible().unwrap_or(false)));
         // Windows sometimes refuses the first SetForegroundWindow while the
@@ -1331,7 +1538,10 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
                 }
             }
         });
-        let _ = app_handle.emit("enlarged-opened", EnlargedOpenedPayload { token: enlarged_gen });
+        // Snapshot follows on a background thread (zero hotkey-thread cost);
+        // the reveal goes first so the paint gate starts immediately.
+        let _ = app_handle.emit("enlarged-opened", EnlargedOpenedPayload { token: enlarged_gen, store_version: crate::db::store_version() });
+        push_main_snapshot_async(app_handle);
     }
 }
 
@@ -1445,12 +1655,20 @@ pub fn hide_overlay_window(app: &AppHandle) {
     // ADDENDUM v36 B1: pre-serve overlay data at HIDE, not show. The next
     // show's hotkey path only emits the snapshot (zero DB work, mirroring
     // the main pipeline); the refresh happens here, off every critical path.
+    //
+    // Generation-guard the commit: do NOT hold the cache lock across the DB
+    // read (clipboard thread does DB → cache; nested cache → DB deadlocks).
+    // A capture during the read bumps OVERLAY_CACHE_GEN and wins.
     let app_clone = app.clone();
     std::thread::spawn(move || {
         if let Some(state) = app_clone.try_state::<crate::AppState>() {
+            let gen_before = OVERLAY_CACHE_GEN.load(Ordering::SeqCst);
             if let Ok(entries) = state.db.get_overlay_entries(250) {
-                *OVERLAY_PREWARM_CACHE.lock().unwrap() = Some(entries.clone());
-                crate::paste::log_diag("[HOTKEY] overlay pre-serve refreshed at hide");
+                if commit_overlay_refresh(entries, gen_before) {
+                    crate::paste::log_diag("[HOTKEY] overlay pre-serve refreshed at hide");
+                } else {
+                    crate::paste::log_diag("[HOTKEY] overlay pre-serve skipped (capture during read)");
+                }
             }
         }
     });

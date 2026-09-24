@@ -265,9 +265,15 @@ test('reveal parity - overlay pops with fast 30ms alpha ramp and clean reveal', 
     hotkey.includes('ramp_window_alpha(win.clone(), 0, 255, 30, expected_token, true);'),
     'overlay uncloaks with fast 30ms alpha ramp'
   );
+  // Adaptive reveal mask: warm pops at 30ms, cold keeps the 100ms cover.
+  // A fixed 30ms reflashed on skipped-rewarm opens; a fixed 100ms felt slow.
   assert.ok(
-    hotkey.includes('ramp_window_alpha(win.clone(), 0, 255, 100, expected_token, false);'),
-    'main ramp must stay 100ms'
+    hotkey.includes('ramp_window_alpha(win.clone(), 0, 255, ramp_ms, expected_token, false);'),
+    'main reveal must use the adaptive ramp duration'
+  );
+  assert.ok(
+    hotkey.includes('main_reveal_age_ms() < MAIN_WARM_WINDOW_MS'),
+    'the ramp must read the reveal clock before stamping it'
   );
   // Shared hide fade rule stays for main window.
   assert.ok(css.includes('opacity 90ms'), 'shared hide fades must stay at 90ms');

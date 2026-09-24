@@ -52,8 +52,8 @@ test('ADDENDUM v23 - Static Check: OS-alpha masking and ramp in Rust hotkey modu
     'uncloak_overlay_if_current must start fast 30ms ramp on uncloak'
   );
   assert.ok(
-    hotkeyRs.includes('ramp_window_alpha(win.clone(), 0, 255, 100, expected_token, false);'),
-    'uncloak_enlarged_if_current must set alpha 0 and start ramp on uncloak'
+    hotkeyRs.includes('ramp_window_alpha(win.clone(), 0, 255, ramp_ms, expected_token, false);'),
+    'uncloak_enlarged_if_current must set alpha 0 and start the adaptive reveal ramp on uncloak'
   );
   assert.ok(
     !hotkeyRs.includes('SWP_NOACTIVATE | SWP_SHOWWINDOW | size_flag'),
