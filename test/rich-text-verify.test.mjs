@@ -84,7 +84,10 @@ test('RichText VERIFY - sanitizer keeps author fidelity (incl. white-on-black)',
     assert.ok(unwrapMatch[1].includes(`'${tag}'`), `<${tag}> must be unwrapped (text preserved)`);
   }
   assert.ok(tsx.includes('parent.insertBefore'), 'unwrap must promote children in place');
-  assert.ok(tsx.includes('clean(parent)'), 'promoted children must be re-sanitized');
+  assert.ok(
+    /clean\(parent( as Element)?\)/.test(tsx),
+    'promoted children must be re-sanitized'
+  );
 });
 
 test('RichText VERIFY - preview card never clips (overflow visible both themes)', () => {

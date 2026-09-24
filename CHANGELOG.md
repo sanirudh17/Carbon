@@ -2,6 +2,20 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
+## [0.1.16] — 2026-09-24
+
+### Fixed
+- **Main-window capture pop-in on open** — every clipboard capture (plain insert, bump-to-top, and merge) now upserts into the main prewarm cache before the update is broadcast, and the backend pushes that snapshot to the main window on every open. The main list also upserts live while hidden (preserving the selected row), so a fresh copy is already at the top in the first frame instead of popping in a beat later. Filtered and search views still refetch so the active query is respected.
+- **Paint-gated reveal with no stale frames** — the uncloak now waits for the fresh list commit: the paint gate resets whenever an open snapshot or live capture changes the list head and re-stamps only after the commit lands (bounded by the gate's own recovery plus a short timeout). Opens with nothing new cost nothing and stay instant. The reveal carries the store version and the gate holds only when the store moved past what the window applied (overlay A2 parity), so fresh opens never wait.
+- **Main-window open speed at overlay parity** — full-history serialization left the hotkey thread for a background push; the idle-rewarm present cycle is skipped when the surface revealed seconds ago; the reveal ramp is adaptive (30ms warm pop, 100ms cold mask); identical snapshots and refetches skip their commits entirely (same arrays and selection objects back, so memoized rows and the preview bail out). A background warmth loop re-presents the hidden surface every 45 seconds so long-idle opens stay warm instead of decaying cold, and all three show sites hold the present-cycle lock across their native operations so the loop can never interleave a real show. Rapid open/close hammering registers every press.
+- **Residual white open-flash** — the uncloak flushes, holds at alpha 0 for one frame (~20ms), and flushes again before the fade starts, so DWM has composed real pixels first. Invisible (alpha is zero throughout) and a mid-settle hide still cancels cleanly through the ramp's token guard.
+- **Rich-text inline-code chip legibility (e.g. Qwen captures)** — mid-gray chip foregrounds washed out because the contrast model saw only the nearest inline background (the site's dark bubble) while the engine painted Carbon's own near-white chip under them. The model now knows the card chip backgrounds for `code`/`pre`, and every background layer composites over the effective backdrop below it (recursively from the card up), so translucent chips over dark regions pick light ink and chips over light surfaces pick dark ink. Failing pairs measured 2.4:1 and 1.23:1 before the fix and 13.3:1 / 16.6:1 after, verified headless against the real card CSS. Author colors that genuinely pass are preserved; backgrounds are never rewritten.
+
+### Changed
+- The `enlarged-opened` payload now carries the store version; the main window tracks its applied-cache version (+1 per applied push/edit, sync on full unfiltered re-reads, never blind-incremented).
+- The offscreen present cycle is generation-guarded and reports whether it genuinely presented; a raced cycle restores position without hiding or re-cloaking, so a background refresh can never swallow an open or strand the visibility flags.
+- Suite now covers the open push, paint gate, version gating, commit short-circuits, background push ordering, rewarm skip, adaptive ramp, settle order, and warmth loop (147 JS / 52 Rust tests green).
+
 ## [0.1.15] — 2026-09-23
 
 ### Fixed
