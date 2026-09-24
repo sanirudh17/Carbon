@@ -155,6 +155,27 @@ const FRAGMENTS = {
     '<p><font color="#cccccc">legacy font run</font> and ' +
     '<span style="color:hsl(0,0%,80%)">hsl run</span></p>' +
     '<table><tr><th>H</th></tr><tr><td>cell</td></tr></table></div>',
+  // Qwen-chat capture: dark bubble kept, inline mid-gray <code> foregrounds,
+  // chip backgrounds class-only (stripped). Carbon's light-card chip (#f3f4f6)
+  // replaces them — gray-on-near-white washes out while the model saw
+  // gray-on-bubble and passed it.
+  QWEN_code_chips:
+    '<div style="background-color:#151619;color:#e8eaed">' +
+    '<ul><li>Do NOT touch <code style="color:#9aa0a6">scripts/build-desktop-artifact.ts</code>' +
+    ' or the Swift <code style="color:#9aa0a6">apps/desktop/native/appsnap/</code> directory.</li>' +
+    '<li>The macOS-specific logic is already gated by the <code style="color:#6b7280">darwin</code>' +
+    ' platform check, so Windows builds will naturally skip the helper compilation.</li></ul></div>',
+  // Same chips as nested spans with TRANSLUCENT chip backgrounds (chat
+  // renderers emit these): the backdrop is white-12% OVER the dark bubble,
+  // not the card. An alpha-blind model reads the layer as opaque white and
+  // "fixes" gray text to dark ink — dark-on-dark-chip in the engine.
+  QWEN_chip_spans:
+    '<div style="background-color:#151619;color:#e8eaed">' +
+    '<ul><li>Do NOT touch ' +
+    '<span style="background-color:rgba(255,255,255,0.12);border-radius:4px;padding:0 4px;">' +
+    '<span style="color:#9aa0a6">scripts/build-desktop-artifact.ts</span></span> or the Swift ' +
+    '<span style="background-color:rgba(255,255,255,0.12);border-radius:4px;padding:0 4px;">' +
+    '<span style="color:#6b7280">darwin</span></span> directory.</li></ul></div>',
 };
 
 // CF_HTML with byte-correct offsets (offsets-only: no markers, forces the
@@ -211,6 +232,8 @@ test('v29-B3 - computed contrast >= 4.5:1 for every text node (matrix)', () => {
     F5_class: 'light',
     F6_nested: 'light', // carries its own black backdrop -> light card, per-node overrides fix the traps
     FAIL_dark_generator: 'dark',
+    QWEN_code_chips: 'light', // dark bubble kept on the light card; chips must survive Carbon's chip bg
+    QWEN_chip_spans: 'light', // translucent chips composite over the bubble, never the card
   };
   // Opposite-card runs are valid ONLY for fully background-explicit
   // fragments (F1: explicit white bg + ink; F6: explicit black/white bgs).

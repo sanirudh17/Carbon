@@ -704,9 +704,10 @@ fn process_clipboard_change(
                                 if let Ok(merged_item) = db_state.append_to_clip(last_id, new_txt) {
                                     *LAST_CAPTURED_CLIP.lock().unwrap() =
                                         Some((last_id.clone(), now, last_type.clone()));
+                                    crate::hotkey::note_overlay_clip(&merged_item);
+                                    crate::hotkey::note_main_clip(&merged_item);
                                     let _ = app_handle.emit("clipboard-updated", &merged_item);
                                     let _ = app_handle.emit("clip-merged", &merged_item);
-                                    crate::hotkey::note_overlay_clip(&merged_item);
                                     let _ = db_state.trim_history(settings.retention_days, settings.max_entries);
                                     handled = true;
                                 }
@@ -729,8 +730,9 @@ fn process_clipboard_change(
                         let _ = db_state.trim_history(settings.retention_days, settings.max_entries);
                         *LAST_CAPTURED_CLIP.lock().unwrap() =
                             Some((existing_bumped.id.clone(), now, existing_bumped.content_type.clone()));
-                        let _ = app_handle.emit("clipboard-updated", &existing_bumped);
                         crate::hotkey::note_overlay_clip(&existing_bumped);
+                        crate::hotkey::note_main_clip(&existing_bumped);
+                        let _ = app_handle.emit("clipboard-updated", &existing_bumped);
                         handled = true;
                     }
                 }
@@ -741,8 +743,9 @@ fn process_clipboard_change(
                         let _ = db_state.trim_history(settings.retention_days, settings.max_entries);
                         *LAST_CAPTURED_CLIP.lock().unwrap() =
                             Some((new_item.id.clone(), now, new_item.content_type.clone()));
-                        let _ = app_handle.emit("clipboard-updated", &new_item);
                         crate::hotkey::note_overlay_clip(&new_item);
+                        crate::hotkey::note_main_clip(&new_item);
+                        let _ = app_handle.emit("clipboard-updated", &new_item);
                     }
                 }
                 crate::paste::set_selected_text_snapshot(None);

@@ -382,10 +382,29 @@ static PRESENTED_OVERLAY: std::sync::atomic::AtomicBool = std::sync::atomic::Ato
 /// (that cycle is already warming the surface).
 static PRESENT_CYCLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Show-path hold on the present mutex: the background warmth loop can never
+/// park/hide mid-show while this guard lives (it skips the tick instead).
+/// Bounded: the loop's cycle is ~40ms, so a racing show waits at most that.
+pub(crate) fn hold_present_cycle() -> std::sync::MutexGuard<'static, ()> {
+    PRESENT_CYCLE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Park off-screen, physically uncloak, show-without-activate, settle for a
 /// real DWM present, hide, restore, re-cloak. Logical flags stay cloaked.
 /// Shared by boot prewarm and the main show-path idle rewarm.
-fn offscreen_present_cycle(win: &tauri::WebviewWindow, label: &str, settle_ms: u64) {
+///
+/// `gen_guard`: expected enlarged show generation for background callers.
+/// A real show that raced the cycle owns cloak state from here on: restore
+/// position but do NOT hide and do NOT re-cloak (re-cloaking a revealed
+/// window while the flag says revealed is the "never appears again" state),
+/// and report false so no warmth is stamped. Boot passes None (legacy path).
+/// Returns true when the surface genuinely re-presented.
+fn offscreen_present_cycle(
+    win: &tauri::WebviewWindow,
+    label: &str,
+    settle_ms: u64,
+    gen_guard: Option<u64>,
+) -> bool {
     #[cfg(target_os = "windows")]
     {
         use std::sync::atomic::Ordering;
@@ -393,7 +412,7 @@ fn offscreen_present_cycle(win: &tauri::WebviewWindow, label: &str, settle_ms: u
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOWNOACTIVATE};
         let Ok(hwnd) = win.hwnd() else {
-            return;
+            return false;
         };
         let orig = win.outer_position().ok();
         let h_raw: isize = hwnd.0 as isize;
@@ -437,6 +456,35 @@ fn offscreen_present_cycle(win: &tauri::WebviewWindow, label: &str, settle_ms: u
             use windows::Win32::Graphics::Dwm::DwmFlush;
             let _ = DwmFlush();
         }
+        // Raced by a real show (or revealed mid-cycle): the show path owns
+        // the window now — restore position, touch nothing else, report cold.
+        // Hiding here would swallow the user's open; re-cloaking would strand
+        // it invisible with the flag claiming revealed.
+        let raced = gen_guard
+            .map(|g| {
+                crate::hotkey::enlarged_show_gen() != g
+                    || !crate::hotkey::MAIN_CLOAKED.load(Ordering::SeqCst)
+            })
+            .unwrap_or(false);
+        if raced {
+            if let Some(p) = orig {
+                unsafe {
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+                    };
+                    let _ = SetWindowPos(
+                        h,
+                        HWND(std::ptr::null_mut()),
+                        p.x,
+                        p.y,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
+                }
+            }
+            return false;
+        }
         unsafe {
             let _ = ShowWindow(h, SW_HIDE);
         }
@@ -462,9 +510,12 @@ fn offscreen_present_cycle(win: &tauri::WebviewWindow, label: &str, settle_ms: u
         crate::hotkey::set_window_cloaked(win, true);
         let _ = label;
         let _ = Ordering::SeqCst;
+        return true;
     }
     #[cfg(not(target_os = "windows"))]
-    let _ = (win, label, settle_ms);
+    let _ = (win, label, settle_ms, gen_guard);
+    #[cfg(not(target_os = "windows"))]
+    false
 }
 
 pub fn prewarm_first_paint(app: &AppHandle, only: Option<&str>) {
@@ -518,7 +569,7 @@ pub fn prewarm_first_paint(app: &AppHandle, only: Option<&str>) {
             // Main's EnlargedWindow tree is heavy — give it time to reach a
             // real first present; the overlay frame is much smaller.
             let settle = if label == "main" { 200 } else { 80 };
-            offscreen_present_cycle(&win, label, settle);
+            let _ = offscreen_present_cycle(&win, label, settle, None);
         }
     }
     #[cfg(not(target_os = "windows"))]
@@ -531,8 +582,13 @@ pub fn prewarm_first_paint(app: &AppHandle, only: Option<&str>) {
 /// composites a cold frame (the residual white flash). Run the same
 /// park→present→re-cloak cycle while still logically cloaked, before show.
 /// Warm re-present is one-to-two frames; first-ever open waits longer for a
-/// real present. `try_lock`: if the boot cycle is mid-flight, skip (it is
-/// already warming this surface).
+/// real present.
+///
+/// LOCK CONTRACT: the caller must hold `hold_present_cycle()` across rewarm
+/// AND the subsequent native show — the background warmth loop skips its
+/// tick while held, so it can never park/hide mid-show. (A blocking hold is
+/// correct here: the loop's cycle is ~40ms, so a racing show waits at most
+/// that, instead of risking a swallowed open.)
 pub fn rewarm_main_surface(app: &AppHandle) -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -543,21 +599,58 @@ pub fn rewarm_main_surface(app: &AppHandle) -> bool {
         let Some(win) = app.get_webview_window("main") else {
             return false;
         };
-        let Ok(_guard) = PRESENT_CYCLE.try_lock() else {
+        // Idle discard takes minutes: a live surface skips the 32-120ms
+        // cycle so rapid toggles open instantly. First-ever / long-idle
+        // opens still pay it (no cold-frame flash).
+        if crate::hotkey::main_surface_warm() {
             return false;
-        };
+        }
         let already = PRESENTED_MAIN.load(Ordering::SeqCst);
         let settle = if already { 32 } else { 120 };
         crate::paste::log_diag(&format!(
             "[MAIN_SURFACE] rewarm off-screen present (presented={}, settle={}ms)",
             already, settle
         ));
-        offscreen_present_cycle(&win, "main", settle);
-        true
+        offscreen_present_cycle(&win, "main", settle, Some(crate::hotkey::enlarged_show_gen()))
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = app;
         false
     }
+}
+
+/// Background surface-warmth loop (main only): every MAIN_WARM_LOOP_MS, if
+/// the main window is hidden from the user, run one light offscreen present
+/// and stamp the warmth clock. Long-idle opens then stay on the warm path
+/// (30ms pop, no cold flash, no surprise fade) instead of decaying cold.
+/// Hands off a revealed window (logical cloak flag — never native
+/// is_visible, which stays true under the cloak by design). try_lock:
+/// never contend a live show — skip the tick instead. Generation-guarded:
+/// a show that races the cycle aborts the stamp (the cycle itself restores
+/// position and never re-cloaks a raced window).
+pub fn spawn_main_warmth_loop(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(
+            crate::hotkey::MAIN_WARM_LOOP_MS,
+        ));
+        #[cfg(target_os = "windows")]
+        {
+            use std::sync::atomic::Ordering;
+            let Ok(_guard) = PRESENT_CYCLE.try_lock() else {
+                continue;
+            };
+            if !crate::hotkey::MAIN_CLOAKED.load(Ordering::SeqCst) {
+                continue;
+            }
+            let Some(win) = app.get_webview_window("main") else {
+                continue;
+            };
+            let gen_before = crate::hotkey::enlarged_show_gen();
+            if offscreen_present_cycle(&win, "main", 32, Some(gen_before)) {
+                crate::hotkey::note_main_warm();
+            }
+        }
+    });
 }

@@ -64,16 +64,23 @@ async fn get_all_clips(
         && !pinned_only.unwrap_or(false)
         && collection_id.is_none();
     if is_unfiltered {
+        // Gen before the (possible) miss-path query too: a capture during the
+        // read must not be committed over by this snapshot.
+        let gen_before = crate::hotkey::main_cache_gen();
         if let Some(cached) = crate::hotkey::MAIN_PREWARM_CACHE.lock().unwrap().clone() {
-            // Refresh cache in background for next open
+            // Refresh cache in background for next open (gen-guarded so a
+            // concurrent note_main_clip upsert is never clobbered).
             let db = state.db.clone();
             std::thread::spawn(move || {
                 if let Ok(fresh) = db.get_all_entries(None, None, false, None) {
-                    *crate::hotkey::MAIN_PREWARM_CACHE.lock().unwrap() = Some(fresh);
+                    crate::hotkey::commit_main_refresh(fresh, gen_before);
                 }
             });
             return Ok(cached);
         }
+        let res = state.db.get_all_entries(None, None, false, None)?;
+        let _ = crate::hotkey::commit_main_refresh(res.clone(), gen_before);
+        return Ok(res);
     }
     let res = state.db.get_all_entries(
         search.as_deref(),
@@ -81,9 +88,6 @@ async fn get_all_clips(
         pinned_only.unwrap_or(false),
         collection_id.as_deref(),
     )?;
-    if is_unfiltered {
-        *crate::hotkey::MAIN_PREWARM_CACHE.lock().unwrap() = Some(res.clone());
-    }
     Ok(res)
 }
 
@@ -1150,7 +1154,9 @@ pub fn run() {
                 // Same pre-show surface discipline as the hotkey path: a cold
                 // or idle-discarded surface must never composite white during
                 // the reveal ramp, and the wm-hidden mask must be on until the
-                // frontend paint gate lifts it.
+                // frontend paint gate lifts it. Guarded like the hotkey path
+                // so the background warmth loop can never interleave.
+                let _present_guard = crate::vibrancy::hold_present_cycle();
                 hotkey::prepare_main_surface(app, &win);
                 let _ = win.eval("document.documentElement.classList.add('wm-hidden')");
                 if win.is_minimized().unwrap_or(false) {
@@ -1158,12 +1164,15 @@ pub fn run() {
                 }
                 let _ = win.show();
                 hotkey::set_window_cloaked(&win, true);
+                drop(_present_guard);
                 let _ = win.set_focus();
                 // Route through the same reveal choreography as the hotkey
                 // path so the frontend lifts its wm-hidden mask (otherwise a
-                // second-launch focus leaves a stuck blank window).
+                // second-launch focus leaves a stuck blank window). Reveal
+                // first, snapshot on a background thread (zero blocking).
                 let enlarged_gen = hotkey::next_enlarged_show_gen();
-                let _ = app.emit("enlarged-opened", hotkey::EnlargedOpenedPayload { token: enlarged_gen });
+                let _ = app.emit("enlarged-opened", hotkey::EnlargedOpenedPayload { token: enlarged_gen, store_version: crate::db::store_version() });
+                hotkey::push_main_snapshot_async(app);
             } else if let Some(win) = app.get_webview_window("overlay") {
                 let _ = win.show();
                 let _ = win.set_focus();
@@ -1368,6 +1377,10 @@ pub fn run() {
                         }
                     });
                 }
+                // Surface-warmth loop: re-present the hidden main surface every
+                // 45s so long-idle opens stay on the warm path (fast pop, no
+                // cold flash, no surprise fade) instead of decaying cold.
+                crate::vibrancy::spawn_main_warmth_loop(&handle);
             }
 
             // Build Tray Icon
@@ -1451,11 +1464,20 @@ pub fn run() {
                     // emitted overlay-data + overlay-snippets synchronously after
                     // show(); this is a safety refresh for non-hotkey focus (e.g.
                     // clicking the overlay or OS refocus).
+                    //
+                    // Generation-guarded commit (same as hide pre-serve): never
+                    // hold the cache lock across the DB read — clipboard does
+                    // DB → cache and would deadlock against cache → DB.
                     let app_handle = window.app_handle().clone();
                     std::thread::spawn(move || {
                         if let Some(state) = app_handle.try_state::<AppState>() {
+                            let gen_before = crate::hotkey::overlay_cache_gen();
                             if let Ok(entries) = state.db.get_overlay_entries(250) {
+                                let fresh = crate::hotkey::commit_overlay_refresh(entries.clone(), gen_before);
                                 let _ = app_handle.emit("overlay-data", &entries);
+                                if !fresh {
+                                    paste::log_diag("[FOCUS] overlay pre-serve skipped (capture during read)");
+                                }
                             }
                             if let Ok(snips) = state.db.list_snippets() {
                                 let _ = app_handle.emit("overlay-snippets", &snips);

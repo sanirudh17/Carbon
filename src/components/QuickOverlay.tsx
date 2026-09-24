@@ -282,6 +282,28 @@ export const QuickOverlay: React.FC = () => {
     }
   };
 
+  // Live mirror of the cached list for open-path staleness checks (the
+  // once-registered event handlers below close over first-render state).
+  const itemsRef = useRef<ClipItem[]>([]);
+  // v37: post-reveal freshness backstop (single 150ms idle timer, cancelled
+  // on hide). The reveal itself carries zero invokes — Rust pushed
+  // overlay-data + overlay-snippets with the open — exactly like main.
+  const backstopRef = useRef<number | null>(null);
+  // v36 A2/A3: cache version = number of store mutations applied to the
+  // local list. Pushes/edits bump +1 (one mutation each). Full re-reads
+  // (fetchItems, overlay-data, __carbonSetData) SYNC to lastStoreVersionRef
+  // instead of +1 — a blind increment invented a lead past the store and
+  // absorbed a later missed push into a false "fresh" open.
+  // May lag the store on coalesced fetches (safe: falls to refresh, never
+  // to stale) and may lead only when pushes were applied past lastStore
+  // (safe: the next open's store_version catches up).
+  const cacheVersionRef = useRef(0);
+  const bumpCacheVersion = () => {
+    cacheVersionRef.current += 1;
+  };
+  const lastStoreVersionRef = useRef(0);
+  itemsRef.current = items;
+
   const fetchItems = async () => {
     try {
       const res = await invoke<ClipItem[]>('get_all_clips', {
@@ -292,8 +314,13 @@ export const QuickOverlay: React.FC = () => {
       });
       setItems(res || []);
       setSelectedIndex(0);
-      // v36 A2: a full re-read absorbs every mutation to date.
-      bumpCacheVersion();
+      // v36 A2: a full re-read absorbs every mutation to date. Sync (not +1)
+      // to the last observed store version — a blind +1 invented a lead that
+      // absorbed exactly one missed clipboard-updated push (false-fresh open).
+      cacheVersionRef.current = Math.max(
+        cacheVersionRef.current,
+        lastStoreVersionRef.current
+      );
     } catch (err) {
       console.error('Failed to fetch clips:', err);
     }
@@ -311,27 +338,6 @@ export const QuickOverlay: React.FC = () => {
 
   const searchRef = useRef(search);
   searchRef.current = search;
-
-  // Live mirror of the cached list for open-path staleness checks (the
-  // once-registered event handlers below close over first-render state).
-  const itemsRef = useRef<ClipItem[]>([]);
-  // v37: post-reveal freshness backstop (single 150ms idle timer, cancelled
-  // on hide). The reveal itself carries zero invokes — Rust pushed
-  // overlay-data + overlay-snippets with the open — exactly like main.
-  const backstopRef = useRef<number | null>(null);
-  // v36 A2/A3: cache version, bumped once per applied store mutation, and
-  // the last store_version seen on the open payload. The open path compares
-  // `store version > cache version`; a stale open falls to the post-reveal
-  // idle backstop (never a pre-gate wait — v37 instant gate stays intact).
-  // May lag the store on coalesced fetches (safe: falls to refresh, never
-  // to stale) and may lead right after a re-read (safe: cache is fresh by
-  // construction).
-  const cacheVersionRef = useRef(0);
-  const bumpCacheVersion = () => {
-    cacheVersionRef.current += 1;
-  };
-  const lastStoreVersionRef = useRef(0);
-  itemsRef.current = items;
 
   useEffect(() => {
     if (skipSearchFetchRef.current) {
@@ -847,7 +853,12 @@ export const QuickOverlay: React.FC = () => {
       if (Array.isArray(data)) {
         setItems(data);
         setSelectedIndex(0);
-        bumpCacheVersion();
+        // Same accounting as fetchItems/overlay-data: sync to the last known
+        // store version, never invent a +1 lead (false-fresh opens).
+        cacheVersionRef.current = Math.max(
+          cacheVersionRef.current,
+          lastStoreVersionRef.current
+        );
       }
     };
 
@@ -902,16 +913,31 @@ export const QuickOverlay: React.FC = () => {
         // A prewarm snapshot must never clobber clips already applied via
         // live clipboard-updated pushes while hidden (stale open → visible
         // repopulate). Apply when cold, when the snapshot contains our
-        // current head (equal/fresher), or when it has strictly more rows.
-        // Otherwise keep the live list — it is newer than the snapshot.
+        // current head (equal/fresher), or when it has strictly more rows
+        // AND its head is not older than ours (a longer stale snapshot must
+        // not swallow a newer live-pushed head). Otherwise keep the live
+        // list — it is newer than the snapshot.
         const local = itemsRef.current;
         const localHead = local[0]?.id;
         const snapshotHasLocalHead = Boolean(localHead) && e.payload.some((p) => p.id === localHead);
-        const snapshotFresher = local.length === 0 || snapshotHasLocalHead || e.payload.length > local.length;
+        const localHeadCreated = local[0]?.created_at;
+        const snapHeadCreated = e.payload[0]?.created_at;
+        const snapHeadNotOlder =
+          !localHeadCreated || !snapHeadCreated || snapHeadCreated >= localHeadCreated;
+        const snapshotFresher =
+          local.length === 0 ||
+          snapshotHasLocalHead ||
+          (e.payload.length > local.length && snapHeadNotOlder);
         if (snapshotFresher) {
           setItems(e.payload);
           setSelectedIndex(0);
-          bumpCacheVersion();
+          // Full snapshot absorbs mutations to date; sync to the open's store
+          // version so a prior +1 gap cannot absorb a later missed push
+          // (false-fresh open). Never invent a lead past the store version.
+          cacheVersionRef.current = Math.max(
+            cacheVersionRef.current,
+            lastStoreVersionRef.current
+          );
         }
       }
     });

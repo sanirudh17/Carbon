@@ -501,9 +501,99 @@ function hasDirectText(el: Element): boolean {
   return false;
 }
 
+/** Carbon's own chip backgrounds (index.css) per card theme. Must stay in
+ * sync with `.rich-doc-light/dark code|pre` — the contrast test extracts the
+ * real rules, so drift fails loudly there instead of washing chips. */
+const CARBON_CHIP_BG: Record<'code' | 'pre', { light: string; dark: string }> = {
+  code: { light: '#f3f4f6', dark: 'rgba(255, 255, 255, 0.08)' },
+  pre: { light: '#f9fafb', dark: 'rgba(255, 255, 255, 0.05)' },
+};
+
+/** Channels + alpha for hex / rgb() / rgba() / hsl() / hsla() / named. */
+function parseChannels(css: string): { r: number; g: number; b: number; a: number } | null {
+  const c = css.trim().toLowerCase();
+  const named: Record<string, string> = {
+    black: '#000000', white: '#ffffff', transparent: 'rgba(0,0,0,0)',
+  };
+  const src = named[c] ?? c;
+  const hm = src.match(/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/);
+  if (hm) {
+    let h = hm[1];
+    if (h.length === 3 || h.length === 4) h = h.split('').map((x) => x + x).join('');
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    const a = h.length === 8 ? parseInt(h.slice(6, 8), 16) / 255 : 1;
+    return { r, g, b, a };
+  }
+  // Comma form: rgb(1, 2, 3[, a]). Space form: rgb(1 2 3[ / a]).
+  const m = src.match(/^rgba?\(\s*([\d.]+)(?:\s*,\s*|\s+)([\d.]+)(?:\s*,\s*|\s+)([\d.]+)(?:\s*[,\/]\s*([\d.]+))?\s*\)$/);
+  if (m) {
+    return {
+      r: Number(m[1]), g: Number(m[2]), b: Number(m[3]),
+      a: m[4] === undefined ? 1 : Number(m[4]),
+    };
+  }
+  // hsl()/hsla() (comma or space separated, any angle unit).
+  const hh = src.match(/^hsla?\(\s*([\d.]+)(deg|rad|grad|turn)?\s*(?:,\s*|\s+)([\d.]+)%\s*(?:,\s*|\s+)([\d.]+)%(?:\s*[,\/]\s*([\d.]+))?\s*\)$/);
+  if (hh) {
+    let h = Number(hh[1]);
+    const unit = hh[2] || 'deg';
+    if (unit === 'rad') h = (h * 180) / Math.PI;
+    else if (unit === 'grad') h = h * 0.9;
+    else if (unit === 'turn') h = h * 360;
+    h = ((h % 360) + 360) % 360;
+    const s = Math.min(1, Math.max(0, Number(hh[3]) / 100));
+    const l = Math.min(1, Math.max(0, Number(hh[4]) / 100));
+    const k = (n: number) => (n + h / 30) % 12;
+    const aa = s * Math.min(l, 1 - l);
+    const f2 = (n: number) => l - aa * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    return {
+      r: Math.round(f2(0) * 255), g: Math.round(f2(8) * 255), b: Math.round(f2(4) * 255),
+      a: hh[5] === undefined ? 1 : Number(hh[5]),
+    };
+  }
+  const lum = cssColorLuminance(src);
+  if (lum === null) return null;
+  // Named color without channels: treat as opaque via luminance-matched gray.
+  const v = Math.round(255 * Math.pow(lum, 1 / 2.2));
+  return { r: v, g: v, b: v, a: 1 };
+}
+
+/** Effective opaque backdrop: composite a (possibly translucent) background
+ * over the opaque backdrop below. Opaque values pass through untouched;
+ * unparseable values (gradients, var(), urls) inherit through. */
+function compositeOverBg(bgCss: string, belowCss: string): string {
+  try {
+    const bg = parseChannels(bgCss);
+    if (!bg) return belowCss;
+    if (!(bg.a < 1)) return bgCss;
+    const base = parseChannels(belowCss);
+    if (!base) return bgCss;
+    const mix = (f: number, b: number) => Math.round(bg.a * f + (1 - bg.a) * b);
+    return `rgb(${mix(bg.r, base.r)}, ${mix(bg.g, base.g)}, ${mix(bg.b, base.b)})`;
+  } catch {
+    return belowCss;
+  }
+}
+
 export function enforceRichContrast(root: Element, card: RichCardTheme): number {
   let overrides = 0;
-  const visit = (el: Element, inhFg: string, nearBg: string): void => {
+  // Carbon paints its own chip backgrounds UNDER author inline colors
+  // (index.css): `.rich-doc-light code/pre` and `.rich-doc-dark code/pre`.
+  // The model used to see only the nearest INLINE background — typically the
+  // site's dark bubble — so a mid-gray author fg "passed" against near-black
+  // while the engine rendered it on a near-white chip (washed Qwen chips).
+  // Model the chip exactly when no nearer inline background exists (inline
+  // style beats stylesheets in the engine, so an inline bg stays
+  // authoritative). Every declared layer composites over the EFFECTIVE
+  // backdrop below (recursively, from the card up) — a translucent chip over
+  // a dark bubble is dark in the engine, and compositing over the card would
+  // "fix" its text to dark ink: dark-on-dark-chip (the 1.23:1 span trap).
+  const cardLum = cssColorLuminance(card.bg);
+  const themeKey = cardLum !== null && cardLum < 0.35 ? 'dark' : 'light';
+  const visit = (el: Element, inhFg: string, nearEffBg: string, inChip: boolean): void => {
+    const tag = el.tagName.toLowerCase();
     const styleAttr = el.getAttribute('style') || '';
     // Attribute backstop: sanitize folds color/bgcolor into style, but
     // fragments arriving via other paths (markdown, tests) may still carry
@@ -512,24 +602,33 @@ export function enforceRichContrast(root: Element, card: RichCardTheme): number 
       parseInlineColor(inlineDecl(styleAttr, 'color')) ??
       parseInlineColor(el.getAttribute('color')) ??
       inhFg;
-    const ownBg =
+    const ownInlineBg =
       parseInlineBackground(inlineDecl(styleAttr, 'background-color')) ??
       parseInlineBackground(inlineDecl(styleAttr, 'background')) ??
-      parseInlineBackground(el.getAttribute('bgcolor')) ??
-      nearBg;
+      parseInlineBackground(el.getAttribute('bgcolor'));
+    const carbonChip =
+      !ownInlineBg && !inChip && (tag === 'code' || tag === 'pre')
+        ? CARBON_CHIP_BG[tag][themeKey]
+        : null;
+    const declaredBg = ownInlineBg ?? carbonChip;
+    // Invariant: ownEffBg is always opaque (declared layers composite over
+    // the effective backdrop below; unparseable layers inherit through).
+    // Opaque chains are byte-identical to the old nearest-wins model.
+    const ownEffBg = declaredBg ? compositeOverBg(declaredBg, nearEffBg) : nearEffBg;
     let effFg = ownFg;
-    const ratio = contrastRatio(ownFg, ownBg);
+    const ratio = contrastRatio(ownFg, ownEffBg);
     if (ratio !== null && ratio < 4.5 && hasDirectText(el)) {
-      const pick = pickContrastingFg(ownBg, card.ink);
+      const pick = pickContrastingFg(ownEffBg, card.ink);
       if (pick && pick.toLowerCase() !== ownFg.toLowerCase()) {
         (el as HTMLElement).style.color = pick;
         effFg = pick;
         overrides++;
       }
     }
-    for (const child of Array.from(el.children)) visit(child, effFg, ownBg);
+    const childChip = inChip || tag === 'code' || tag === 'pre';
+    for (const child of Array.from(el.children)) visit(child, effFg, ownEffBg, childChip);
   };
-  for (const child of Array.from(root.children)) visit(child, card.ink, card.bg);
+  for (const child of Array.from(root.children)) visit(child, card.ink, card.bg, false);
   return overrides;
 }
 
