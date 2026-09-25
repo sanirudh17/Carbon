@@ -1,11 +1,11 @@
 {
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVROE8ycWd2aWV2MzcvQnp6YzJEQnI0djl3N3lvaXd0Qkw5YmxIME5DN051anE1bDJCMm1uQkpmNjI1TURPWFU0RHU0RjRQOGVoNkl6cERlKzNiMW1TbGc4WUNlS1JTNXdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwMTc3MTcwCWZpbGU6Q2FyYm9uXzAuMS4xNV94NjQtc2V0dXAuZXhlCnBDTE1EZlVjNFl4Nmp3ekx1bTZqejlwbzZBdzFFSUJqWWhKOWtzZEFseHpBWnZJRTNzSVZuM3c5VitNYm5lQ1Y1ZzRkUzdhNTFUTlBBeGZYNkJRYUJRPT0K",
-      "url": "https://github.com/sanirudh17/Carbon/releases/download/v0.1.15/Carbon_0.1.15_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVROE8ycWd2aWV2M3dwUmRzcmd3dTdLWWRzdnFDUnVZS3Z0TE9JOVhmeElTY0hteVdoNVFMUGM5UGpFOVJPYnp4M0lGbFlzWmUzc2VVUXpzOGMyVU5kWTl5SWpaMlpIOWdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwMjcwNTkzCWZpbGU6Q2FyYm9uXzAuMS4xNl94NjQtc2V0dXAuZXhlClU4T1lxTGoreWRSWjBHVlhTMHpINFpobUdoSzFkRGNLcUFSOUNHQkZrYkdvNTVKaGJtMFlGcDVXeFJmeFBVQ2xWa2VRNkNCeW5NNGN5QjZINnpRdUR3PT0K",
+      "url": "https://github.com/sanirudh17/Carbon/releases/download/v0.1.16/Carbon_0.1.16_x64-setup.exe"
     }
   },
-  "pub_date": "2026-09-23T15:27:08Z",
-  "version": "0.1.15",
-  "notes": "Carbon v0.1.15: residual main-window white flash on first open and after idle (off-screen rewarm + label-scoped first present), rich-text content loss and preview clipping, overlay stale rows after capture, DWM hairline on show. See the release notes below for the full changelog."
+  "pub_date": "2026-09-25T13:39:07Z",
+  "version": "0.1.16",
+  "notes": "Carbon v0.1.16: main-window instant open with paint-gated reveal, overlay-fast open speed, residual white-flash elimination, rich-text chip legibility. See the release notes below for the full changelog."
 }
