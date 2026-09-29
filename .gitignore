@@ -37,5 +37,5 @@ src-tauri/target/release/bundle/
 .env
 .env.local
 
-# Updater signing key (private — never commit)
-.updater-key
+# Updater signing keys (private — never commit)
+.updater-key*
