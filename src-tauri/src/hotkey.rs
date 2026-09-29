@@ -37,9 +37,16 @@ static OVERLAY_HIDE_ACK: AtomicU64 = AtomicU64::new(0);
 /// (overlay_painted / enlarged_painted), with a timeout fallback so a dead
 /// renderer can never leave a window stuck invisible.
 ///
-/// This replaces the old alpha-zero gate (WS_EX_LAYERED + LWA_ALPHA): toggling
-/// the layered flag rebuilds the acrylic composition surface, and that
-/// rebuild was itself a white frame in glass mode — the flash on every open.
+/// The cloak ALSO parks the OS-alpha mask at 0 (WS_EX_LAYERED + LWA_ALPHA)
+/// as a belt for the transitions the cloak itself cannot cover: ShowWindow /
+/// SetWindowPos / unminimize can clear DWMWA_CLOAK on some drivers (and the
+/// cold-boot cloak can transiently fail), and an unmasked window then
+/// composites its raw (white) surface for a frame — the white flash at
+/// startup when the main window's taskbar icon first appears, and the
+/// off-screen warm-up cycles' re-present. The layered bit is installed on
+/// the first cloak and never removed: the reveal path goes alpha 0 →
+/// uncloak → ramp to 255 layered throughout, so the acrylic-surface rebuild
+/// a toggle would trigger never lands on a visible frame.
 #[cfg(target_os = "windows")]
 pub fn set_window_cloaked(window: &tauri::WebviewWindow, cloaked: bool) {
     use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
@@ -76,14 +83,19 @@ pub fn set_window_cloaked(window: &tauri::WebviewWindow, cloaked: bool) {
             cloaked
         ));
     }
-    // While cloaked the window is excluded from DWM composition: restore the
-    // non-layered steady state here (invisibly) so the visible lifetime never
-    // toggles WS_EX_LAYERED — each toggle rebuilds the acrylic surface and
-    // that rebuild presents a white frame in glass mode. Guarded on success:
-    // a failed cloak may leave the window visible, where stripping would
-    // rebuild right on screen.
+    // While cloaked the window is excluded from DWM composition: park the
+    // OS-alpha mask at 0 (invisibly). The mask must already be in place
+    // before every ShowWindow / SetWindowPos / unminimize transition — those
+    // can clear the cloak on some drivers, and an unmasked window then
+    // composites its raw (white) surface for a frame: the cold-boot flash
+    // when the main window first appears, and the off-screen warm-up cycles'
+    // re-present. Layered-from-here-on also means the bit is NEVER toggled
+    // during the visible lifetime (reveal goes 0 → uncloak → ramp 255), so
+    // the acrylic-surface rebuild a toggle would trigger can't land on a
+    // visible frame. Guarded on success: a failed cloak may leave the window
+    // visible, where applying the mask would pop it invisible mid-frame.
     if cloaked && cloak_ok {
-        clear_window_layered(window);
+        set_window_alpha(window, 0);
     }
     // Single choke point for the logical-visibility flags: every cloak and
     // every painted-ack/fallback uncloak flows through here, so
@@ -208,9 +220,10 @@ pub fn set_window_alpha(window: &tauri::WebviewWindow, alpha: u8) {
                 // rebuilt the DWM acrylic composition surface on EVERY
                 // reveal — a white frame in glass mode (the old every-open
                 // flash this gate replaced). Layered + LWA_ALPHA 255
-                // composites identically to non-layered; the bit is restored
-                // while cloaked (see set_window_cloaked), so the visible
-                // lifetime never toggles it.
+                // composites identically to non-layered; the bit is installed
+                // by the first cloak and never removed (see
+                // set_window_cloaked), so the visible lifetime never toggles
+                // it.
                 let _ = SetLayeredWindowAttributes(native, COLORREF(0), 255, LWA_ALPHA);
                 crate::vibrancy::set_window_border_suppressed(window);
             } else {
@@ -225,31 +238,6 @@ pub fn set_window_alpha(window: &tauri::WebviewWindow, alpha: u8) {
 
 #[cfg(not(target_os = "windows"))]
 pub fn set_window_alpha(_window: &tauri::WebviewWindow, _alpha: u8) {}
-
-/// Removes WS_EX_LAYERED without touching visibility. May ONLY run while the
-/// window is DWM-cloaked (invisible): the transition rebuilds the acrylic
-/// surface, which would flash white on a visible glass window. The reveal
-/// path re-adds the bit at alpha 0 before uncloaking (see set_window_alpha),
-/// so hidden steady state is always non-layered and the visible lifetime
-/// never toggles it.
-#[cfg(target_os = "windows")]
-fn clear_window_layered(window: &tauri::WebviewWindow) {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, WS_EX_LAYERED,
-    };
-    if let Ok(hwnd) = window.hwnd() {
-        unsafe {
-            let native = HWND(hwnd.0 as *mut _);
-            let ex = GetWindowLongW(native, GWL_EXSTYLE);
-            if (ex & (WS_EX_LAYERED.0 as i32)) != 0 {
-                let _ = SetWindowLongW(native, GWL_EXSTYLE, ex & !(WS_EX_LAYERED.0 as i32));
-            }
-        }
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn clear_window_layered(_window: &tauri::WebviewWindow) {}
 
 /// Smoothly ramps window OS-level alpha from start to target over duration_ms.
 /// Token-guarded: cancels early if window is hidden or re-shown. Callers pass
@@ -447,6 +435,11 @@ fn uncloak_enlarged_if_current(app: &AppHandle, token: Option<u64>) {
         return;
     }
     if let Some(win) = app.get_webview_window("main") {
+        // Residual first-launch white flash: if the cold prep lost the
+        // controller race, re-apply the transparent surface now — still
+        // cloaked (invisible) — so the reveal can never composite Chromium's
+        // white default behind the glass slab.
+        ensure_main_surface_transparent_before_reveal(app, &win);
         let hwnd_raw = win.hwnd().map(|h| h.0).unwrap_or(std::ptr::null_mut());
         let mut api_vis = win.is_visible().unwrap_or(false);
         let cloaked = MAIN_CLOAKED.load(Ordering::SeqCst);
@@ -538,6 +531,22 @@ pub fn note_enlarged_painted(app: &AppHandle, token: Option<u64>) {
 
 pub static OVERLAY_CLOAKED: AtomicBool = AtomicBool::new(true);
 pub static MAIN_CLOAKED: AtomicBool = AtomicBool::new(true);
+/// True from the moment a real main show commits (generation bumped, window
+/// being cloaked for reveal) until that window is hidden again. Present
+/// cycles consult it at their tail: a show that proceeded past a timed-out
+/// cycle hold owns the window, so the prewarm must never hide/re-cloak it.
+/// Without this, a hotkey pressed while the boot cycle was still mid-flight
+/// either wedged behind the cycle lock or got its window re-hidden by the
+/// cycle's tail (gen_guard is None on the boot path).
+pub static MAIN_SHOW_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// True once the main window's WebView2 controller background has been
+/// applied (transparent for glass/acrylic/blur, theme color for solid).
+/// False while a cold start is still losing the controller-not-ready race —
+/// in that state Chromium's WHITE default background sticks and the body's
+/// translucent glass slab composites over it: the residual mild white flash
+/// on a rare first open. The reveal re-applies (bounded, while still
+/// cloaked) whenever this is false; every successful set site flips it true.
+pub static MAIN_SURFACE_TRANSPARENT: AtomicBool = AtomicBool::new(false);
 pub static MAIN_HAS_PAINTED: AtomicBool = AtomicBool::new(false);
 
 /// Epoch-milliseconds of the last overlay cloak, used for diagnostics around
@@ -763,6 +772,9 @@ fn ensure_main_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
         return Some(win);
     }
     crate::paste::log_diag("[HOTKEY] Main window not found — recreating (safety net).");
+    // A recreated window carries a fresh WebView2 controller whose background
+    // has not been applied yet — the reveal must run its last-chance apply.
+    MAIN_SURFACE_TRANSPARENT.store(false, Ordering::SeqCst);
     if let Some(cfg) = app
         .config()
         .app
@@ -1022,7 +1034,9 @@ pub fn prewarm_windows(app: &AppHandle) {
             // Same cold-controller retry as the overlay above (bounded ~2s on
             // this background thread): a silent one-shot failure here used to
             // leave the white default stuck for the first main present.
-            crate::vibrancy::ensure_transparent_surface(&main_win, mat, &settings.theme, 10, 200);
+            if crate::vibrancy::ensure_transparent_surface(&main_win, mat, &settings.theme, 10, 200) {
+                MAIN_SURFACE_TRANSPARENT.store(true, Ordering::SeqCst);
+            }
 
             // Cloak the main window and make it WS_VISIBLE without activating,
             // so WebView2 connects its swapchain and finishes its first paint
@@ -1041,6 +1055,68 @@ pub fn prewarm_windows(app: &AppHandle) {
             }
             // Re-cloak: some drivers clear the cloak flag on visibility change.
             set_window_cloaked(&main_win, true);
+        }
+
+        // The argument prompt and the pill are presented for the FIRST time
+        // when a snippet fires, and their WebView2 controllers are not ready
+        // then: `set_window_default_background` /
+        // `set_webview_transparent_background` both fail ("controller not
+        // ready"), so the window composites opaque and glass mode renders as
+        // a solid slab — unlike the overlay, which is prewarmed here and looks
+        // correctly frosted. Warm them hidden-side now, with the same
+        // generous budget the overlay uses, so the per-show prep in
+        // `prepare_prompt_surface` lands on its first attempt.
+        for label in ["argprompt", "pill"] {
+            if let Some(win) = app.get_webview_window(label) {
+                let mat = crate::vibrancy::WindowMaterial::from_str(&settings.window_material);
+                crate::vibrancy::set_round_corners(&win);
+                crate::vibrancy::apply_window_material(&win, mat);
+                let ok = crate::vibrancy::ensure_transparent_surface(&win, mat, &settings.theme, 10, 200);
+                crate::paste::log_diag(&format!("[PREWARM] surface warmed for '{label}' ok={ok}"));
+
+                // Same hidden-side first-present as overlay/main above: cloak +
+                // make it WS_VISIBLE without activating so WebView2 connects
+                // its swapchain and finishes its first paint completely hidden
+                // from the desktop composition. Without this the first prompt
+                // does a cold first-present ON SCREEN — the flash/jump when an
+                // argument window pops up.
+                set_window_cloaked(&win, true);
+                if let Ok(hwnd) = win.hwnd() {
+                    let native = HWND(hwnd.0 as *mut _);
+                    unsafe {
+                        use windows::Win32::UI::WindowsAndMessaging::{
+                            ShowWindow, SW_SHOWNOACTIVATE,
+                        };
+                        let _ = ShowWindow(native, SW_SHOWNOACTIVATE);
+                    }
+                }
+                // Re-cloak: some drivers clear the cloak flag on visibility change.
+                set_window_cloaked(&win, true);
+                crate::paste::log_diag(&format!(
+                    "[PREWARM] hidden-side first present done for '{label}'"
+                ));
+
+                // Genuine first-present (main-pattern port): the cloak-gated
+                // dance above starts the renderer but never produces a real
+                // DWM present — the doc above says it plainly —
+                // so without this the first argument prompt
+                // composites a cold (white) surface for ~a second. Run the same
+                // park → uncloak → present → hide → restore → re-cloak cycle
+                // the main window gets at boot, so the first argument prompt
+                // composites an already-presented surface. Serialized on the
+                // present-cycle lock: the two overlapping prewarm passes must
+                // never park the same HWND at once, and a racing real show
+                // waits out the short cycle instead of colliding with it.
+                {
+                    let _cycle_guard = crate::vibrancy::hold_present_cycle();
+                    let presented = crate::vibrancy::offscreen_present_cycle(
+                        &win, label, 120, None,
+                    );
+                    crate::paste::log_diag(&format!(
+                        "[PREWARM] genuine first present for '{label}' ok={presented}"
+                    ));
+                }
+            }
         }
 
         // Warm DB cache and push snapshot directly into WebViews while hidden
@@ -1402,6 +1478,9 @@ pub(crate) fn prepare_main_surface(app_handle: &AppHandle, main_win: &tauri::Web
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         applied = ok && applied;
+        if applied {
+            MAIN_SURFACE_TRANSPARENT.store(true, Ordering::SeqCst);
+        }
     } else {
         applied = crate::webview_bg::set_webview_transparent_background(main_win.as_ref()) && applied;
     }
@@ -1430,6 +1509,7 @@ pub(crate) fn prepare_main_surface(app_handle: &AppHandle, main_win: &tauri::Web
                 }
                 ok = crate::webview_bg::set_webview_transparent_background(win.as_ref()) && ok;
                 if ok {
+                    MAIN_SURFACE_TRANSPARENT.store(true, Ordering::SeqCst);
                     crate::paste::log_diag(&format!("[MAIN_SURFACE] background retry attempt {attempt} applied."));
                     return;
                 }
@@ -1437,6 +1517,45 @@ pub(crate) fn prepare_main_surface(app_handle: &AppHandle, main_win: &tauri::Web
             crate::paste::log_diag("[MAIN_SURFACE] background retry exhausted after 3 attempts (white-default risk remains).");
         });
     }
+}
+
+/// Last-chance transparent-surface apply on the main reveal path.
+///
+/// The pre-show prep can lose the controller-not-ready race on a cold start
+/// and the background retries can exhaust (`white-default risk remains`), so
+/// the first uncloak would composite Chromium's WHITE default behind the
+/// translucent glass slab — the rare mild white flash on a first open. By
+/// reveal time the controller is up, so re-apply now while the window is
+/// still cloaked (invisible).
+///
+/// Attempt 1 ALWAYS runs — never early-return on the applied flag: that flag
+/// only proves the surface was set at some point, and a recreated WebView2
+/// controller comes back at Chromium's white default. Two cheap COM calls
+/// are ~free when healthy; only a failure pays the bounded retry loop, so a
+/// warm open never waits and a stale white default can't survive to first
+/// present.
+fn ensure_main_surface_transparent_before_reveal(app: &AppHandle, win: &tauri::WebviewWindow) {
+    let Some(state) = app.try_state::<crate::AppState>() else {
+        return;
+    };
+    let settings = state.settings.get();
+    let mat = crate::vibrancy::WindowMaterial::from_str(&settings.window_material);
+    for attempt in 0..3u32 {
+        let a = crate::vibrancy::set_window_default_background(win, mat, &settings.theme);
+        let b = crate::webview_bg::set_webview_transparent_background(win.as_ref());
+        if a && b {
+            MAIN_SURFACE_TRANSPARENT.store(true, Ordering::SeqCst);
+            crate::paste::log_diag(&format!(
+                "[SHOW_MAIN] transparent surface applied at reveal (attempt {})",
+                attempt + 1
+            ));
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    crate::paste::log_diag(
+        "[SHOW_MAIN] transparent surface STILL not applied at reveal — white-default risk remains",
+    );
 }
 
 pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
@@ -1460,14 +1579,20 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
         save_target_window(app_handle);
         // Serialize against the background warmth loop: it skips its tick
         // while held, so it can never park/hide mid-show. Dropped right
-        // after the post-show re-cloak (before focus/emit).
-        let _present_guard = crate::vibrancy::hold_present_cycle();
+        // after the post-show re-cloak (before focus/emit). BOUNDED: the
+        // boot cycle can sit inside a synchronous Win32 call while holding
+        // this mutex for many seconds — the hotkey must never wedge behind
+        // it (observed: no log after save_target until kill).
+        let _present_guard = crate::vibrancy::hold_present_cycle_bounded();
         prepare_main_surface(app_handle, &main_win);
         // Idle discard / cold first open: re-present off-screen while still
         // cloaked so the uncloak ramp never composites a cold surface.
         // try_lock skips if the boot present cycle is already running.
         let _ = crate::vibrancy::rewarm_main_surface(app_handle);
         let _ = main_win.eval("document.documentElement.classList.add('wm-hidden')");
+        // Mark the live show BEFORE the generation bump: any present cycle
+        // tail that runs from here on must leave the window alone.
+        MAIN_SHOW_ACTIVE.store(true, Ordering::SeqCst);
         let enlarged_gen = ENLARGED_SHOW_GEN.fetch_add(1, Ordering::SeqCst) + 1;
         set_window_cloaked(&main_win, true);
         // Frame suppression before show(): SetWindowPos(SWP_FRAMECHANGED) after
@@ -1501,13 +1626,18 @@ pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
         save_target_window(app_handle);
         crate::paste::capture_selection_snapshot();
         // Serialize against the background warmth loop (see swap branch).
-        let _present_guard = crate::vibrancy::hold_present_cycle();
+        // BOUNDED: never wedge the open behind a slow/stuck boot cycle that
+        // holds the present mutex while parked mid-Win32-call.
+        let _present_guard = crate::vibrancy::hold_present_cycle_bounded();
         prepare_main_surface(app_handle, &main_win);
         // Idle discard / cold first open: re-present off-screen while still
         // cloaked so the uncloak ramp never composites a cold surface.
         // try_lock skips if the boot present cycle is already running.
         let _ = crate::vibrancy::rewarm_main_surface(app_handle);
         let _ = main_win.eval("document.documentElement.classList.add('wm-hidden')");
+        // Mark the live show BEFORE the generation bump: any present cycle
+        // tail that runs from here on must leave the window alone.
+        MAIN_SHOW_ACTIVE.store(true, Ordering::SeqCst);
         let enlarged_gen = ENLARGED_SHOW_GEN.fetch_add(1, Ordering::SeqCst) + 1;
         set_window_cloaked(&main_win, true);
         // Frame suppression before show(): SetWindowPos(SWP_FRAMECHANGED) after
@@ -1555,6 +1685,10 @@ pub fn note_enlarged_hide_ack(gen: u64) {
 
 fn request_webview_enlarged_hide(app: &AppHandle) {
     ENLARGED_SHOW_GEN.fetch_add(1, Ordering::SeqCst);
+    // The live show ends at the hide request: present cycles may take the
+    // window over again (the boot cycle runs at most once per process, but
+    // the warmth loop re-presents every MAIN_WARM_LOOP_MS).
+    MAIN_SHOW_ACTIVE.store(false, Ordering::SeqCst);
     let gen = ENLARGED_HIDE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
     crate::paste::log_diag(&format!("[HIDE_MAIN] hide-requested gen={} emitted to webview", gen));
     let _ = app.emit_to("main", "enlarged-hide-requested", gen);

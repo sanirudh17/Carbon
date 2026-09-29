@@ -269,28 +269,38 @@ test('Main First-Open Flash: second-launch path matches the hotkey pre-show disc
   );
 });
 
-test('Main Flash: visible lifetime never toggles WS_EX_LAYERED (glass rebuild = white frame)', () => {
+test('Main Flash: the OS-alpha mask is installed at cloak and never removed (glass rebuild = white frame)', () => {
   const hotkeyRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'hotkey.rs'), 'utf8');
 
   // Removing WS_EX_LAYERED rebuilds the DWM acrylic composition surface — a
-  // white frame in glass mode. The reveal ramp must therefore END layered,
-  // and the ONLY removal site must be the cloaked steady-state restore.
+  // white frame in glass mode. The mask is installed when a window is cloaked
+  // (alpha 0, BEFORE any ShowWindow/SetWindowPos/unminimize transition can
+  // clear the cloak — the startup flash when main's taskbar icon appears and
+  // the off-screen warm-up cycles' re-present) and is NEVER removed, so the
+  // visible lifetime never toggles the bit.
   const removals = hotkeyRs.match(/ex & !\(WS_EX_LAYERED/g) || [];
-  assert.equal(removals.length, 1, 'exactly one layered-removal site may exist (the cloaked restore helper)');
-  assert.ok(hotkeyRs.includes('fn clear_window_layered'), 'layered restore helper must exist');
+  assert.equal(removals.length, 0, 'the layered bit may never be removed (a toggle rebuilds the acrylic surface)');
+  assert.ok(!hotkeyRs.includes('fn clear_window_layered'), 'no layered-strip helper may exist');
 
-  // The restore must run on the cloak path, guarded on success: a failed
-  // cloak may leave the window visible, where stripping would rebuild right
-  // on screen.
+  // The mask must be applied on the cloak path, guarded on success: a failed
+  // cloak may leave the window visible, where masking would pop it invisible.
   const cloakMatch = hotkeyRs.match(/pub fn set_window_cloaked\(window[\s\S]*?\r?\n\}\r?\n/);
   assert.ok(cloakMatch, 'set_window_cloaked (windows) found');
   assert.ok(
-    cloakMatch[0].includes('clear_window_layered(window)'),
-    'cloaking must restore the non-layered steady state'
+    cloakMatch[0].includes('set_window_alpha(window, 0)'),
+    'cloaking must park the OS-alpha mask at 0'
   );
   assert.ok(
     cloakMatch[0].includes('cloaked && cloak_ok'),
-    'the restore must be guarded on cloak success'
+    'the mask must be guarded on cloak success'
+  );
+
+  // Every reveal path must lift the mask before uncloaking: main/overlay ramp
+  // from 0, and the argprompt reveals (the two paths without a ramp) set 255.
+  const expansionRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'expansion.rs'), 'utf8');
+  assert.ok(
+    (expansionRs.match(/set_window_alpha\(&win, 255\)/g) || []).length >= 2,
+    'argprompt reveals must lift the cloak-parked alpha mask'
   );
 });
 
@@ -306,11 +316,19 @@ test('Main Flash: transparent surface retries bound the cold-controller race', (
   assert.ok(helper.includes('attempts') && helper.includes('sleep'), 'helper must retry on a bounded budget');
 
   // Prewarm runs milliseconds after window creation (controller rarely
-  // ready): both windows must retry hidden-side instead of failing silently
-  // and leaving Chromium's white default stuck for the first present.
+  // ready): every window that is presented for the first time on demand must
+  // retry hidden-side instead of failing silently and leaving Chromium's
+  // white default stuck for the first present. That is overlay + main, plus
+  // the argprompt/pill loop — those two are only ever presented when a
+  // snippet fires, so they are always cold at that moment and would otherwise
+  // composite opaque (glass reading as a solid slab).
   const hotkeyRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'hotkey.rs'), 'utf8');
   const prewarmCalls = hotkeyRs.match(/ensure_transparent_surface\(&/g) || [];
-  assert.equal(prewarmCalls.length, 2, 'prewarm must retry the surface for overlay + main');
+  assert.equal(prewarmCalls.length, 3, 'prewarm must retry the surface for overlay + main + argprompt/pill');
+  assert.ok(
+    /for label in \["argprompt", "pill"\]/.test(hotkeyRs),
+    'argprompt/pill must be prewarmed hidden-side like the other windows'
+  );
 
   // The pre-show path cannot wait on a background thread (reveal would
   // already have happened): the retry must be synchronous and bounded.
@@ -617,4 +635,57 @@ test('Unified Frame - selection contract without layout mutation', () => {
   // Paste + Actions footer intact; shortcuts unchanged.
   assert.ok(qo.includes('Ctrl+K'), 'Actions shortcut must survive');
   assert.ok(qo.includes('>Paste</b>') || qo.includes("`Paste to ${targetApp}`"), 'Paste action must survive');
+});
+
+test('Surface Prep - background-thread with_webview setters wait for the queued closure', () => {
+  // `with_webview` from any non-main thread is fire-and-forget in
+  // tauri-runtime-wry: the closure is queued onto the event loop and the call
+  // returns immediately, so reading the "applied" flag straight after the call
+  // always reported failure. Every background prep therefore burned its whole
+  // retry budget on false "controller not ready" negatives, and the argprompt
+  // glass prep declared failure while the work was still queued behind the
+  // (locked-up) main thread. Both setters must wait for the closure to run.
+  const vibrancyRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'vibrancy.rs'), 'utf8');
+  assert.ok(
+    vibrancyRs.includes('fn wait_for_webview_work'),
+    'shared wait helper must exist in vibrancy.rs'
+  );
+  const setter = vibrancyRs.slice(
+    vibrancyRs.indexOf('pub fn set_window_default_background'),
+    vibrancyRs.indexOf('\npub fn ', vibrancyRs.indexOf('pub fn set_window_default_background') + 1)
+  );
+  assert.ok(
+    setter.includes('wait_for_webview_work'),
+    'material-aware default setter must wait for the queued closure'
+  );
+  // The closure must signal completion on EVERY path, or a genuine inline
+  // failure on the main thread would burn the whole wait budget.
+  assert.ok(
+    setter.includes('done_flag_inner.store'),
+    'the with_webview closure must store its done flag on all paths'
+  );
+  const webviewBgRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'webview_bg.rs'), 'utf8');
+  assert.ok(
+    webviewBgRs.includes('wait_for_webview_work'),
+    'transparent-background setter must wait for the queued closure too'
+  );
+  assert.ok(
+    webviewBgRs.includes('done_flag_inner.store'),
+    'the transparent-background closure must store its done flag on all paths'
+  );
+});
+
+test('Surface Prep - startup keeps the deliberate double prewarm spawn', () => {
+  // TWO prewarm_windows spawns at startup are DELIBERATE and pinned: with a
+  // single spawn the main app flashed white on open/close, and the two
+  // overlapping passes are the backup that hides that flash. A future
+  // "dedupe" here reintroduces the white flash. Only the second spawn sets
+  // the prewarm_done flag the first-present cycle waits on.
+  const libRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'lib.rs'), 'utf8');
+  const spawns = libRs.match(/prewarm_windows\(&handle\)/g) || [];
+  assert.equal(spawns.length, 2, 'startup must keep BOTH prewarm spawns (backup against the main white flash)');
+  assert.ok(
+    libRs.includes('done.store(true, Ordering::SeqCst)'),
+    'the flag-setting prewarm spawn must signal completion for the first-present cycle'
+  );
 });

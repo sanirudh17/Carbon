@@ -62,6 +62,11 @@ pub fn set_selected_text_snapshot(text: Option<String>) {
 /// cancels the in-progress command line / TUI and visually "clears the text"
 /// the user just typed or pasted. Snapshotting is a convenience; destroying
 /// the user's terminal session for it is not acceptable.
+/// Upper bound for the show-time selection snapshot probe (ms). The probe
+/// owns the hotkey thread, so it must be a fraction of the first-launch
+/// reveal budget: a stalled probe stalls every picker/main open behind it.
+const SELECTION_PROBE_TIMEOUT_MS: u64 = 150;
+
 pub fn capture_selection_snapshot() {
     unsafe {
         let fg = GetForegroundWindow();
@@ -73,15 +78,32 @@ pub fn capture_selection_snapshot() {
         }
     }
 
-    // Try UIA selection (instant, non-destructive, zero UI-thread latency)
-    if let Some(uia_sel) = crate::expansion::try_get_uia_selection() {
-        log_diag(&format!(
-            "[CAPTURE_SELECTION] Captured {} chars via UIA.",
-            uia_sel.chars().count()
-        ));
-        *SELECTED_TEXT.lock().unwrap() = Some(uia_sel);
-    } else {
-        *SELECTED_TEXT.lock().unwrap() = None;
+    // The UIA stack's first cross-process call after process start can stall
+    // the caller for many seconds behind COM/provider handshakes — and this
+    // probe runs synchronously on the hotkey thread mid-show (on a wedged
+    // first open there is no window, no reveal and no log until it returns).
+    // A background mouse-hook watcher already maintains fresher snapshots, so
+    // only the probe's answer inside the budget is taken; the timed-out tail
+    // is left alone and the previous snapshot serves this open. Same outcome
+    // as a UIA miss.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::expansion::try_get_uia_selection());
+    });
+    match rx.recv_timeout(std::time::Duration::from_millis(SELECTION_PROBE_TIMEOUT_MS)) {
+        Ok(Some(uia_sel)) => {
+            log_diag(&format!(
+                "[CAPTURE_SELECTION] Captured {} chars via UIA.",
+                uia_sel.chars().count()
+            ));
+            *SELECTED_TEXT.lock().unwrap() = Some(uia_sel);
+        }
+        Ok(None) => {
+            *SELECTED_TEXT.lock().unwrap() = None;
+        }
+        Err(_) => {
+            log_diag("[CAPTURE_SELECTION] UIA probe timed out — keeping previous snapshot.");
+        }
     }
 }
 

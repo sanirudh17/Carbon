@@ -328,8 +328,9 @@ test('v40 main open stays instant: identical snapshots never commit', () => {
   const dataIdx = main.indexOf("listen<ClipItem[]>('enlarged-data'");
   const dataHandler = main.slice(dataIdx, main.indexOf('const unlistenCollections', dataIdx));
   assert.ok(
-    dataHandler.includes('sameClipList(snap, local)'),
-    'the open snapshot must bail out when already displayed'
+    dataHandler.includes('sameClipList(snap, displayed)') &&
+      dataHandler.includes('itemsStateRef.current : local'),
+    'the open snapshot must bail out when already displayed (committed DOM rows, never the cache alone)'
   );
   const fetchIdx = main.indexOf('const fetchItems = async');
   const fetchBody = main.slice(fetchIdx, main.indexOf('const fetchRef = useRef', fetchIdx));
@@ -388,7 +389,7 @@ test('v41 main opens overlay-fast: no blocking work on the show path', () => {
   );
   const gateIdx = main.indexOf('Open-gate arm');
   assert.ok(gateIdx !== -1, 'open-gate arm found');
-  const gateBody = main.slice(gateIdx, gateIdx + 1600);
+  const gateBody = main.slice(gateIdx, gateIdx + 4200);
   assert.ok(
     gateBody.includes("'enlarged-opened'"),
     'enlarged-opened must arm the paint gate'
@@ -400,6 +401,37 @@ test('v41 main opens overlay-fast: no blocking work on the show path', () => {
   assert.ok(
     gateBody.includes('setTimeout'),
     'the arm must be bounded (cold opens with no snapshot still reveal)'
+  );
+  // The show-path selection probe owns the hotkey thread: on a cold launch
+  // its first UIA cross-process call can stall for seconds and freeze the
+  // open before show() ever runs (witnessed: no log line after save_target
+  // for 27s). It must be bounded — the background mouse-hook watcher keeps
+  // fresher snapshots anyway, and a timed-out probe keeps the previous one.
+  const paste = fs.readFileSync(path.join(ROOT_DIR, 'src-tauri', 'src', 'paste.rs'), 'utf8');
+  assert.ok(
+    paste.includes('SELECTION_PROBE_TIMEOUT_MS'),
+    'the show-time selection probe must be bounded'
+  );
+  assert.ok(
+    paste.includes('recv_timeout'),
+    'the probe must abandon the UIA call instead of blocking the hotkey thread'
+  );
+  // Residual rare first-launch WHITE flash: on a cold start the surface prep
+  // can lose the controller-not-ready race (Chromium's white default then
+  // sticks behind the translucent glass slab). The reveal must re-apply the
+  // transparent surface while still cloaked, gated by a flag every successful
+  // set site flips — warm opens pay nothing.
+  assert.ok(
+    hotkey.includes('ensure_main_surface_transparent_before_reveal'),
+    'the main reveal must re-apply the transparent surface before uncloaking'
+  );
+  assert.ok(
+    hotkey.includes('MAIN_SURFACE_TRANSPARENT.store(true'),
+    'every successful surface apply must flip the transparency flag'
+  );
+  assert.ok(
+    hotkey.includes('MAIN_SURFACE_TRANSPARENT.store(false'),
+    'a recreated main window must clear the flag (fresh controller)'
   );
 });
 
@@ -507,10 +539,93 @@ test('v44 long-idle opens stay warm: background warmth loop, race-proof', () => 
   // Show sites hold the cycle across the native ops; warmth + reveal clocks
   // feed one shared predicate.
   const hotkey = fs.readFileSync(path.join(ROOT_DIR, 'src-tauri', 'src', 'hotkey.rs'), 'utf8');
-  const holds = (hotkey.match(/hold_present_cycle\(\)/g) || []).length;
-  assert.ok(holds >= 2, `both hotkey show paths must hold the cycle (found ${holds})`);
+  // Bounded hold: the boot cycle holds the mutex across synchronous Win32
+  // calls for as long as the event-loop thread stays busy (observed: a
+  // hotkey open logged nothing after save_target for 77s+ behind a parked
+  // warmup that never printed its exit). The show must acquire-and-proceed,
+  // never block indefinitely behind it.
+  const holds = (hotkey.match(/hold_present_cycle_bounded\(\)/g) || []).length;
+  assert.ok(holds >= 2, `both hotkey show paths must take the bounded hold (found ${holds})`);
+  assert.ok(vib.includes('fn hold_present_cycle_bounded'), 'the bounded hold helper must exist');
+  // A show that proceeds past a timed-out hold must still survive the boot
+  // cycle's tail (gen_guard is None there): cycle tails consult the live-show
+  // flag before hide/re-cloak, and every show path sets it before reveal.
+  assert.ok(
+    vib.includes('MAIN_SHOW_ACTIVE'),
+    'the present cycle must consult the live-show flag before hiding/re-cloaking'
+  );
+  const flagSets = (hotkey.match(/MAIN_SHOW_ACTIVE\.store\(true/g) || []).length;
+  assert.ok(flagSets >= 2, `both main show paths must mark the live show (found ${flagSets})`);
   const lib = fs.readFileSync(path.join(ROOT_DIR, 'src-tauri', 'src', 'lib.rs'), 'utf8');
-  assert.ok(lib.includes('hold_present_cycle()'), 'second-launch show must hold the cycle too');
+  assert.ok(lib.includes('hold_present_cycle_bounded()'), 'second-launch show must take the bounded hold too');
   assert.ok(lib.includes('spawn_main_warmth_loop'), 'setup must start the warmth loop');
   assert.ok(hotkey.includes('fn main_surface_warm'), 'one shared warm predicate must exist');
+});
+
+test('v45 cold first open paints content: gate holds until an answer that started after the open', () => {
+  // First launch (not background): React mounts empty and the mount paint
+  // stamps the choreo gate, so an open that beat the first data answer
+  // reveals an empty translucent frame that pops content in. Store-version
+  // freshness cannot cover it either (store_version starts at 0 on a fresh
+  // process, so "0 > 0" says fresh), so the decision must read the COMMITTED
+  // list state — never a latch — and hold until an answer that started after
+  // the open lands (or the hard cap). Warm opens with rows on screen stay
+  // instant.
+  const overlay = fs.readFileSync(
+    path.join(ROOT_DIR, 'src', 'components', 'QuickOverlay.tsx'),
+    'utf8'
+  );
+  assert.ok(
+    overlay.includes('coldHoldRef'),
+    'overlay must own a cold content hold'
+  );
+  assert.ok(
+    overlay.includes("dataset.coldhold = '1'"),
+    'a cold open must arm the content hold flag'
+  );
+  assert.ok(
+    overlay.includes('releaseColdHold'),
+    'the hold must release when first rows commit'
+  );
+  assert.ok(
+    overlay.includes('const COLD_HOLD_CAP_MS = 5000;'),
+    'the cold hold must be answer-driven with a hard cap (never a fixed reveal)'
+  );
+  assert.ok(
+    overlay.includes('const hasRows =') &&
+      overlay.includes('itemsRef.current.length > 0 || snSnippetsRef.current.length > 0'),
+    'cold detection must read the CURRENT lists, never a latch'
+  );
+  assert.ok(
+    overlay.includes('coldReadFloorRef'),
+    'only reads started after the open may count as its answer (no early empty releases)'
+  );
+  assert.ok(
+    overlay.includes('fetchRef.current();'),
+    'a cold open must kick a read so the hold has an answer to wait for'
+  );
+  const main = fs.readFileSync(
+    path.join(ROOT_DIR, 'src', 'components', 'EnlargedWindow.tsx'),
+    'utf8'
+  );
+  assert.ok(
+    main.includes('itemsStateRef'),
+    'main cold detection must read the committed list state, never a latch'
+  );
+  assert.ok(
+    main.includes('coldReadFloorRef') && main.includes('coldReadResolvedRef'),
+    'only reads started after the open may count as its answer (no early empty releases)'
+  );
+  assert.ok(
+    main.includes('COLD_HOLD_CAP_MS'),
+    'the cold hold must be answer-driven with a hard cap'
+  );
+  assert.ok(
+    main.includes("dataset.coldhold = '1'"),
+    'a cold main open must arm the content hold flag'
+  );
+  assert.ok(
+    main.includes('[SHOW_MAIN] open decision stale='),
+    'the open decision (stale/coldOpen/rows) must be logged for diagnosis'
+  );
 });

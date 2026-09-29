@@ -10,7 +10,9 @@ pub fn set_webview_transparent_background<W: tauri::Runtime>(webview: &tauri::We
     #[cfg(target_os = "windows")]
     {
         let applied_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let applied_flag_inner = applied_flag.clone();
+        let done_flag_inner = done_flag.clone();
         let _ = webview.with_webview(move |platform_webview| {
             use windows_core::Interface;
             use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -21,7 +23,10 @@ pub fn set_webview_transparent_background<W: tauri::Runtime>(webview: &tauri::We
             // (WebView2 1.0.774+): cast the base controller via its COM GUID.
             let controller2: ICoreWebView2Controller2 = match controller.cast() {
                 Ok(c) => c,
-                Err(_) => return,
+                Err(_) => {
+                    done_flag_inner.store(true, std::sync::atomic::Ordering::SeqCst);
+                    return;
+                }
             };
             unsafe {
                 // A = 0 -> fully transparent (the RGB bytes are don't-care).
@@ -30,8 +35,14 @@ pub fn set_webview_transparent_background<W: tauri::Runtime>(webview: &tauri::We
                     applied_flag_inner.store(true, std::sync::atomic::Ordering::SeqCst);
                 }
             }
+            done_flag_inner.store(true, std::sync::atomic::Ordering::SeqCst);
         });
-        let applied = applied_flag.load(std::sync::atomic::Ordering::SeqCst);
+        // From a background thread `with_webview` only QUEUES the closure
+        // (tauri-runtime-wry returns immediately), so checking the flag right
+        // away reported failure for work the main thread was about to do —
+        // every background prep lied. Wait for the closure to finish instead;
+        // an inline main-thread call is already done on the first check.
+        let applied = crate::vibrancy::wait_for_webview_work(&done_flag, &applied_flag);
         if !applied {
             eprintln!("[WEBVIEW_BG] transparent background NOT applied (controller not ready) — retry will follow.");
         }

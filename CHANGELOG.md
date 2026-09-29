@@ -2,6 +2,21 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
+## [0.1.17] — 2026-09-29
+
+### Fixed
+- **Second start no longer wedges the main window open** — the boot present cycle holds its mutex across synchronous Win32 calls that can stall for over a minute on a cold launch, which silently parked every hotkey open behind it (observed: no log line after the target save for 77s+). Show paths now take a bounded hold (acquire-and-proceed) and race-tolerant cycle tails consult a live-show flag before any hide or re-cloak, so an open that races boot can never be swallowed.
+- **Rare white flash on second start / cold first open eliminated** — the OS-alpha mask is now installed at cloak time (alpha 0, before any ShowWindow / SetWindowPos / unminimize transition can clear the cloak on some drivers) and is never removed during the visible lifetime, so the acrylic surface is never rebuilt on a visible frame. The reveal re-applies the transparent WebView2 surface while still cloaked when the cold prep lost the controller race, so Chromium's white default can never composite behind the glass slab.
+- **Show-time selection probe can no longer stall an open** — the first UIA cross-process call after process start can hang for seconds behind COM/provider handshakes, and it ran synchronously on the hotkey thread mid-show. It now runs inside a 150ms budget with the previous snapshot kept on timeout, backed by the fresher background mouse-hook snapshots.
+- **WebView2 background-thread prep lied about failures** — `with_webview` from a background thread only queues the closure, so reading the applied flag immediately reported failure for work the main thread was about to do, burning retry budgets on false negatives. Callers now wait for the queued closure to finish (bounded, with done/applied flags on every path).
+- **Cold first open paints content, never an empty frame** — the open gate holds until a data answer that started after the open lands (or a hard cap), because store-version freshness reads 0 > 0 as fresh on a fresh process and the mount paint stamps the gate before rows exist. Warm opens with rows on screen stay instant.
+- **Stuck-gate recovery respects cold content holds** — the show-gate recovery bound stretches while a cold-open content hold is armed (answer-driven with its own cap), so recovery still only fires on genuine hangs and never cuts a content wait short.
+- **Argument prompt reliability** — the prompt window gets the same surface prep as overlay/main (OS material + transparent controller background, previously missing, so glass composited opaque), presents cloaked-but-visible until its renderer acks the first painted spec (paint gate via layout effect, not rAF, which never fires while cloaked), with a watchdog that distinguishes cold mounting from a genuine wedge. Focus storms are coalesced, submits are exactly-once, queued arguments advance warm without DWM churn, sequence geometry is probed once per expansion, and the present runs on the main thread with an authoritative pending check so stale retries can never re-open a ghost prompt over a newer one. No focus call races the backend present path.
+- **Quick overlay and main window content holds** — cold-open content waits with hard caps keep first-launch opens contentful instead of revealing empty translucent frames.
+
+### Changed
+- Suite now covers the bounded present hold, live-show flag, OS-alpha mask contract, cold content holds, stretched stuck-gate bound, and arg-prompt paint-gate/watchdog discipline (155 JS tests green).
+
 ## [0.1.16] — 2026-09-24
 
 ### Fixed

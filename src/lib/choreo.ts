@@ -211,6 +211,7 @@ export function executeWindowShow(
         // content, and no fade ever plays over bare acrylic (open flash).
         html.classList.add('no-anim');
         html.classList.remove('wm-hiding', 'wm-hidden');
+        html.removeAttribute('data-coldhold');
         void html.offsetWidth;
         html.classList.remove('no-anim');
 
@@ -250,11 +251,19 @@ export function executeWindowShow(
         return;
       }
 
-      // Flash-safe recovery: if gate stays closed >300ms, force recovery rather than leaving stuck state
-      if (!warned && performance.now() - tHotkey > 300) {
-        traceChoreo(`${windowName} show gate bounded wait (300ms) reached; initiating flash-safe recovery`);
+      // Flash-safe recovery: if the gate stays closed past the bound, force
+      // recovery rather than leaving stuck state. The bound stretches while
+      // a cold-open content hold is armed (data-coldhold): those holds are
+      // answer-driven with a COLD_HOLD_CAP_MS (5000ms) hard cap in both
+      // EnlargedWindow.tsx and QuickOverlay.tsx, so this bound clears the cap
+      // by a margin — recovery still only fires on genuine hangs and never
+      // cuts a content wait short.
+      const gateBoundMs = html.dataset.coldhold === '1' ? 5600 : 300;
+      if (!warned && performance.now() - tHotkey > gateBoundMs) {
+        traceChoreo(`${windowName} show gate bounded wait (${gateBoundMs}ms) reached; initiating flash-safe recovery`);
         warned = true;
         cancelled = true;
+        html.removeAttribute('data-coldhold');
         if (rafId) cancelAnimationFrame(rafId);
         if (windowName === 'overlay' || windowName === 'main') {
           invoke('choreo_show_recovery', { windowLabel: windowName }).catch(() => {});

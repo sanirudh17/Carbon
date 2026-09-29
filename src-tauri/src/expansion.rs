@@ -200,6 +200,40 @@ static ARG_PROMPT_QUEUE: Mutex<std::collections::VecDeque<ArgPromptEntry>> =
 // "first-ever prompt before the webview finished loading" race).
 static ARG_PROMPT_PENDING: Mutex<Option<ArgPromptRequest>> = Mutex::new(None);
 static ARG_PROMPT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+// Last prompt id the frontend confirmed painted (paint-ack + watchdog).
+static ARG_PROMPT_PAINTED_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+// Last prompt id the frontend actually FETCHED (get_pending_arg_request).
+// The watchdog uses this to tell "renderer still mounting" (a cold first
+// prompt before the page finished loading: a fetch is still coming) from
+// "renderer alive but never painted" (a genuine wedge worth cancelling). A
+// fixed 2.5s budget alone cancelled cold-start prompts whose webview had not
+// mounted yet — the prompt was requested, then silently vanished.
+static ARG_PROMPT_FETCHED_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+// True while the prompt window is up presenting a spec (set by the present
+// closure, cleared by every hide path). A queued next-prompt shown while this
+// is set is a WARM ADVANCE: the surface is live, so the show path skips the
+// DWM prep (re-applying acrylic on a visible window flickers) and the
+// re-focus (focus is already inside — re-stealing bounces activation).
+static ARGPROMPT_UP: AtomicBool = AtomicBool::new(false);
+// Geometry (x, y, w, h) of the FIRST prompt of an expansion sequence.
+// The caret probe is only valid while the typed-into window still owns the
+// caret; between queued arguments the prompt itself is the foreground window,
+// so a re-probe could fail and fall back to a different anchor — the window
+// then jumped to another corner mid-wizard. Probe once per sequence, reuse
+// for every argument, clear when the next expansion starts.
+static ARGPROMPT_SEQ_GEOM: Mutex<Option<(i32, i32, u32, u32)>> = Mutex::new(None);
+/// How long the argument prompt may stay unpainted before the backend
+/// concludes the renderer never came up. Must comfortably exceed a cold
+/// argprompt webview mount, otherwise every prompt is cancelled before it is
+/// ever seen.
+const ARG_PROMPT_PAINT_TIMEOUT_MS: Duration = Duration::from_millis(2_500);
+/// How long the watchdog waits for a cold renderer to mount and FETCH the
+/// spec before it may judge the prompt unpainted. A cold first prompt (page
+/// still loading its bundle, dev-server or first-run cache miss) can take
+/// seconds to mount; cancelling inside that window killed a prompt the user
+/// was waiting for. Once the fetch is observed the normal paint budget above
+/// applies (renderer alive but never committing = a genuine wedge).
+const ARG_PROMPT_MOUNT_TIMEOUT_MS: Duration = Duration::from_millis(10_000);
 // Our own process id (foreground check) so keys typed inside Carbon windows
 // never feed the expansion hook.
 static OUR_PID: AtomicU32 = AtomicU32::new(0);
@@ -221,47 +255,339 @@ pub struct ArgPromptRequest {
     pub resolvedDefault: Option<String>,
 }
 
+/// Surface prep for the argument prompt, mirroring `prepare_main_surface`.
+///
+/// The overlay/main prewarm applies OS material + the transparent WebView2
+/// controller background (with retry) at startup and before every open — but
+/// nothing ever did it for argprompt/pill. Without the transparent controller
+/// background the webview composites opaque, so the material-aware CSS tokens
+/// render over a solid base: glass mode looks solid no matter what the
+/// setting says. Without OS acrylic there is also nothing behind to blur.
+///
+/// The material and theme are PASSED IN rather than read here, and the show
+/// path releases its EXPANSION_CTX snapshot guard BEFORE calling this. The
+/// values are parameters so the helper can never reach for the context
+/// itself: EXPANSION_CTX is a plain non-reentrant `std::sync::Mutex`, and a
+/// helper that locked it from a path that still held the guard self-deadlocked
+/// instantly, freezing the prompt (no input, no buttons) and, because the
+/// expansion is the caller, the whole engine. Never lock EXPANSION_CTX from
+/// here.
+///
+/// The retry budget is deliberately generous (10 x 200ms, matching the overlay
+/// prewarm): a cold WebView2 controller can need over a second to answer, and
+/// a too-short budget is precisely why the prompt composited opaque while the
+/// overlay looked correctly frosted.
+fn prepare_prompt_surface(
+    win: &tauri::WebviewWindow,
+    mat: crate::vibrancy::WindowMaterial,
+    theme: &str,
+) {
+    crate::vibrancy::apply_window_material(win, mat);
+    let started = std::time::Instant::now();
+    for attempt in 0..10u32 {
+        let ok_bg = crate::vibrancy::set_window_default_background(win, mat, theme);
+        let ok_tr = crate::webview_bg::set_webview_transparent_background(win.as_ref());
+        if ok_bg && ok_tr {
+            crate::paste::log_diag(&format!(
+                "[ARGPROMPT] surface prepared attempt={} in {}ms",
+                attempt + 1,
+                started.elapsed().as_millis()
+            ));
+            return;
+        }
+        crate::paste::log_diag(&format!(
+            "[ARGPROMPT] surface not ready (attempt {}/10) — retrying",
+            attempt + 1
+        ));
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    crate::paste::log_diag(
+        "[ARGPROMPT] transparent surface NOT applied after retries — glass will look solid",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Locking discipline
+// ---------------------------------------------------------------------------
+
+/// Lock a mutex without ever panicking. `Mutex::lock().unwrap()` panics on a
+/// poisoned mutex (a previous holder panicked) — and a panic on the expansion
+/// caller thread would take the whole engine down with it. Taking the inner
+/// value keeps the engine alive instead. Cancel/blur/timeout paths all funnel
+/// through here, so "pressing cancel must never crash" starts with never
+/// panicking on a lock.
+fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn show_arg_prompt(spec: &ArgPromptRequest) {
     // One-shot spec for the frontend fetch command
-    *ARG_PROMPT_PENDING.lock().unwrap() = Some(spec.clone());
-    if let Some(ctx) = EXPANSION_CTX.lock().unwrap().as_ref() {
-        let _ = ctx.app_handle.emit("arg-prompt-request", spec.clone());
-        // Retry emit shortly after — covers a webview that is still mounting
-        // its listener (deduped by id in the frontend).
-        let app = ctx.app_handle.clone();
+    *lock_recover(&ARG_PROMPT_PENDING) = Some(spec.clone());
+    // Once PENDING is set it MUST be lifted on every path — it gates the
+    // whole engine. The watchdog is therefore armed unconditionally, even
+    // if the webview lookup fails (unpainted => hide + cancel).
+    let watch_id = spec.id;
+    // Snapshot the context under a BRIEF guard: material/theme, prompt
+    // geometry (positioned BEFORE the emit so the frontend's own show() lands
+    // on a positioned window), and an app clone. The guard must NOT span the
+    // surface prep or the present, for two reasons:
+    //  * the prep waits for main-thread `with_webview` work while the
+    //    frontend's `argprompt_painted` ack re-locks this very non-reentrant
+    //    Mutex from the main thread — holding it across either froze every
+    //    Carbon window for the whole retry budget; and
+    //  * frozen long enough, the queued glass/background work could never run
+    //    before the prompt was presented, so it composited solid.
+    let (app, prompt_mat, prompt_theme, win_opt) = {
+        let guard = lock_recover(&EXPANSION_CTX);
+        let Some(ctx) = guard.as_ref() else {
+            // Engine not initialised: nothing can answer this request, but
+            // PENDING is already set, so lift it rather than wedge the queue.
+            *lock_recover(&ARG_PROMPT_PENDING) = None;
+            return;
+        };
+        let settings = ctx.settings.get();
+        let prompt_mat = crate::vibrancy::WindowMaterial::from_str(&settings.window_material);
+        let prompt_theme = settings.theme.clone();
+        let mut win_opt = None;
+        if let Some(win) = ctx.app_handle.get_webview_window("argprompt") {
+            // Sequence geometry: probe the caret only for the FIRST prompt of
+            // an expansion; every queued argument reuses that exact placement.
+            // Re-probing between arguments (prompt focused, caret probe now
+            // reads the prompt's own webview) could fall back to a different
+            // anchor — the window visibly jumped mid-wizard.
+            let cached_geom = lock_recover(&ARGPROMPT_SEQ_GEOM).clone();
+            if let Some((x, y, phys_w, phys_h)) = cached_geom {
+                crate::paste::log_diag(&format!(
+                    "[ARGPROMPT] prompt id={} reusing sequence geometry at ({}, {}) {}x{}",
+                    spec.id, x, y, phys_w, phys_h
+                ));
+                let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+                let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: phys_w, height: phys_h }));
+            } else {
+                let (cx, cy) = get_caret_screen_position();
+                let scale = win.scale_factor().unwrap_or(1.0);
+                let w_log = 480;
+                let h_log = 220;
+                let phys_w = (w_log as f64 * scale).round() as u32;
+                let phys_h = (h_log as f64 * scale).round() as u32;
+                // Center the prompt on the monitor containing the caret (avoids invisible top-left rectangle)
+                let (x, y) = crate::hotkey::calculate_overlay_position(cx, cy, w_log, h_log, scale);
+                crate::paste::log_diag(&format!(
+                    "[ARGPROMPT] showing prompt id={} at ({}, {}) size {}x{}",
+                    spec.id, x, y, phys_w, phys_h
+                ));
+                *lock_recover(&ARGPROMPT_SEQ_GEOM) = Some((x, y, phys_w, phys_h));
+                let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+                let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: phys_w, height: phys_h }));
+            }
+            win_opt = Some(win);
+        }
+        (ctx.app_handle.clone(), prompt_mat, prompt_theme, win_opt)
+    };
+    // Surface first, while still hidden: OS material + transparent controller
+    // background, so glass actually composites. Runs with NO global guard
+    // held; the values were handed in, so this helper can never re-lock the
+    // context. It used to be called under the guard, which both froze the
+    // frontend ack (main thread blocked on that same non-reentrant Mutex for
+    // the whole prep) and let the 2s prep elapse with the glass work queued
+    // behind the frozen main thread — the prompt then appeared solid.
+    if let Some(win) = win_opt {
+        // Warm advance: the window is already up presenting the previous
+        // prompt, so its surface is live. Skip the whole prep: re-applying
+        // acrylic + controller backgrounds on a VISIBLE window is DWM churn
+        // the user sees as a jump/flicker between sequential prompts, and it
+        // buys nothing (same window, same material, seconds old). Cold first
+        // shows always prep.
+        if !ARGPROMPT_UP.load(Ordering::SeqCst) {
+            prepare_prompt_surface(&win, prompt_mat, &prompt_theme);
+        } else {
+            crate::paste::log_diag(&format!(
+                "[ARGPROMPT] warm advance id={} — surface live, prep skipped",
+                spec.id
+            ));
+        }
+    }
+    // Emit only AFTER the surface is prepped: the frontend shows the window
+    // itself the moment the spec arrives, so emitting first would present an
+    // un-prepped (opaque) frame for the whole prep duration.
+    let _ = app.emit("arg-prompt-request", spec.clone());
+    // Retry emit shortly after — covers a webview that is still mounting
+    // its listener (deduped by id in the frontend). Guarded by the pending
+    // id: without this, a slow answer to prompt N followed by prompt N+1
+    // would have the stale retry re-open prompt N's UI on top of N+1
+    // (same window, wrong spec) — a ghost that can never resolve.
+    {
+        let app_retry = app.clone();
         let spec2 = spec.clone();
+        let retry_id = spec2.id;
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(250));
-            let _ = app.emit("arg-prompt-request", spec2);
+            let still_current = ARG_PROMPT_PENDING
+                .lock()
+                .map(|g| g.as_ref().map(|s| s.id) == Some(retry_id))
+                .unwrap_or(false);
+            if still_current {
+                let _ = app_retry.emit("arg-prompt-request", spec2);
+            }
         });
-        if let Some(win) = ctx.app_handle.get_webview_window("argprompt") {
-            let (cx, cy) = get_caret_screen_position();
-            let scale = win.scale_factor().unwrap_or(1.0);
-            let w_log = 480;
-            let h_log = 220;
-            let phys_w = (w_log as f64 * scale).round() as u32;
-            let phys_h = (h_log as f64 * scale).round() as u32;
-            // Center the prompt on the monitor containing the caret (avoids invisible top-left rectangle)
-            let (x, y) = crate::hotkey::calculate_overlay_position(cx, cy, w_log, h_log, scale);
+    }
+    // Present on the MAIN thread, with an authoritative PENDING check inside
+    // the queued closure. Window show/hide messages and run_on_main_thread
+    // closures share one FIFO queue, so this re-check observes exactly the
+    // state a concurrent submit has left behind: a submit that cancels or
+    // supersedes this prompt clears PENDING first, and the closure then
+    // skips instead of re-showing the window AFTER the submit's hide (an
+    // unanswerable ghost).
+    //
+    // The window is shown WS_VISIBLE but LEFT CLOAKED: the very first prompt
+    // of a cold start then waits for its renderer to paint the real spec
+    // (note_arg_prompt_painted uncloaks + takes focus on the ack), exactly
+    // like the overlay's cold first open. Uncloaking at show time revealed a
+    // raw acrylic frame before the webview committed its first frame — the
+    // white flash on the first argument prompt. The boot prewarm already
+    // started this window's renderer, so cloaked-but-visible still paints
+    // (the same path the overlay relies on).
+    {
+        let spec_id = spec.id;
+        let app_present = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let pending_ok = lock_recover(&ARG_PROMPT_PENDING)
+                .as_ref()
+                .map(|s| s.id)
+                == Some(spec_id);
+            if !pending_ok {
+                crate::paste::log_diag(&format!(
+                    "[ARGPROMPT] prompt id={} cancelled/superseded before present — skipping",
+                    spec_id
+                ));
+                return;
+            }
+            if let Some(win) = app_present.get_webview_window("argprompt") {
+                let _ = win.show();
+                ARGPROMPT_UP.store(true, Ordering::SeqCst);
+                if ARG_PROMPT_PAINTED_ID.load(Ordering::SeqCst) == spec_id {
+                    // Ack-before-present race: the paint ack landed while this
+                    // closure was still queued (fast webview). Its own focus
+                    // request targeted a still-hidden window and was dropped,
+                    // so reveal + focus here instead. The cloak parked the
+                    // OS-alpha mask at 0 (flash belt): lift it to 255 before
+                    // uncloaking or the reveal would composite nothing.
+                    crate::hotkey::set_window_alpha(&win, 255);
+                    crate::hotkey::set_window_cloaked(&win, false);
+                    let _ = win.set_focus();
+                    crate::paste::log_diag(&format!(
+                        "[ARGPROMPT] presented id={} already painted — revealed at present",
+                        spec_id
+                    ));
+                } else {
+                    crate::paste::log_diag(&format!(
+                        "[ARGPROMPT] presented id={} cloaked until paint ack",
+                        spec_id
+                    ));
+                }
+            }
+        });
+    }
+    // Watchdog (unconditional — also covers a missing webview): unpainted
+    // after ARG_PROMPT_PAINT_TIMEOUT_MS means the renderer never came up.
+    // Hide + resolve as cancelled so the worker never hangs and, critically,
+    // PENDING is always lifted (it gates every later expansion).
+    //
+    // The budget is generous because it also covers a cold argprompt
+    // webview mount. A too-short literal (300ms) is shorter than the window
+    // takes to load on a cold start — every prompt would be cancelled as
+    // "unpainted" before the user could ever see it.
+    //
+    // Cold-mount grace: while the renderer has not even FETCHED the spec yet
+    // the page is still loading (the prompt is queued in ARG_PROMPT_PENDING
+    // and the frontend fetches on mount + on focus, and the emit retry covers
+    // a late listener), so the paint budget only starts once the fetch is
+    // observed — bounded by ARG_PROMPT_MOUNT_TIMEOUT_MS so a renderer that
+    // never comes up still cancels and lifts PENDING.
+    std::thread::spawn(move || {
+        let mount_started = std::time::Instant::now();
+        while ARG_PROMPT_FETCHED_ID.load(Ordering::SeqCst) != watch_id
+            && ARG_PROMPT_PAINTED_ID.load(Ordering::SeqCst) != watch_id
+            && ARG_PROMPT_PENDING
+                .lock()
+                .map(|g| g.as_ref().map(|s| s.id) == Some(watch_id))
+                .unwrap_or(false)
+            && mount_started.elapsed() < ARG_PROMPT_MOUNT_TIMEOUT_MS
+        {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        std::thread::sleep(ARG_PROMPT_PAINT_TIMEOUT_MS);
+        let still_pending = ARG_PROMPT_PENDING
+            .lock()
+            .map(|g| g.as_ref().map(|s| s.id) == Some(watch_id))
+            .unwrap_or(false);
+        if still_pending && ARG_PROMPT_PAINTED_ID.load(Ordering::SeqCst) != watch_id {
             crate::paste::log_diag(&format!(
-                "[ARGPROMPT] showing prompt id={} at ({}, {}) size {}x{}",
-                spec.id, x, y, phys_w, phys_h
+                "[ARGPROMPT] watchdog: prompt id={} unpainted after {}ms — hiding, cancelling",
+                watch_id,
+                ARG_PROMPT_PAINT_TIMEOUT_MS.as_millis()
             ));
-            let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
-            let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: phys_w, height: phys_h }));
-            // Show immediately from Rust so the prompt is always visible even
-            // if the frontend webview hasn't yet mounted its listener — the
-            // frontend also calls show() once it has rendered the spec.
-            let _ = win.show();
-            let _ = win.set_focus();
+            if let Some(w) = app.get_webview_window("argprompt") {
+                crate::hotkey::set_window_cloaked(&w, true);
+                let _ = w.hide();
+            }
+            ARGPROMPT_UP.store(false, Ordering::SeqCst);
+            let _ = submit_arg_prompt_response(None);
+        }
+    });
+}
 
+/// Paint-ack from the argprompt frontend (first spec painted): lift the
+/// cloak and focus for typing. Stale acks (id mismatch) are ignored.
+pub fn note_arg_prompt_painted(id: u64) {
+    ARG_PROMPT_PAINTED_ID.store(id, Ordering::SeqCst);
+    let pending_id = lock_recover(&ARG_PROMPT_PENDING)
+        .as_ref()
+        .map(|s| s.id);
+    // Always log, even for stale acks: "ack arrived but pending was already
+    // cancelled/superseded" and "ack never arrived" must be distinguishable
+    // in the diag log when diagnosing a prompt that never pasted.
+    crate::paste::log_diag(&format!(
+        "[ARGPROMPT] paint ack id={} pending_id={:?}",
+        id, pending_id
+    ));
+    if pending_id != Some(id) {
+        return;
+    }
+    if let Some(ctx) = lock_recover(&EXPANSION_CTX).as_ref() {
+        if let Some(win) = ctx.app_handle.get_webview_window("argprompt") {
+            // Settle-then-reveal (main-window parity): the ack fires on DOM
+            // commit, one frame before WebView2 submits the raster — and on a
+            // cold first prompt the surface's previous frame is an empty
+            // acrylic slab. Uncloaking in that same instant composites the
+            // old frame (the quick flash before the card pops). Flush DWM,
+            // hold ~two frames so the renderer submits, flush again, then
+            // reveal. Invisible (the window is still cloaked) and ~35ms on
+            // the IPC thread, never the hotkey thread.
+            #[cfg(target_os = "windows")]
+            unsafe {
+                use windows::Win32::Graphics::Dwm::DwmFlush;
+                let _ = DwmFlush();
+                std::thread::sleep(std::time::Duration::from_millis(35));
+                let _ = DwmFlush();
+            }
+            crate::hotkey::set_window_alpha(&win, 255);
+            crate::hotkey::set_window_cloaked(&win, false);
+            let _ = win.set_focus();
+            crate::paste::log_diag(&format!("[ARGPROMPT] prompt id={} painted — revealed", id));
         }
     }
 }
 
 fn hide_arg_prompt_window() {
-    if let Some(ctx) = EXPANSION_CTX.lock().unwrap().as_ref() {
+    ARGPROMPT_UP.store(false, Ordering::SeqCst);
+    if let Some(ctx) = lock_recover(&EXPANSION_CTX).as_ref() {
         if let Some(win) = ctx.app_handle.get_webview_window("argprompt") {
+            // Cloak BEFORE hiding, matching the main/overlay hide
+            // choreography: the window never sits in an intermediate
+            // visible-but-stale state, and the next present uncloaks a warm
+            // surface instead of racing a cold one.
+            crate::hotkey::set_window_cloaked(&win, true);
             let _ = win.hide();
         }
     }
@@ -270,7 +596,7 @@ fn hide_arg_prompt_window() {
 /// Pop the active (front) prompt; if another is queued, show it; else hide.
 pub fn advance_arg_prompt_queue() {
     let next_spec = {
-        let mut q = ARG_PROMPT_QUEUE.lock().unwrap();
+        let mut q = lock_recover(&ARG_PROMPT_QUEUE);
         q.pop_front();
         q.front().map(|e| e.spec.clone())
     };
@@ -283,16 +609,39 @@ pub fn advance_arg_prompt_queue() {
 
 /// Fetched by the argprompt window frontend — covers first-prompt races.
 pub fn get_pending_arg_request() -> Option<ArgPromptRequest> {
-    ARG_PROMPT_PENDING.lock().unwrap().clone()
+    let spec = lock_recover(&ARG_PROMPT_PENDING).clone();
+    if let Some(s) = spec.as_ref() {
+        // Mark the fetch: the renderer is alive and now holds this exact spec,
+        // so the watchdog may judge it on the paint budget from here on.
+        ARG_PROMPT_FETCHED_ID.store(s.id, Ordering::SeqCst);
+    }
+    spec
 }
 
 pub fn submit_arg_prompt_response(value: Option<String>) -> Result<(), String> {
-    *ARG_PROMPT_PENDING.lock().unwrap() = None;
+    // Entry log BEFORE mutating anything: a failed paste that follows is
+    // only diagnosable if we know what this submit actually saw.
+    let value_len = value.as_ref().map(|v| v.len()).unwrap_or(0);
+    let pending_id = lock_recover(&ARG_PROMPT_PENDING).as_ref().map(|s| s.id);
+    let queue_depth = lock_recover(&ARG_PROMPT_QUEUE).len();
+    crate::paste::log_diag(&format!(
+        "[ARGPROMPT] submit received value_len={} pending_id={:?} queue_depth={}",
+        value_len, pending_id, queue_depth
+    ));
+    *lock_recover(&ARG_PROMPT_PENDING) = None;
     let next_spec = {
-        let mut q = ARG_PROMPT_QUEUE.lock().unwrap();
+        let mut q = lock_recover(&ARG_PROMPT_QUEUE);
         let Some(entry) = q.pop_front() else {
+            crate::paste::log_diag(
+                "[ARGPROMPT] submit: queue empty — entry already cancelled/superseded",
+            );
             return Err("No pending argument prompt".to_string());
         };
+        crate::paste::log_diag(&format!(
+            "[ARGPROMPT] submit resolved id={} queue_depth={}",
+            entry.spec.id,
+            q.len()
+        ));
         let _ = entry.tx.send(value);
         q.front().map(|e| e.spec.clone())
     };
@@ -305,33 +654,65 @@ pub fn submit_arg_prompt_response(value: Option<String>) -> Result<(), String> {
 }
 
 fn request_arg_value(spec: ArgPromptRequest) -> Option<String> {
+    let spec_id = spec.id;
     let (tx, rx) = std::sync::mpsc::channel();
     let should_show = {
-        let mut q = ARG_PROMPT_QUEUE.lock().unwrap();
+        let mut q = lock_recover(&ARG_PROMPT_QUEUE);
         q.push_back(ArgPromptEntry { spec, tx });
+        crate::paste::log_diag(&format!(
+            "[ARGPROMPT] request enqueued queue_depth={}",
+            q.len()
+        ));
         q.len() == 1
     };
     if should_show {
-        if let Some(front) = ARG_PROMPT_QUEUE.lock().unwrap().front() {
-            show_arg_prompt(&front.spec);
+        // Clone the front spec out and DROP the queue guard before showing:
+        // the show path queues a main-thread present, and holding QUEUE across
+        // it would make any concurrent submit block on this lock.
+        let front_spec = lock_recover(&ARG_PROMPT_QUEUE).front().map(|e| e.spec.clone());
+        if let Some(spec) = front_spec {
+            show_arg_prompt(&spec);
         }
     }
     // Block up to 60s waiting for user (off hook thread, so okay to block)
     let res = rx.recv_timeout(std::time::Duration::from_secs(60)).ok().flatten();
-    *ARG_PROMPT_PENDING.lock().unwrap() = None;
-    if res.is_some() {
-        // Prompt answered — bring the app where the keyword was typed back to
-        // the foreground so the follow-up delete/insert lands in the right place.
-        let target = LAST_MATCH_HWND.lock().unwrap().clone();
-        if let Some(hwnd) = target {
-            crate::paste::refocus_blocking(hwnd);
+    // Lift PENDING only when it is still OURS. On a successful answer the
+    // submit already cleared it and may have installed the NEXT prompt's
+    // spec; blanketing it with None used to race that install — the next
+    // prompt's main-thread present re-check would then skip it and the
+    // prompt never appeared.
+    {
+        let mut pending = lock_recover(&ARG_PROMPT_PENDING);
+        if pending.as_ref().map(|s| s.id) == Some(spec_id) {
+            *pending = None;
         }
+    }
+    if res.is_some() {
+        // Prompt answered — do NOT refocus the typed-into app here. More
+        // arguments of the same expansion may follow, and hopping activation
+        // back to the target after EVERY argument (then back to the prompt at
+        // the next show) was the visible jump/bounce between arguments.
+        // handle_expansion performs ONE refocus after the last argument,
+        // right before its foreground gate — the only place the target needs
+        // to own activation.
     } else {
-        // Timed out / cancelled — pop ourselves and surface the next queued prompt
-        advance_arg_prompt_queue();
-        let target = LAST_MATCH_HWND.lock().unwrap().clone();
-        if let Some(hwnd) = target {
-            crate::paste::refocus_blocking(hwnd);
+        // Timed out / cancelled. Distinguish OUR timeout from a cancel that
+        // already went through submit_arg_prompt_response (which pops our
+        // entry and may already show the next prompt): advancing blindly
+        // double-popped the queue and swallowed the queued argument.
+        let still_our_turn =
+            lock_recover(&ARG_PROMPT_QUEUE).front().map(|e| e.spec.id) == Some(spec_id);
+        if still_our_turn {
+            advance_arg_prompt_queue();
+        }
+        // Only take activation if no follow-up prompt is up — stealing focus
+        // from a freshly shown next prompt bounced activation once more.
+        let next_up = lock_recover(&ARG_PROMPT_PENDING).is_some();
+        if !next_up {
+            let target = LAST_MATCH_HWND.lock().unwrap().clone();
+            if let Some(hwnd) = target {
+                crate::paste::refocus_blocking(hwnd);
+            }
         }
     }
     res
@@ -920,6 +1301,10 @@ fn dispatch_expansion(snippet_id: String, keyword_len: usize, hwnd_at_match: isi
 }
 
 fn handle_expansion(snippet_id: String, keyword_len: usize, hwnd_at_match: isize) -> Result<(), String> {
+    // Stale sequence geometry from a previous expansion must never anchor
+    // this one — the caret may have moved in between. Each expansion probes
+    // the caret for its FIRST prompt and reuses that placement for the rest.
+    *lock_recover(&ARGPROMPT_SEQ_GEOM) = None;
     // Re-check gates before delete
     if !ENABLED.load(Ordering::SeqCst) {
         return Ok(());
@@ -970,11 +1355,36 @@ fn handle_expansion(snippet_id: String, keyword_len: usize, hwnd_at_match: isize
     };
     let post_text = cursor_offset.map(|off| final_text[off..].to_string());
 
-    // Gate re-check before delete
+    // Gate re-check before delete — restoring activation AFTER the argument
+    // sequence, not after every argument: bouncing focus back to the target
+    // between prompts (and to the prompt at the next show) was the visible
+    // jump on arg-to-arg transitions. Restore it here only when foreground is
+    // the prompt window itself (it owned activation for the sequence) or
+    // unsettled (just-hidden prompt, fg NULL): if the USER switched away
+    // mid-sequence the paste still aborts, exactly as before.
     if !ENABLED.load(Ordering::SeqCst) {
         return Ok(());
     }
-    let current_fg2 = unsafe { GetForegroundWindow() };
+    let mut current_fg2 = unsafe { GetForegroundWindow() };
+    if current_fg2.0 as isize != hwnd_at_match {
+        let prompt_hwnd = {
+            let ctx_guard = EXPANSION_CTX.lock().unwrap();
+            ctx_guard
+                .as_ref()
+                .and_then(|c| c.app_handle.get_webview_window("argprompt"))
+                .and_then(|w| w.hwnd().ok())
+                .map(|h| h.0 as isize)
+        };
+        let fg_is_prompt = prompt_hwnd == Some(current_fg2.0 as isize);
+        let fg_unsettled = current_fg2.0 as isize == 0;
+        if fg_is_prompt || fg_unsettled {
+            crate::paste::log_diag(
+                "[EXPANSION] restoring target activation after argument sequence",
+            );
+            crate::paste::refocus_blocking(hwnd_at_match);
+            current_fg2 = unsafe { GetForegroundWindow() };
+        }
+    }
     if current_fg2.0 as isize != hwnd_at_match {
         crate::paste::log_diag("[EXPANSION] Window changed before delete (second check) — abort");
         return Ok(());

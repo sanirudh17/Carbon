@@ -739,6 +739,12 @@ fn enlarged_painted(app_handle: AppHandle, token: Option<u64>) {
     choreo::note_window_painted(&app_handle, "main", token);
 }
 
+/// Argprompt frontend confirms its first spec painted — lift cloak + focus.
+#[tauri::command]
+fn argprompt_painted(id: u64) {
+    expansion::note_arg_prompt_painted(id);
+}
+
 #[tauri::command]
 fn enlarged_hide_ack(gen: u64) {
     hotkey::note_enlarged_hide_ack(gen);
@@ -1155,13 +1161,17 @@ pub fn run() {
                 // or idle-discarded surface must never composite white during
                 // the reveal ramp, and the wm-hidden mask must be on until the
                 // frontend paint gate lifts it. Guarded like the hotkey path
-                // so the background warmth loop can never interleave.
-                let _present_guard = crate::vibrancy::hold_present_cycle();
+                // so the background warmth loop can never interleave. BOUNDED:
+                // never wedge the focus behind a slow boot cycle holding the
+                // present mutex (same contract as the hotkey show paths).
+                let _present_guard = crate::vibrancy::hold_present_cycle_bounded();
                 hotkey::prepare_main_surface(app, &win);
                 let _ = win.eval("document.documentElement.classList.add('wm-hidden')");
                 if win.is_minimized().unwrap_or(false) {
                     let _ = win.unminimize();
                 }
+                // Live show committed: present-cycle tails must leave it alone.
+                hotkey::MAIN_SHOW_ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
                 let _ = win.show();
                 hotkey::set_window_cloaked(&win, true);
                 drop(_present_guard);
@@ -1531,6 +1541,7 @@ pub fn run() {
             overlay_painted,
             enlarged_hide_ack,
             enlarged_painted,
+            argprompt_painted,
             hide_enlarged,
             is_main_revealed,
             toggle_overlay,

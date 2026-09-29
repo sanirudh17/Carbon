@@ -193,6 +193,13 @@ interface EnlargedWindowProps {
   onOpenSettings: () => void;
 }
 
+/** Hard cap for the cold-open content hold (ms): the first open after a
+ * process start holds the uncloak until the first data answer (content commit
+ * or fetch resolution) lands, so the reveal never shows a bare translucent
+ * surface. Must stay below choreo.ts's coldhold show-gate bound (5600ms) so
+ * the show recovery can never cut a content wait short. */
+const COLD_HOLD_CAP_MS = 5000;
+
 export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }) => {
   const [items, setItems] = useState<ClipItem[]>(() => (typeof window !== 'undefined' && window.__carbonInitialData) || []);
   const [initialLoaded, setInitialLoaded] = useState(() => Boolean(typeof window !== 'undefined' && window.__carbonInitialData && window.__carbonInitialData.length > 0));
@@ -239,6 +246,9 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   useEffect(() => {
     let r1 = requestAnimationFrame(() => {
       r1 = requestAnimationFrame(() => {
+        // Never stomp an armed open-paint gate (a window recreated at open
+        // mounts while the gate is already holding for content).
+        if (openPaintPendingRef.current) return;
         document.documentElement.dataset.painted = '1';
       });
     });
@@ -253,14 +263,17 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   useEffect(() => {
     if (!openPaintPendingRef.current) return;
     openPaintPendingRef.current = false;
+    const html = document.documentElement;
     let r1 = requestAnimationFrame(() => {
       r1 = requestAnimationFrame(() => {
-        document.documentElement.dataset.painted = '1';
+        html.removeAttribute('data-coldhold');
+        html.dataset.painted = '1';
       });
     });
     const t = window.setTimeout(() => {
       cancelAnimationFrame(r1);
-      document.documentElement.dataset.painted = '1';
+      html.removeAttribute('data-coldhold');
+      html.dataset.painted = '1';
     }, 200);
     return () => {
       cancelAnimationFrame(r1);
@@ -508,6 +521,28 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   // own 300ms recovery + our timeout). Harmless while visible — no gate is
   // running — and a no-op when nothing actually changed.
   const openPaintPendingRef = useRef(false);
+  // Mirror of the COMMITTED list (updated every render): the open decision
+  // must judge what is actually on screen NOW. A latch ("rows once
+  // committed", "an answer once landed", "initial load done") can be true
+  // while the DOM is empty — boot pushes, cleared/filtered lists, and a
+  // fresh process whose store_version still reads 0 (so every first open
+  // classifies as "fresh"). That is how the gate used to open in ~11ms and
+  // reveal the bare translucent surface ~200ms before the rows landed.
+  const itemsStateRef = useRef<ClipItem[]>(items);
+  itemsStateRef.current = items;
+  // Read-sequence tagging for the cold hold: only a data read that STARTED
+  // after the hold armed may count as "this open's answer". Reads already in
+  // flight from before the open can resolve empty/stale and must never
+  // release the hold early (the early-empty-release race that showed the
+  // translucent frame a beat before content).
+  const readSeqRef = useRef(0);
+  const coldReadFloorRef = useRef(0);
+  const coldReadResolvedRef = useRef(false);
+  // Per-open hold identity: a probe chain from an earlier open must never
+  // release the gate of a later one (rapid hide→reopen while a cold hold is
+  // still ticking would otherwise let the old cap/answer release the new
+  // open before its content lands).
+  const coldHoldTokenRef = useRef(0);
   const awaitOpenPaint = () => {
     openPaintPendingRef.current = true;
     document.documentElement.dataset.painted = '0';
@@ -520,6 +555,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   };
 
   const fetchItems = async (filterOverride?: string, unlockedIdsOverride?: Set<string>) => {
+    const readSeq = ++readSeqRef.current;
     try {
       const activeFilter = filterOverride !== undefined ? filterOverride : selectedFilter;
       const isCol = activeFilter.startsWith('col_');
@@ -591,6 +627,11 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     } catch (err) {
       console.error('Failed to fetch enlarged clips:', err);
       setInitialLoaded(true);
+    } finally {
+      // This open's own read has now answered (a failure is an answer too):
+      // only reads that started after the hold armed may clear it, so a
+      // pre-open in-flight read can never release the cold gate early.
+      if (readSeq > coldReadFloorRef.current) coldReadResolvedRef.current = true;
     }
   };
 
@@ -863,16 +904,69 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       }
       const stale =
         typeof raw !== 'number' || raw > mainCacheVersionRef.current;
-      if (!stale) {
+      // Cold open = nothing on screen to reveal NOW (on the unfiltered
+      // view). The decision reads the committed list state, never a latch —
+      // and store-version freshness cannot cover the first open either:
+      // store_version starts at 0 for a fresh process, so "0 > 0" is false
+      // and the gate used to open in ~11ms over an empty DOM, revealing the
+      // bare translucent surface ~200ms before the rows landed. Filtered /
+      // search views keep their (possibly empty) result — only the
+      // unfiltered list must hold for first content.
+      const viewFiltered =
+        selectedFilterRef.current !== 'all' ||
+        searchValueRef.current.trim() !== '' ||
+        Boolean(sourceAppFilterRef.current);
+      const coldOpen = !viewFiltered && itemsStateRef.current.length === 0;
+      const holdToken = ++coldHoldTokenRef.current;
+      invoke('log_client_event', {
+        event: `[SHOW_MAIN] open decision stale=${stale} coldOpen=${coldOpen} rows=${itemsStateRef.current.length} cache=${allCachedItemsRef.current.length} filtered=${viewFiltered}`,
+      }).catch(() => {});
+      if (!stale && !coldOpen) {
         openPaintPendingRef.current = false;
         document.documentElement.dataset.painted = '1';
         return;
       }
       openPaintPendingRef.current = true;
       document.documentElement.dataset.painted = '0';
+      if (coldOpen) {
+        document.documentElement.dataset.coldhold = '1';
+        // Answer-driven hold (cold launch): hold the uncloak until the first
+        // data answer that started AFTER this open lands and commits — a
+        // bare translucent surface must never composite. Always kick a read:
+        // the boot answer (if any) predates this open and may have settled
+        // on a store that has since filled; the Rust per-open snapshot push
+        // usually wins the race, and the read covers a cold/absent prewarm
+        // cache. The hard cap is the only time bound, and choreo.ts
+        // stretches its show-gate recovery to 5600ms while data-coldhold is
+        // armed so this wait is never cut short.
+        coldReadFloorRef.current = readSeqRef.current;
+        coldReadResolvedRef.current = false;
+        fetchRef.current();
+        const beganAt = performance.now();
+        const release = (reason: string) => {
+          if (coldHoldTokenRef.current !== holdToken) return;
+          openPaintPendingRef.current = false;
+          document.documentElement.removeAttribute('data-coldhold');
+          document.documentElement.dataset.painted = '1';
+          invoke('log_client_event', {
+            event: `[SHOW_MAIN] cold hold released (${reason}) after ${(performance.now() - beganAt).toFixed(0)}ms rows=${itemsStateRef.current.length}`,
+          }).catch(() => {});
+        };
+        const probe = () => {
+          if (!openPaintPendingRef.current) return;
+          if (coldHoldTokenRef.current !== holdToken) return;
+          if (itemsStateRef.current.length > 0) return release('rows');
+          if (coldReadResolvedRef.current) return release('read');
+          if (performance.now() - beganAt >= COLD_HOLD_CAP_MS) return release('cap');
+          window.setTimeout(probe, 50);
+        };
+        window.setTimeout(probe, 50);
+        return;
+      }
       window.setTimeout(() => {
         if (openPaintPendingRef.current) {
           openPaintPendingRef.current = false;
+          document.documentElement.removeAttribute('data-coldhold');
           document.documentElement.dataset.painted = '1';
         }
       }, 120);
@@ -896,13 +990,21 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       const local = allCachedItemsRef.current;
       // Already displaying this exact snapshot (the common open: the live
       // push got here first): warm the cache ref and return with NO commit
-      // and NO gate — the open stays instant.
-      if (sameClipList(snap, local)) {
+      // and NO gate — the open stays instant. The comparison must read what
+      // is ACTUALLY displayed: on the unfiltered view that is the committed
+      // DOM rows, never the cache ref alone — a cache that matches while
+      // the DOM is empty (boot push raced, list reset) used to early-release
+      // the gate over a bare surface. Filtered views never commit the
+      // snapshot (their query owns the list), so the cache comparison still
+      // decides.
+      const displayed = unfilteredView ? itemsStateRef.current : local;
+      if (sameClipList(snap, displayed)) {
         allCachedItemsRef.current = snap;
         setInitialLoaded(true);
         // Nothing to paint: release the open gate immediately (the open
         // stays instant).
         openPaintPendingRef.current = false;
+        document.documentElement.removeAttribute('data-coldhold');
         document.documentElement.dataset.painted = '1';
         return;
       }

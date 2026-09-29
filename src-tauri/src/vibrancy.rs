@@ -160,6 +160,10 @@ pub fn apply_window_material(window: &WebviewWindow, material: WindowMaterial) {
                     "[Vibrancy] Window '{}' set to solid material",
                     window.label()
                 );
+                crate::paste::log_diag(&format!(
+                    "[VIBRANCY] backdrop=none (solid) window='{}'",
+                    window.label()
+                ));
             }
             WindowMaterial::Acrylic | WindowMaterial::Mica | WindowMaterial::Blur => {
                 let tint = get_tint_color();
@@ -169,17 +173,38 @@ pub fn apply_window_material(window: &WebviewWindow, material: WindowMaterial) {
                         window.label(),
                         e
                     );
+                    crate::paste::log_diag(&format!(
+                        "[VIBRANCY] acrylic FAILED window='{}' err={:?} — blur fallback",
+                        window.label(),
+                        e
+                    ));
                     if let Err(e2) = window_vibrancy::apply_blur(window, Some(tint)) {
                         log::warn!(
                             "[Vibrancy] fallback apply_blur failed on '{}': {:?}. Using solid fallback",
                             window.label(),
                             e2
                         );
+                        crate::paste::log_diag(&format!(
+                            "[VIBRANCY] blur fallback FAILED window='{}' err={:?} — solid fallback",
+                            window.label(),
+                            e2
+                        ));
                     } else {
                         log::info!("[Vibrancy] Applied fallback blur to window '{}'", window.label());
+                        crate::paste::log_diag(&format!(
+                            "[VIBRANCY] backdrop=blur window='{}'",
+                            window.label()
+                        ));
                     }
                 } else {
                     log::info!("[Vibrancy] Applied acrylic to window '{}'", window.label());
+                    // Per-window backdrop line: parity between argprompt/pill
+                    // and picker/main is proven by comparing these in the diag
+                    // log (they must all read backdrop=acrylic).
+                    crate::paste::log_diag(&format!(
+                        "[VIBRANCY] backdrop=acrylic window='{}'",
+                        window.label()
+                    ));
                 }
             }
         }
@@ -240,12 +265,57 @@ pub fn init_window_vibrancy(window: &WebviewWindow, app: &AppHandle) {
     }
 }
 
+/// How long a background-thread `with_webview` call may wait for its closure
+/// to actually execute on the main thread.
+const WITH_WEBVIEW_APPLY_WAIT_MS: u64 = 100;
+
+/// Wait for a `with_webview` closure to run (or the budget to lapse) and
+/// report whether it applied its change.
+///
+/// `WebviewWindow::with_webview` is fire-and-forget from any thread other
+/// than the main thread: tauri-runtime-wry queues the closure onto the event
+/// loop and returns immediately, so reading the "applied" flag straight after
+/// the call reports failure even when the main thread is about to run the
+/// closure successfully. Every background surface prep therefore lied —
+/// `ensure_transparent_surface` burned its whole retry budget on false
+/// "controller not ready" negatives, and the argprompt glass prep declared
+/// failure while the transparent-background work was still sitting in the
+/// main thread's queue (and, when the show path held a lock the main thread
+/// needed, never ran at all before the prompt was presented solid).
+///
+/// `done` is stored by the closure on EVERY path — including the early COM
+/// cast failure — so a call that ran inline (on the main thread) resolves on
+/// the first check with no wait, success or failure. Only a queued call pays
+/// the bounded wait, and only until the main thread gets to it.
+pub(crate) fn wait_for_webview_work(
+    done: &std::sync::atomic::AtomicBool,
+    applied: &std::sync::atomic::AtomicBool,
+) -> bool {
+    use std::sync::atomic::Ordering;
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_millis(WITH_WEBVIEW_APPLY_WAIT_MS);
+    loop {
+        if applied.load(Ordering::SeqCst) {
+            return true;
+        }
+        if done.load(Ordering::SeqCst) {
+            return false; // ran, but did not apply — a genuine failure
+        }
+        if std::time::Instant::now() >= deadline {
+            return false; // never got to run within the budget
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 /// Sets WebView2's default pre-paint surface. Glass remains transparent so
 /// acrylic can composite desktop blur; Solid must be an opaque theme match so
 /// a cold frame is indistinguishable from the actual Solid window.
 /// Returns whether the controller accepted it — a cold-start controller that
 /// is not ready yet fails SILENTLY and Chromium's white default sticks
 /// (rare first-present flash), so callers retry (see prepare_main_surface).
+/// From a background thread the result is only meaningful after
+/// `wait_for_webview_work` has seen the queued closure finish (see helper).
 pub fn set_window_default_background(
     window: &WebviewWindow,
     material: WindowMaterial,
@@ -262,7 +332,9 @@ pub fn set_window_default_background(
             _ => COREWEBVIEW2_COLOR { A: 0, R: 0, G: 0, B: 0 },
         };
         let applied_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let applied_flag_inner = applied_flag.clone();
+        let done_flag_inner = done_flag.clone();
         let _ = window.with_webview(move |platform_webview| {
             use windows_core::Interface;
             use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -273,13 +345,17 @@ pub fn set_window_default_background(
             // (WebView2 1.0.774+): cast the base controller via its COM GUID.
             let controller2: ICoreWebView2Controller2 = match controller.cast() {
                 Ok(c) => c,
-                Err(_) => return,
+                Err(_) => {
+                    done_flag_inner.store(true, std::sync::atomic::Ordering::SeqCst);
+                    return;
+                }
             };
             if unsafe { controller2.SetDefaultBackgroundColor(color).is_ok() } {
                 applied_flag_inner.store(true, std::sync::atomic::Ordering::SeqCst);
             }
+            done_flag_inner.store(true, std::sync::atomic::Ordering::SeqCst);
         });
-        let applied = applied_flag.load(std::sync::atomic::Ordering::SeqCst);
+        let applied = wait_for_webview_work(&done_flag, &applied_flag);
         if !applied {
             crate::paste::log_diag("[VIBRANCY] default background NOT applied (controller not ready) — retry will follow.");
         }
@@ -389,9 +465,45 @@ pub(crate) fn hold_present_cycle() -> std::sync::MutexGuard<'static, ()> {
     PRESENT_CYCLE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Bounded show-path hold on the present mutex. The boot cycle holds this
+/// mutex across synchronous Win32 calls (SetWindowPos/ShowWindow pump the
+/// event-loop thread, which can be busy for many seconds during a cold dev
+/// load — witnessed: a hotkey open produced no log line for 77s+ while the
+/// `parked warmup` cycle never printed its exit). A hotkey must not wedge
+/// behind that, so this waits at most ~250ms for the warmth loop's ~40ms
+/// tick and then proceeds unguarded — safe because every cycle participant
+/// is race-tolerant: the warmth loop try_lock-skips, and cycle tails consult
+/// `MAIN_SHOW_ACTIVE` / the show-generation guard before touching the window.
+pub(crate) fn hold_present_cycle_bounded(
+) -> Option<std::sync::MutexGuard<'static, ()>> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+    loop {
+        match PRESENT_CYCLE.try_lock() {
+            Ok(g) => return Some(g),
+            Err(std::sync::TryLockError::Poisoned(p)) => return Some(p.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                if std::time::Instant::now() >= deadline {
+                    crate::paste::log_diag(
+                        "[PRESENT] bounded cycle hold timed out — show proceeds unguarded",
+                    );
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+    }
+}
+
 /// Park off-screen, physically uncloak, show-without-activate, settle for a
 /// real DWM present, hide, restore, re-cloak. Logical flags stay cloaked.
 /// Shared by boot prewarm and the main show-path idle rewarm.
+///
+/// `pub(crate)` (not private): the argprompt/pill boot prewarm runs the same
+/// genuine first-present. The cloak-gated prewarm dance alone (WS_VISIBLE +
+/// cloak) never produces a real DWM present — the doc above says it plainly —
+/// so without this the first argument prompt composites a cold white surface.
+/// `gen_guard` is main-specific; other windows pass None (no raced-show
+/// reporting needed: nothing else can reveal these windows mid-cycle).
 ///
 /// `gen_guard`: expected enlarged show generation for background callers.
 /// A real show that raced the cycle owns cloak state from here on: restore
@@ -399,7 +511,7 @@ pub(crate) fn hold_present_cycle() -> std::sync::MutexGuard<'static, ()> {
 /// window while the flag says revealed is the "never appears again" state),
 /// and report false so no warmth is stamped. Boot passes None (legacy path).
 /// Returns true when the surface genuinely re-presented.
-fn offscreen_present_cycle(
+pub(crate) fn offscreen_present_cycle(
     win: &tauri::WebviewWindow,
     label: &str,
     settle_ms: u64,
@@ -412,8 +524,14 @@ fn offscreen_present_cycle(
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOWNOACTIVATE};
         let Ok(hwnd) = win.hwnd() else {
+            crate::paste::log_diag(&format!(
+                "[PREWARM] parked warmup exit label='{label}' hwnd-missing ok=false"
+            ));
             return false;
         };
+        crate::paste::log_diag(&format!(
+            "[PREWARM] parked warmup enter label='{label}' settle={settle_ms}ms"
+        ));
         let orig = win.outer_position().ok();
         let h_raw: isize = hwnd.0 as isize;
         let h = HWND(h_raw as *mut _);
@@ -465,7 +583,13 @@ fn offscreen_present_cycle(
                 crate::hotkey::enlarged_show_gen() != g
                     || !crate::hotkey::MAIN_CLOAKED.load(Ordering::SeqCst)
             })
-            .unwrap_or(false);
+            .unwrap_or(false)
+            // A live show that proceeded past a timed-out cycle hold owns the
+            // window even when this boot cycle passed `gen_guard = None` —
+            // hiding or re-cloaking here would swallow the user's open (the
+            // cycle's once-flag already prevents any later re-run).
+            || (label == "main"
+                && crate::hotkey::MAIN_SHOW_ACTIVE.load(Ordering::SeqCst));
         if raced {
             if let Some(p) = orig {
                 unsafe {
@@ -483,6 +607,9 @@ fn offscreen_present_cycle(
                     );
                 }
             }
+            crate::paste::log_diag(&format!(
+                "[PREWARM] parked warmup exit label='{label}' raced (live show owns the window) ok=false"
+            ));
             return false;
         }
         unsafe {
@@ -508,7 +635,9 @@ fn offscreen_present_cycle(
         // changed). Show/hide cycles can also clear DWMWA_CLOAK on some
         // drivers — belt-and-braces through the normal path too.
         crate::hotkey::set_window_cloaked(win, true);
-        let _ = label;
+        crate::paste::log_diag(&format!(
+            "[PREWARM] parked warmup exit label='{label}' ok=true"
+        ));
         let _ = Ordering::SeqCst;
         return true;
     }

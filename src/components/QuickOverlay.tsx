@@ -57,6 +57,12 @@ declare global {
   }
 }
 
+/** Hard cap for the overlay cold-open content hold (ms): mirrors the main
+ * window's cap and stays below choreo.ts's coldhold show-gate bound
+ * (5600ms) so the show recovery can never cut a content wait short. The
+ * normal release is answer/rows-driven — this is only the last resort. */
+const COLD_HOLD_CAP_MS = 5000;
+
 const emptyDragImg = typeof Image !== 'undefined' ? new Image() : null;
 if (emptyDragImg) {
   emptyDragImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
@@ -303,8 +309,26 @@ export const QuickOverlay: React.FC = () => {
   };
   const lastStoreVersionRef = useRef(0);
   itemsRef.current = items;
+  const snSnippetsRef = useRef<Snippet[]>([]);
+  snSnippetsRef.current = snSnippets;
+  // Cold-open content gate (first-launch translucent frame): the choreo gate
+  // stamps on mount paint, so an open that beat the first data answer
+  // reveals an empty frame that pops content in. Cold detection reads the
+  // CURRENT lists (itemsRef / snSnippetsRef) — never a latch: "rows once
+  // committed" and "fetches done" can both be true while the DOM is empty
+  // (boot settled on an empty answer, list since replaced), which is exactly
+  // the open that used to flash translucent a beat before the push landed.
+  const coldHoldRef = useRef<number | null>(null);
+  const coldArmedAtRef = useRef(0);
+  // Read-sequence floor for the cold hold: only a data read that STARTED
+  // after the hold armed may count as "this open's answer". Reads already in
+  // flight from before the open can resolve empty/stale and must never
+  // release the hold early.
+  const readSeqRef = useRef(0);
+  const coldReadFloorRef = useRef(0);
 
   const fetchItems = async () => {
+    const readSeq = ++readSeqRef.current;
     try {
       const res = await invoke<ClipItem[]>('get_all_clips', {
         search: search.trim() ? search : null,
@@ -323,6 +347,13 @@ export const QuickOverlay: React.FC = () => {
       );
     } catch (err) {
       console.error('Failed to fetch clips:', err);
+    } finally {
+      // This read has answered (a failure is an answer too). Only a read
+      // that started after the cold hold armed may release it, so a pre-open
+      // in-flight read can never clear the gate early.
+      if (readSeq > coldReadFloorRef.current && coldHoldRef.current !== null) {
+        releaseColdHold('read');
+      }
     }
   };
 
@@ -765,6 +796,9 @@ export const QuickOverlay: React.FC = () => {
   const requestHide = (gen?: number | null) => {
     // Tell Rust this generation is handled: fallback only fires if webview hangs
     if (typeof gen === 'number') invoke('overlay_hide_ack', { gen }).catch(() => {});
+    // A hide during a cold content hold cancels the hold (no stale stamp or
+    // flag may leak into the next open — it re-arms if still cold).
+    disarmColdHold();
 
     // Already fading out: keep current exit
     if (pendingHideRef.current) return;
@@ -820,11 +854,86 @@ export const QuickOverlay: React.FC = () => {
     }, 150);
   };
 
+  // ── Cold-open content hold (see refs above) ──
+  // Holds painted='0' until the first content commit (rows) or this open's
+  // own read answers (even empty), with a hard cap as the last resort — an
+  // empty library still reveals. Epoch-guarded like the rest of the show
+  // path so overlapping shows can't fight. The choreo recovery bound
+  // stretches via data-coldhold while armed, so the hold is never cut short
+  // at 300ms.
+  const stampColdPainted = (epoch: number) => {
+    document.documentElement.removeAttribute('data-coldhold');
+    let r1 = requestAnimationFrame(() => {
+      if (showEpochRef.current !== epoch) return;
+      r1 = requestAnimationFrame(() => {
+        if (showEpochRef.current !== epoch) return;
+        document.documentElement.dataset.painted = '1';
+      });
+    });
+    window.setTimeout(() => {
+      cancelAnimationFrame(r1);
+      if (showEpochRef.current !== epoch) return;
+      document.documentElement.dataset.painted = '1';
+    }, 300);
+  };
+  const releaseColdHold = (reason: string) => {
+    if (coldHoldRef.current === null) return;
+    window.clearTimeout(coldHoldRef.current);
+    coldHoldRef.current = null;
+    logClient(
+      `[SHOW_OVERLAY] cold hold released (${reason}) after ${(performance.now() - coldArmedAtRef.current).toFixed(0)}ms rows=${itemsRef.current.length} snips=${snSnippetsRef.current.length}`
+    );
+    stampColdPainted(showEpochRef.current);
+  };
+  const disarmColdHold = () => {
+    if (coldHoldRef.current === null) return;
+    window.clearTimeout(coldHoldRef.current);
+    coldHoldRef.current = null;
+    document.documentElement.removeAttribute('data-coldhold');
+  };
+  const armColdHold = () => {
+    const epoch = showEpochRef.current;
+    coldReadFloorRef.current = readSeqRef.current;
+    coldArmedAtRef.current = performance.now();
+    document.documentElement.dataset.painted = '0';
+    document.documentElement.dataset.coldhold = '1';
+    logClient(
+      `[SHOW_OVERLAY] cold hold armed rows=${itemsRef.current.length} snips=${snSnippetsRef.current.length}`
+    );
+    coldHoldRef.current = window.setTimeout(() => {
+      if (showEpochRef.current !== epoch) return;
+      releaseColdHold('cap');
+    }, COLD_HOLD_CAP_MS);
+  };
+  // Release a cold-held gate once content actually commits (post-commit
+  // effect covers overlay-data, overlay-snippets, fetchItems, the boot
+  // set-data and live pushes alike). Empty answers release through the
+  // tagged-read path in fetchItems; the cap is the last resort.
+  useEffect(() => {
+    if (coldHoldRef.current !== null && (items.length > 0 || snSnippets.length > 0)) {
+      releaseColdHold('rows');
+    }
+  }, [items, snSnippets]);
+
   const beginOverlayShow = (token?: number) => {
     showEpochRef.current += 1;
     lastOpenedAtRef.current = performance.now();
     if (pendingHideRef.current) pendingHideRef.current.cancel();
     overlayPhaseRef.current = 'showing';
+    // Cold-open content gate: hold the paint gate until the first answer
+    // that started AFTER this open lands, instead of revealing an empty
+    // translucent frame that pops rows in. Cold detection reads the CURRENT
+    // lists — never a latch. Kick the reads so such an answer exists: the
+    // per-open snapshot push usually wins the race, and the reads cover a
+    // cold/absent prewarm cache (a store that cannot answer must still
+    // reveal at the cap). Warm opens (rows already committed) stay instant.
+    const hasRows =
+      itemsRef.current.length > 0 || snSnippetsRef.current.length > 0;
+    if (!hasRows) {
+      armColdHold();
+      fetchRef.current();
+      fetchSnippets();
+    }
     invoke('overlay_phase_ack', { phase: 'showing' }).catch(() => {});
     executeWindowShow('overlay', () => {
       afterRevealFresh();
@@ -840,6 +949,9 @@ export const QuickOverlay: React.FC = () => {
 
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
+        // Never stomp an armed cold content hold (a show that raced the
+        // mount must keep its gate).
+        if (coldHoldRef.current !== null) return;
         document.documentElement.dataset.painted = '1';
       });
     });

@@ -91,6 +91,28 @@ test('ADDENDUM v15 - Invariant I1: Window becomes visible ONLY after paint gate 
   }
 });
 
+test('Cold-open content hold: stuck-gate bound stretches while data-coldhold is armed', () => {
+  const choreoTsPath = path.join(SRC_DIR, 'lib', 'choreo.ts');
+  const choreoContent = fs.readFileSync(choreoTsPath, 'utf-8');
+  // A first-launch open holds painted='0' until the first data answer lands
+  // (content commit or fetch resolution); the 300ms stuck-gate recovery must
+  // not cut that wait short — it stretches to 5600ms while the hold flag is
+  // set (the hold's own 5000ms cap releases first).
+  assert.ok(
+    choreoContent.includes("html.dataset.coldhold === '1'"),
+    'the stuck-gate bound must stretch while a cold content hold is armed'
+  );
+  assert.ok(
+    choreoContent.includes("html.removeAttribute('data-coldhold')"),
+    'the hold flag must clear when the gate opens or recovers'
+  );
+  // The warm bound is unchanged: a gate with no hold still recovers at 300ms.
+  assert.ok(
+    choreoContent.includes('? 5600 : 300'),
+    'warm opens must keep the 300ms stuck-gate recovery bound'
+  );
+});
+
 test('ADDENDUM v15 - Invariant I4: Fade target per mode (Glass -> html, Solid -> #root)', () => {
   const cssPath = path.join(SRC_DIR, 'index.css');
   const cssContent = fs.readFileSync(cssPath, 'utf-8');
