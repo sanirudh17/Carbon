@@ -21,9 +21,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_ESCAPE, VK_CAPITAL,
 };
 use windows::Win32::Foundation::POINT;
-use windows::Win32::Graphics::Gdi::{
-    ClientToScreen, GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-};
+use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetCaretPos, GetCursorPos, GetForegroundWindow, GetGUIThreadInfo,
     GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindow,
@@ -281,6 +279,7 @@ fn prepare_prompt_surface(
     win: &tauri::WebviewWindow,
     mat: crate::vibrancy::WindowMaterial,
     theme: &str,
+    label: &str,
 ) {
     crate::vibrancy::apply_window_material(win, mat);
     let started = std::time::Instant::now();
@@ -289,21 +288,21 @@ fn prepare_prompt_surface(
         let ok_tr = crate::webview_bg::set_webview_transparent_background(win.as_ref());
         if ok_bg && ok_tr {
             crate::paste::log_diag(&format!(
-                "[ARGPROMPT] surface prepared attempt={} in {}ms",
+                "[{label}] surface prepared attempt={} in {}ms",
                 attempt + 1,
                 started.elapsed().as_millis()
             ));
             return;
         }
         crate::paste::log_diag(&format!(
-            "[ARGPROMPT] surface not ready (attempt {}/10) — retrying",
+            "[{label}] surface not ready (attempt {}/10) — retrying",
             attempt + 1
         ));
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
-    crate::paste::log_diag(
-        "[ARGPROMPT] transparent surface NOT applied after retries — glass will look solid",
-    );
+    crate::paste::log_diag(&format!(
+        "[{label}] transparent surface NOT applied after retries — glass will look solid",
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -399,7 +398,7 @@ fn show_arg_prompt(spec: &ArgPromptRequest) {
         // buys nothing (same window, same material, seconds old). Cold first
         // shows always prep.
         if !ARGPROMPT_UP.load(Ordering::SeqCst) {
-            prepare_prompt_surface(&win, prompt_mat, &prompt_theme);
+            prepare_prompt_surface(&win, prompt_mat, &prompt_theme, "ARGPROMPT");
         } else {
             crate::paste::log_diag(&format!(
                 "[ARGPROMPT] warm advance id={} — surface live, prep skipped",
@@ -463,7 +462,18 @@ fn show_arg_prompt(spec: &ArgPromptRequest) {
                 return;
             }
             if let Some(win) = app_present.get_webview_window("argprompt") {
+                // STEP-3 (build-fixes): the boot present-cycle parks windows;
+                // clear any parked chrome before presenting (still cloaked).
+                crate::hotkey::set_parked_toolwindow(&win, false);
                 let _ = win.show();
+                // FIRST-SHOW GATE (same lost-cloak race as overlay/main): the
+                // TOOLWINDOW flip + ShowWindow above can clear DWMWA_CLOAK
+                // asynchronously after succeeding. Re-cloak + flush while the
+                // paint-ack gate still holds the window invisible, so a first
+                // show (empty DOM, no stale content to cover) can never pop
+                // an unpainted frame.
+                crate::hotkey::set_window_cloaked(&win, true);
+                crate::hotkey::flush_dwm_ordering();
                 ARGPROMPT_UP.store(true, Ordering::SeqCst);
                 if ARG_PROMPT_PAINTED_ID.load(Ordering::SeqCst) == spec_id {
                     // Ack-before-present race: the paint ack landed while this
@@ -1460,59 +1470,38 @@ fn handle_expansion(snippet_id: String, keyword_len: usize, hwnd_at_match: isize
     Ok(())
 }
 
-pub fn show_placement_pill(app_handle: &AppHandle, message: Option<&str>) {
-    let msg = message.unwrap_or("text has been placed successfully").to_string();
-    let _ = app_handle.emit("expansion-pill-show", msg.clone());
-    let _ = app_handle.emit("snippet-expanded", msg);
-
-    if let Some(pill) = app_handle.get_webview_window("pill") {
-        let scale = pill.scale_factor().unwrap_or(1.0);
-        let w_log = 380;
-        let h_log = 56;
-        let phys_w = (w_log as f64 * scale).round() as i32;
-        let phys_h = (h_log as f64 * scale).round() as i32;
-
-        let (cx, cy) = get_caret_screen_position();
-        let (mut x, mut y) = (0, 0);
-        unsafe {
-            let pt = POINT { x: cx, y: cy };
-            let hmon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
-            let mut info = MONITORINFO {
-                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-                ..Default::default()
-            };
-            if GetMonitorInfoW(hmon, &mut info).as_bool() {
-                let work = info.rcWork;
-                let work_w = work.right - work.left;
-                // Center horizontally on the screen
-                x = work.left + (work_w - phys_w) / 2;
-                // Position at the bottom of the screen, just above the taskbar
-                y = work.bottom - phys_h - (24.0 * scale).round() as i32;
-            } else {
-                x = cx - phys_w / 2;
-                y = cy - phys_h / 2;
-            }
-        }
-        let _ = pill.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-            x,
-            y,
-        }));
-        let _ = pill.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-            width: phys_w as u32,
-            height: phys_h as u32,
-        }));
-        let _ = pill.show();
-    }
+/// Placement-confirmation pill: REMOVED (user request — the popup rendered
+/// as an empty gray slab instead of its message). The function is kept as a
+/// no-op so both call sites (engine post_expansion_success, paste_snippet_text
+/// command) need no changes; success is still confirmed by the in-overlay /
+/// in-library toasts and the paste itself. Revert this early return to
+/// restore the native pill window.
+pub fn show_placement_pill(_app_handle: &AppHandle, _message: Option<&str>) {
+    crate::paste::log_diag("[PILL] suppressed (placement popup removed)");
 }
 
 fn post_expansion_success(snippet: &Snippet, expanded_text: &str) {
-    // Record use
-    if let Some(ctx) = EXPANSION_CTX.lock().unwrap().as_ref() {
-        let _ = ctx.db.record_snippet_use(&snippet.id);
-        if snippet.show_confirmation {
-            show_placement_pill(&ctx.app_handle, Some("text has been placed successfully"));
+    // Snapshot + record under a SHORT guard, then drop it before the pill
+    // gate below: the gate must never re-lock EXPANSION_CTX on this thread
+    // (non-reentrant Mutex — self-deadlock wedged the whole app on the
+    // first engine-driven pill).
+    let app_opt = {
+        let guard = lock_recover(&EXPANSION_CTX);
+        match guard.as_ref() {
+            Some(ctx) => {
+                let _ = ctx.db.record_snippet_use(&snippet.id);
+                Some(ctx.app_handle.clone())
+            }
+            None => None,
         }
-        let _ = ctx.app_handle.emit("snippets-updated", ());
+    };
+    if snippet.show_confirmation {
+        if let Some(app) = app_opt.clone() {
+            show_placement_pill(&app, Some("text has been placed successfully"));
+        }
+    }
+    if let Some(app) = app_opt {
+        let _ = app.emit("snippets-updated", ());
     }
     crate::paste::log_diag(&format!(
         "[EXPANSION] Expanded '{}' -> {} chars",

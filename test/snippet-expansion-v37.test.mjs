@@ -45,18 +45,26 @@ test('v37-C arg prompt: pre-declared surface only, paint-gated, watchdog-cancell
   // of flashing a raw acrylic frame before the webview committed its first
   // frame (the white flash on the first argument prompt). Focus is taken at
   // the ack, not at show, so activation never bounces during the reveal.
+  // The present additionally re-cloaks + flushes right after show(): a
+  // ShowWindow/recalc transition can clear DWMWA_CLOAK asynchronously after
+  // succeeding, and re-asserting restores (never breaks) the gated reveal —
+  // the window arrives cloaked from boot-park/hide either way.
   const showIdx = src.indexOf('fn show_arg_prompt');
   const showEndMatch = src.slice(showIdx + 1).match(/\n(?:pub )?fn /);
   const showEnd = showEndMatch ? showIdx + 1 + showEndMatch.index : -1;
   const showBody = src.slice(showIdx, showEnd === -1 ? showIdx + 6000 : showEnd);
-  assert.doesNotMatch(
-    showBody,
-    /set_window_cloaked\(&win, true\)/,
-    'argprompt must never be cloaked before show (its renderer would never start)'
-  );
-  const uncloakAt = showBody.indexOf('set_window_cloaked(&win, false)');
   const showAt = showBody.indexOf('win.show()');
   assert.ok(showAt !== -1, 'present must show the window (WS_VISIBLE so its renderer can paint)');
+  const afterShow = showBody.slice(showAt);
+  assert.ok(
+    afterShow.includes('set_window_cloaked(&win, true)'),
+    'present must re-cloak after show (transitions can clear the cloak)'
+  );
+  assert.ok(
+    afterShow.includes('flush_dwm_ordering()'),
+    'present must flush the cloak past queued recalcs'
+  );
+  const uncloakAt = showBody.indexOf('set_window_cloaked(&win, false)');
   assert.ok(
     showBody.includes('set_window_alpha(&win, 255)'),
     'the ack-before-present reveal must lift the cloak-parked alpha mask'
@@ -188,6 +196,23 @@ test('v37-C arg prompt: pre-declared surface only, paint-gated, watchdog-cancell
   assert.ok(tsx.includes('handleSubmit(null)'), 'cancel must resolve null');
 });
 
+test('Snippet pill popup removed: show_placement_pill never shows a window', () => {
+  // User request: the placement-confirmation pill rendered as an empty gray
+  // slab instead of its message, so the native popup is suppressed entirely
+  // (success is still confirmed by the in-overlay/in-library toasts and the
+  // paste itself). The function stays as the single funnel so both callers
+  // need no changes; revert its early return to restore the window.
+  const exp = fs.readFileSync(path.join(ROOT_DIR, 'src-tauri', 'src', 'expansion.rs'), 'utf8');
+  const pillIdx = exp.indexOf('pub fn show_placement_pill');
+  assert.ok(pillIdx !== -1, 'pill show path found');
+  const pillEnd = exp.indexOf('fn post_expansion_success', pillIdx);
+  const pill = exp.slice(pillIdx, pillEnd === -1 ? pillIdx + 2000 : pillEnd);
+  assert.ok(!pill.includes('pill.show()'), 'suppressed pill must never call show()');
+  assert.ok(!pill.includes('set_position'), 'suppressed pill must never position a window');
+  assert.ok(!pill.includes('.emit('), 'suppressed pill must emit nothing');
+  assert.ok(!pill.includes('lock_recover'), 'suppressed pill must take no locks');
+});
+
 test('v37-H arg prompt: surface prep, hidden-side prewarm, no ghost retries', () => {
   const src = readExpansion();
   const showIdx = src.indexOf('fn show_arg_prompt');
@@ -215,7 +240,7 @@ test('v37-H arg prompt: surface prep, hidden-side prewarm, no ghost retries', ()
     /EXPANSION_CTX/,
     'prep must not lock EXPANSION_CTX (called while show_arg_prompt holds that non-reentrant guard)'
   );
-  assert.ok(showBody.includes('prepare_prompt_surface(&win, prompt_mat, &prompt_theme)'), 'show path must pass material/theme into prep');
+  assert.ok(showBody.includes('prepare_prompt_surface(&win, prompt_mat, &prompt_theme, "ARGPROMPT")'), 'show path must pass material/theme into prep');
   // argprompt/pill are presented for the first time when a snippet fires, by
   // which point their controllers are not ready. Prewarm them hidden-side like
   // the overlay, otherwise glass never composites and the prompt reads solid.

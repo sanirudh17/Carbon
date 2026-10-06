@@ -35,11 +35,24 @@ pub fn hide_overlay(app_handle: &AppHandle) -> Result<(), String> {
 pub fn hide_enlarged(app_handle: &AppHandle) -> Result<(), String> {
     hotkey::invalidate_enlarged_show_gen();
     if let Some(win) = app_handle.get_webview_window("main") {
+        // Idempotent: an already-parked+cloaked window needs no second park
+        // (and re-saving would be harmless anyway — save skips parked coords).
+        if hotkey::PARK_INSTEAD_OF_HIDE
+            && hotkey::is_window_parked(&win)
+            && !hotkey::is_main_visible()
+        {
+            return Ok(());
+        }
         hotkey::set_window_cloaked(&win, true);
         hotkey::MAIN_HAS_PAINTED.store(false, std::sync::atomic::Ordering::SeqCst);
         paste::restore_target_window();
         let _ = win.eval("document.documentElement.classList.add('wm-hidden')");
-        let _ = win.hide();
+        if hotkey::PARK_INSTEAD_OF_HIDE {
+            // STEP-3: cloak + park instead of win.hide() (warm swapchain).
+            hotkey::park_main_for_hide(&win);
+        } else {
+            let _ = win.hide();
+        }
     }
     Ok(())
 }
@@ -55,27 +68,34 @@ pub fn note_window_painted(app_handle: &AppHandle, window_label: &str, token: Op
 }
 
 // ── Tauri Commands ──
+// STEP-4 (build-fixes): async so DwmFlush/sleeps/COM inside never occupy an
+// IPC worker other invokes queue behind. The painted path additionally runs
+// its blocking body under spawn_blocking.
 
 #[tauri::command]
-pub fn choreo_hide_overlay(app_handle: AppHandle) -> Result<(), String> {
+pub async fn choreo_hide_overlay(app_handle: AppHandle) -> Result<(), String> {
     hide_overlay(&app_handle)
 }
 
 #[tauri::command]
-pub fn choreo_hide_enlarged(app_handle: AppHandle) -> Result<(), String> {
+pub async fn choreo_hide_enlarged(app_handle: AppHandle) -> Result<(), String> {
     hide_enlarged(&app_handle)
 }
 
 #[tauri::command]
-pub fn choreo_notify_painted(app_handle: AppHandle, window_label: String, token: Option<u64>) {
-    note_window_painted(&app_handle, &window_label, token);
+pub async fn choreo_notify_painted(app_handle: AppHandle, window_label: String, token: Option<u64>) {
+    tauri::async_runtime::spawn_blocking(move || {
+        note_window_painted(&app_handle, &window_label, token);
+    })
+    .await
+    .ok();
 }
 
 /// Frontend show-gate bound: if the paint gate never opens (>300ms), the
 /// frontend calls this to force a flash-safe reset instead of leaving a
 /// cloaked-visible window stuck forever (the "main never appears" state).
 #[tauri::command]
-pub fn choreo_show_recovery(app_handle: AppHandle, window_label: String) -> Result<(), String> {
+pub async fn choreo_show_recovery(app_handle: AppHandle, window_label: String) -> Result<(), String> {
     match window_label.as_str() {
         "main" | "enlarged" => {
             crate::paste::log_diag(

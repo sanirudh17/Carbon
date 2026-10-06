@@ -494,23 +494,28 @@ test('v42 main opens overlay-fast: version-gated arming, masked reveal', () => {
   );
 });
 
-test('v43 main uncloak settles one frame before ramping (no residual flash)', () => {
+test('v43 main uncloak settles before ramping, adaptively (no residual flash)', () => {
   // The rare leftover white open-flash: WebView2 presents on its own cadence,
-  // so the pre-uncloak present can leave DWM one frame behind on
-  // skipped-rewarm opens. The uncloak must flush, hold alpha 0 for ~one
-  // frame, and flush again BEFORE the ramp starts — invisible (alpha is 0),
-  // ~20ms, and the ramp's token guard still cancels mid-settle hides.
+  // so the pre-uncloak present can leave DWM behind — worse after a long idle
+  // when the renderer is deeply throttled. The uncloak must flush, hold
+  // alpha 0, and flush again BEFORE the ramp starts — invisible (alpha is 0).
+  // The hold is adaptive: warm surfaces keep the one-frame (~20ms) fast path,
+  // stale surfaces hold ~50ms so the renderer resumes first.
   const hotkey = fs.readFileSync(path.join(ROOT_DIR, 'src-tauri', 'src', 'hotkey.rs'), 'utf8');
   const uncloakIdx = hotkey.indexOf('fn uncloak_enlarged_if_current');
   assert.ok(uncloakIdx !== -1, 'main uncloak path found');
   const body = hotkey.slice(uncloakIdx, uncloakIdx + 12000);
   const uncloakedAt = body.indexOf('set_window_cloaked(&win, false)');
-  const settledAt = body.indexOf('from_millis(20)');
+  const settledAt = body.indexOf('from_millis(settle_ms)');
   const rampAt = body.indexOf('ramp_window_alpha(win.clone(), 0, 255, ramp_ms');
-  assert.ok(uncloakedAt !== -1 && settledAt !== -1 && rampAt !== -1, 'settle step must exist');
+  assert.ok(uncloakedAt !== -1 && settledAt !== -1 && rampAt !== -1, 'adaptive settle step must exist');
   assert.ok(
     uncloakedAt < settledAt && settledAt < rampAt,
-    'order must be uncloak -> 20ms settle -> ramp (never ramp on an unflushed frame)'
+    'order must be uncloak -> settle -> ramp (never ramp on an unflushed frame)'
+  );
+  assert.ok(
+    /if main_surface_warm\(\)\s*\{\s*20\s*\}\s*else\s*\{\s*50\s*\}/.test(body),
+    'settle must be 20ms warm / 50ms stale'
   );
 });
 
@@ -628,4 +633,32 @@ test('v45 cold first open paints content: gate holds until an answer that starte
     main.includes('[SHOW_MAIN] open decision stale='),
     'the open decision (stale/coldOpen/rows) must be logged for diagnosis'
   );
+});
+
+test('v45 overlay stale opens re-present + settle before ramping (no residual flash)', () => {
+  // Overlay parity for the main pipeline: a surface older than the warmth
+  // window must get a genuine off-screen re-present on the show path and an
+  // alpha-0 settle hold at uncloak, so a discarded/cold frame can never be
+  // ramped onto the screen. Warm opens must pay nothing for either.
+  const hotkey = fs.readFileSync(path.join(ROOT_DIR, 'src-tauri', 'src', 'hotkey.rs'), 'utf8');
+  assert.ok(hotkey.includes('pub(crate) fn overlay_surface_warm'), 'overlay warmth predicate must exist');
+  assert.ok(hotkey.includes('OVERLAY_WARM_WINDOW_MS'), 'overlay warm window must exist');
+  assert.ok(hotkey.includes('OVERLAY_WARM_STALE_MS'), 'overlay staleness bound must exist');
+  // Show path: stale-guarded rewarm under a bounded present-cycle hold.
+  assert.ok(hotkey.includes('rewarm_overlay_surface(app_handle)'), 'stale overlay opens must re-present before show');
+  assert.ok(hotkey.includes('hold_present_cycle_bounded()'), 'the rewarm must hold the present cycle across show');
+  // Uncloak: stale-guarded 40ms alpha-0 settle before the ramp.
+  const uncloakIdx = hotkey.indexOf('fn uncloak_overlay_if_current');
+  assert.ok(uncloakIdx !== -1, 'overlay uncloak path found');
+  const body = hotkey.slice(uncloakIdx, uncloakIdx + 12000);
+  assert.ok(body.includes('!overlay_surface_warm()'), 'the settle hold must be stale-gated');
+  assert.ok(body.includes('from_millis(40)'), 'stale overlay surfaces must hold ~40ms before ramping');
+  assert.ok(
+    body.indexOf('from_millis(40)') < body.indexOf('ramp_window_alpha(win.clone(), 0, 255, 30'),
+    'the settle must precede the ramp'
+  );
+  const vib = fs.readFileSync(path.join(ROOT_DIR, 'src-tauri', 'src', 'vibrancy.rs'), 'utf8');
+  assert.ok(vib.includes('pub fn rewarm_overlay_surface'), 'overlay rewarm helper must exist');
+  assert.ok(vib.includes('pub fn spawn_overlay_warmth_loop'), 'overlay keep-warm loop must exist');
+  assert.ok(vib.includes('note_overlay_warm()'), 'successful overlay refreshes must stamp the warmth clock');
 });
