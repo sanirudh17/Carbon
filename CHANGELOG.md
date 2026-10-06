@@ -2,6 +2,21 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
+## [0.1.18] — 2026-10-06
+
+### Fixed
+- **Bare-acrylic beat on reopen further reduced** — warm windows no longer natively hide: invisibility now comes from the DWM cloak plus an off-screen park, so the swapchain stays alive and there is no hide/show cold-present transition. Reveals move back on-screen (overlay from the cursor, main from its saved position) and uncloak through the paint gate. Parked windows stay out of the taskbar and Alt-Tab via a parked-only toolwindow style; kills-switch `PARK_INSTEAD_OF_HIDE` in `hotkey.rs` restores the old behavior.
+- **Rare mid-session white flash hardened** — DWM ordering flushes after the final show-path cloaks (a queued ex-style/frame recalc could otherwise clear the cloak asynchronously a frame later), physical cloak verification at every painted-ack with alpha-snap recovery, and adaptive stale-settle holds (overlay 40ms, main 50ms when stale) so a long-idle-throttled renderer resumes presenting before the reveal ramp. Warm opens pay zero added latency.
+- **Long-idle overlay surface decay** — the overlay gets the same 45s background keep-warm loop as main, a show-path re-present when stale, overlay-aware present-cycle race guards (a racing cycle now bails instead of parking over a live show, and never restores a parked origin), and an overlay show-active flag mirroring main.
+- **Snippet engine wedge fixed** — the first engine-driven placement pill re-locked `EXPANSION_CTX` on the thread that already held it (non-reentrant Mutex) and froze the whole app. The pill path is now snapshot-and-drop lock-free.
+- **Placement-confirmation pill popup removed** — it rendered as an empty gray slab instead of its message. Success is still confirmed by the in-overlay/in-library toasts and the paste itself.
+- **Twin painted-acks could double-run the uncloak** (double present + double ramp now that commands dispatch in parallel) — per-window serialization plus post-lock re-validation makes uncloak exactly-once per show with no stuck-cloak risk.
+
+### Changed
+- Paint/cloak/hide/recovery IPC commands are async; blocking uncloak work runs under `spawn_blocking` instead of occupying IPC workers.
+- Single prewarm pass at boot (duplicate spawn removed).
+- Suite now covers parked-hide chrome, async uncloak ordering, overlay warmth/rewarm/settle, pill suppression, and the no-relock discipline (158 JS + 52 Rust tests green).
+
 ## [0.1.17] — 2026-09-29
 
 ### Fixed
