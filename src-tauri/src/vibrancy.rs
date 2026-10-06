@@ -578,10 +578,25 @@ pub(crate) fn offscreen_present_cycle(
         // the window now — restore position, touch nothing else, report cold.
         // Hiding here would swallow the user's open; re-cloaking would strand
         // it invisible with the flag claiming revealed.
+        // STEP-5: the guard is overlay-aware too (overlay shows bump
+        // OVERLAY_SHOW_GEN and set the phase; a live overlay show owns the
+        // window exactly like a live main show). Boot-path cycles pass
+        // gen_guard=None, so a racing overlay show is additionally covered by
+        // the phase clause below.
         let raced = gen_guard
             .map(|g| {
-                crate::hotkey::enlarged_show_gen() != g
-                    || !crate::hotkey::MAIN_CLOAKED.load(Ordering::SeqCst)
+                if label == "overlay" {
+                    crate::hotkey::overlay_show_gen() != g
+                        || !crate::hotkey::OVERLAY_CLOAKED.load(Ordering::SeqCst)
+                        || matches!(
+                            crate::hotkey::get_overlay_phase(),
+                            crate::hotkey::OverlayPhase::Showing
+                                | crate::hotkey::OverlayPhase::Shown
+                        )
+                } else {
+                    crate::hotkey::enlarged_show_gen() != g
+                        || !crate::hotkey::MAIN_CLOAKED.load(Ordering::SeqCst)
+                }
             })
             .unwrap_or(false)
             // A live show that proceeded past a timed-out cycle hold owns the
@@ -589,28 +604,66 @@ pub(crate) fn offscreen_present_cycle(
             // hiding or re-cloaking here would swallow the user's open (the
             // cycle's once-flag already prevents any later re-run).
             || (label == "main"
-                && crate::hotkey::MAIN_SHOW_ACTIVE.load(Ordering::SeqCst));
+                && crate::hotkey::MAIN_SHOW_ACTIVE.load(Ordering::SeqCst))
+            // Overlay parity for MAIN_SHOW_ACTIVE (set post-rewarm, pre-bump
+            // by the show path). The gen_guard=None boot case additionally
+            // honors the phase: a user show that raced the boot cycle owns
+            // the window even before any flag/gen exists for it.
+            || (label == "overlay"
+                && (crate::hotkey::OVERLAY_SHOW_ACTIVE.load(Ordering::SeqCst)
+                    || (gen_guard.is_none()
+                        && matches!(
+                            crate::hotkey::get_overlay_phase(),
+                            crate::hotkey::OverlayPhase::Showing
+                                | crate::hotkey::OverlayPhase::Shown
+                        ))));
         if raced {
-            if let Some(p) = orig {
-                unsafe {
-                    use windows::Win32::UI::WindowsAndMessaging::{
-                        SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
-                    };
-                    let _ = SetWindowPos(
-                        h,
-                        HWND(std::ptr::null_mut()),
-                        p.x,
-                        p.y,
-                        0,
-                        0,
-                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                    );
+            // STEP-3/5: never restore a parked origin over a live window. The
+            // origin is where the window sat when the cycle started; if that
+            // was the park slot, moving back would swallow the racing show.
+            let origin_parked =
+                matches!(orig, Some(p) if p.x <= -10000 && p.y <= -10000);
+            if !origin_parked {
+                if let Some(p) = orig {
+                    unsafe {
+                        use windows::Win32::UI::WindowsAndMessaging::{
+                            SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+                        };
+                        let _ = SetWindowPos(
+                            h,
+                            HWND(std::ptr::null_mut()),
+                            p.x,
+                            p.y,
+                            0,
+                            0,
+                            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                        );
+                    }
                 }
+            } else {
+                crate::paste::log_diag(&format!(
+                    "[PREWARM] parked warmup exit label='{label}' raced (live show owns the window; parked origin kept) ok=false"
+                ));
+                return false;
             }
             crate::paste::log_diag(&format!(
                 "[PREWARM] parked warmup exit label='{label}' raced (live show owns the window) ok=false"
             ));
             return false;
+        }
+        if crate::hotkey::PARK_INSTEAD_OF_HIDE {
+            // STEP-3: no native hide — cloak + park. The window stays
+            // WS_VISIBLE (warm swapchain); the next real show moves it
+            // on-screen (overlay positions from the cursor; main restores its
+            // saved hide-time position, centered fallback at boot).
+            crate::hotkey::park_window_offscreen(win);
+            crate::hotkey::set_parked_toolwindow(win, true);
+            crate::hotkey::set_window_cloaked(win, true);
+            crate::paste::log_diag(&format!(
+                "[PREWARM] parked warmup exit label='{label}' parked+cloaked ok=true"
+            ));
+            let _ = Ordering::SeqCst;
+            return true;
         }
         unsafe {
             let _ = ShowWindow(h, SW_HIDE);
@@ -749,6 +802,47 @@ pub fn rewarm_main_surface(app: &AppHandle) -> bool {
     }
 }
 
+/// Show-path idle rewarm (overlay): main parity for rewarm_main_surface.
+/// The OS can discard a hidden window's DirectComposition surface after idle;
+/// without a re-present the uncloak ramp composites a cold frame (the
+/// residual rare flash). Runs the same park→present→re-cloak cycle while
+/// still logically cloaked, before show. Skipped while the surface is warm
+/// (revealed seconds ago or loop-refreshed) so fast opens pay nothing.
+///
+/// LOCK CONTRACT: like the main rewarm, the caller must hold
+/// `hold_present_cycle_bounded()` across rewarm AND the subsequent native
+/// show — the background warmth loops skip their tick while held.
+pub fn rewarm_overlay_surface(app: &AppHandle) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use std::sync::atomic::Ordering;
+        if !crate::hotkey::OVERLAY_CLOAKED.load(Ordering::SeqCst) {
+            return false;
+        }
+        // NOTE: no phase check here (unlike the loop tick): the caller IS the
+        // live show (phase == Showing by construction) — the rewarm exists
+        // precisely for it. The loop performs its own phase check instead.
+        let Some(win) = app.get_webview_window("overlay") else {
+            return false;
+        };
+        if crate::hotkey::overlay_surface_warm() {
+            return false;
+        }
+        let already = PRESENTED_OVERLAY.load(Ordering::SeqCst);
+        let settle = if already { 32 } else { 80 };
+        crate::paste::log_diag(&format!(
+            "[OVERLAY_SURFACE] rewarm off-screen present (presented={}, settle={}ms)",
+            already, settle
+        ));
+        offscreen_present_cycle(&win, "overlay", settle, Some(crate::hotkey::overlay_show_gen()))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        false
+    }
+}
+
 /// Background surface-warmth loop (main only): every MAIN_WARM_LOOP_MS, if
 /// the main window is hidden from the user, run one light offscreen present
 /// and stamp the warmth clock. Long-idle opens then stay on the warm path
@@ -779,6 +873,44 @@ pub fn spawn_main_warmth_loop(app: &AppHandle) {
             let gen_before = crate::hotkey::enlarged_show_gen();
             if offscreen_present_cycle(&win, "main", 32, Some(gen_before)) {
                 crate::hotkey::note_main_warm();
+            }
+        }
+    });
+}
+
+/// Background surface-warmth loop (overlay): every OVERLAY_WARM_LOOP_MS, if
+/// the overlay is hidden from the user, run one light offscreen present so
+/// long-idle opens stay on the warm path instead of decaying cold (STEP-5:
+/// the overlay previously had no keep-warm at all). Same hand-off rules as
+/// the main loop — cloaked check, Showing/Shown phase check, try_lock skip,
+/// generation-guarded cycle — so it can never park/cloak over a live show.
+pub fn spawn_overlay_warmth_loop(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(
+            crate::hotkey::OVERLAY_WARM_LOOP_MS,
+        ));
+        #[cfg(target_os = "windows")]
+        {
+            use std::sync::atomic::Ordering;
+            let Ok(_guard) = PRESENT_CYCLE.try_lock() else {
+                continue;
+            };
+            if !crate::hotkey::OVERLAY_CLOAKED.load(Ordering::SeqCst) {
+                continue;
+            }
+            if matches!(
+                crate::hotkey::get_overlay_phase(),
+                crate::hotkey::OverlayPhase::Showing | crate::hotkey::OverlayPhase::Shown
+            ) {
+                continue;
+            }
+            let Some(win) = app.get_webview_window("overlay") else {
+                continue;
+            };
+            let gen_before = crate::hotkey::overlay_show_gen();
+            if offscreen_present_cycle(&win, "overlay", 32, Some(gen_before)) {
+                crate::hotkey::note_overlay_warm();
             }
         }
     });

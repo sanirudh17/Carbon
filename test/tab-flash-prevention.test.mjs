@@ -675,17 +675,46 @@ test('Surface Prep - background-thread with_webview setters wait for the queued 
   );
 });
 
-test('Surface Prep - startup keeps the deliberate double prewarm spawn', () => {
-  // TWO prewarm_windows spawns at startup are DELIBERATE and pinned: with a
-  // single spawn the main app flashed white on open/close, and the two
-  // overlapping passes are the backup that hides that flash. A future
-  // "dedupe" here reintroduces the white flash. Only the second spawn sets
-  // the prewarm_done flag the first-present cycle waits on.
+test('Surface Prep - startup runs a single prewarm spawn plus overlay/main warmth loops', () => {
+  // STEP-5 (build-fixes): the duplicate bare spawn was removed — two
+  // concurrent prewarm_windows passes raced ShowWindow/DB work for no benefit
+  // (the same function twice is not a backup). One flag-tracking spawn
+  // remains, and the overlay gets the same 45s keep-warm the main loop
+  // provides, so long-idle surfaces stay warm without a second boot pass.
   const libRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'lib.rs'), 'utf8');
   const spawns = libRs.match(/prewarm_windows\(&handle\)/g) || [];
-  assert.equal(spawns.length, 2, 'startup must keep BOTH prewarm spawns (backup against the main white flash)');
+  assert.equal(spawns.length, 1, 'startup must run exactly one prewarm spawn');
   assert.ok(
     libRs.includes('done.store(true, Ordering::SeqCst)'),
     'the flag-setting prewarm spawn must signal completion for the first-present cycle'
   );
+  assert.ok(
+    libRs.includes('spawn_overlay_warmth_loop'),
+    'the overlay keep-warm loop must be spawned at startup'
+  );
+  assert.ok(
+    libRs.includes('spawn_main_warmth_loop'),
+    'the main keep-warm loop must be spawned at startup'
+  );
+});
+
+test('Snippet First-Show: pill popup suppressed (no empty gray slab)', () => {
+  // User request: the placement-confirmation pill rendered as an empty gray
+  // slab, so the native popup is suppressed — show_placement_pill returns
+  // before any window call. (Success toasts in overlay/library are separate
+  // frontend UI and are unaffected.)
+  const exp = fs.readFileSync(path.join(SRC_TAURI_DIR, 'expansion.rs'), 'utf8');
+  const pillIdx = exp.indexOf('pub fn show_placement_pill');
+  assert.ok(pillIdx !== -1, 'pill show path found');
+  const pillEnd = exp.indexOf('fn post_expansion_success', pillIdx);
+  const pill = exp.slice(pillIdx, pillEnd === -1 ? pillIdx + 2000 : pillEnd);
+  assert.ok(!pill.includes('pill.show()'), 'suppressed pill must never call show()');
+  assert.ok(!pill.includes('set_position'), 'suppressed pill must never position a window');
+  assert.ok(!pill.includes('.emit('), 'suppressed pill must emit nothing');
+  // Argprompt present: re-cloak + flush after show, before the paint-ack gate.
+  const presentIdx = exp.indexOf('let _ = win.show()');
+  assert.ok(presentIdx !== -1, 'argprompt present path found');
+  const present = exp.slice(presentIdx, presentIdx + 1500);
+  assert.ok(present.includes('set_window_cloaked(&win, true)'), 'argprompt must re-cloak after show');
+  assert.ok(present.includes('flush_dwm_ordering()'), 'argprompt must flush the cloak past recalcs');
 });

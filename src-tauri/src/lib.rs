@@ -690,8 +690,9 @@ fn get_target_app_name() -> Option<String> {
 
 /// Cloaks a window immediately without hiding it, so the hide fade plays
 /// invisibly instead of exposing the bare acrylic slab (close flash).
+/// STEP-4: async so the (tiny) DWM round-trip never occupies a sync handler.
 #[tauri::command]
-fn cloak_window(app_handle: AppHandle, window_label: String) -> Result<(), String> {
+async fn cloak_window(app_handle: AppHandle, window_label: String) -> Result<(), String> {
     choreo::cloak_window(&app_handle, window_label)
 }
 
@@ -720,23 +721,35 @@ fn overlay_phase_ack(phase: String) {
 }
 
 #[tauri::command]
-fn hide_overlay(app_handle: AppHandle) -> Result<(), String> {
+async fn hide_overlay(app_handle: AppHandle) -> Result<(), String> {
     choreo::hide_overlay(&app_handle)
 }
 
 /// Renderer confirms the overlay presented its first painted frame after
 /// show → lift the DWM cloak gate (white-flash fix). Safe to call when
 /// already hidden/uncloaked: the generation check makes it a no-op.
+/// STEP-4: async + spawn_blocking — the uncloak body does DwmFlush, a 20ms
+/// settle sleep and cold-COM round-trips; none of that may sit on an IPC
+/// worker that other invokes are queued behind.
 #[tauri::command]
-fn overlay_painted(app_handle: AppHandle, token: Option<u64>) {
-    choreo::note_window_painted(&app_handle, "overlay", token);
+async fn overlay_painted(app_handle: AppHandle, token: Option<u64>) {
+    tauri::async_runtime::spawn_blocking(move || {
+        choreo::note_window_painted(&app_handle, "overlay", token);
+    })
+    .await
+    .ok();
 }
 
 /// Renderer confirms the main window presented its first painted frame
 /// after show → lift the DWM cloak gate (white-flash fix).
+/// STEP-4: same async + spawn_blocking treatment as overlay_painted.
 #[tauri::command]
-fn enlarged_painted(app_handle: AppHandle, token: Option<u64>) {
-    choreo::note_window_painted(&app_handle, "main", token);
+async fn enlarged_painted(app_handle: AppHandle, token: Option<u64>) {
+    tauri::async_runtime::spawn_blocking(move || {
+        choreo::note_window_painted(&app_handle, "main", token);
+    })
+    .await
+    .ok();
 }
 
 /// Argprompt frontend confirms its first spec painted — lift cloak + focus.
@@ -751,13 +764,15 @@ fn enlarged_hide_ack(gen: u64) {
 }
 
 #[tauri::command]
-fn hide_enlarged(window: WebviewWindow) -> Result<(), String> {
+async fn hide_enlarged(window: WebviewWindow) -> Result<(), String> {
     crate::paste::log_diag("[HIDE_MAIN] hide_enlarged invoked (webview fade done)");
     // Route through the choreography helper: the old raw hide left
     // MAIN_CLOAKED at false and MAIN_HAS_PAINTED at true, so
     // is_main_visible() claimed a hidden window was open and the next
     // press could take the hide branch of an already-hidden window.
-    crate::choreo::hide_enlarged(&window.app_handle())
+    // STEP-4: async (fast body — no blocking work, no spawn needed).
+    let app = window.app_handle();
+    crate::choreo::hide_enlarged(&app)
 }
 
 #[tauri::command]
@@ -1284,13 +1299,9 @@ pub fn run() {
                 vibrancy::apply_to_all_windows(app.handle(), mat, &current_settings.theme);
             }
 
-            {
-                let handle = app_handle.clone();
-                std::thread::spawn(move || {
-                    hotkey::prewarm_windows(&handle);
-                });
-            }
-
+            // Single prewarm pass (STEP-5: the duplicate bare spawn lived here —
+            // two concurrent prewarm_windows raced ShowWindow/DB work; the
+            // flag-tracking spawn below is the one boot sequencing needs).
             // Genuine first-present prewarm (ported from final-visual-polish):
             // cloaked windows are excluded from DWM composition, so the cloak
             // prewarm alone never presents a real first frame — the first
@@ -1391,6 +1402,9 @@ pub fn run() {
                 // 45s so long-idle opens stay on the warm path (fast pop, no
                 // cold flash, no surprise fade) instead of decaying cold.
                 crate::vibrancy::spawn_main_warmth_loop(&handle);
+                // STEP-5: same 45s keep-warm for the overlay surface, which
+                // otherwise also decays cold over long idles.
+                crate::vibrancy::spawn_overlay_warmth_loop(&handle);
             }
 
             // Build Tray Icon
@@ -1455,7 +1469,11 @@ pub fn run() {
                 ));
                 if !*focused && window.label() == "overlay" {
                     // Skip if hide_overlay_window is already running (re-entrancy guard)
-                    if !hotkey::is_overlay_hiding() && window.is_visible().unwrap_or(false) {
+                    // STEP-3: parked windows stay WS_VISIBLE by design, so the
+                    // native check alone re-fires hide after every park (double
+                    // park + double DB pre-serve). The cloak flag is the
+                    // logical-visibility gate: a cloaked overlay is hidden.
+                    if !hotkey::is_overlay_hiding() && hotkey::is_overlay_visible() && window.is_visible().unwrap_or(false) {
                         if hotkey::get_overlay_phase() == hotkey::OverlayPhase::Showing {
                             paste::log_diag("[WINDOW_EVENT] Overlay lost focus while Showing — ignoring transient blur during show.");
                         } else if native_drag::is_native_drag_active() {
