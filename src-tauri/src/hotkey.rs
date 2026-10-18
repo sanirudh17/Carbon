@@ -50,6 +50,11 @@ static OVERLAY_HIDE_ACK: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_os = "windows")]
 pub fn set_window_cloaked(window: &tauri::WebviewWindow, cloaked: bool) {
     use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+    // Mask BEFORE requesting a cloak. At cold boot DWM can reject or defer
+    // the attribute; that must not expose a raw surface during ShowWindow.
+    if cloaked {
+        set_window_alpha(window, 0);
+    }
     // Audited result (was silent): a failed cloak at cold boot leaves DWM
     // compositing the window — the rare first-open flash. Loud on failure.
     // Retried 3x: DwmSetWindowAttribute can transiently fail while the window
@@ -92,11 +97,8 @@ pub fn set_window_cloaked(window: &tauri::WebviewWindow, cloaked: bool) {
     // re-present. Layered-from-here-on also means the bit is NEVER toggled
     // during the visible lifetime (reveal goes 0 → uncloak → ramp 255), so
     // the acrylic-surface rebuild a toggle would trigger can't land on a
-    // visible frame. Guarded on success: a failed cloak may leave the window
-    // visible, where applying the mask would pop it invisible mid-frame.
-    if cloaked && cloak_ok {
-        set_window_alpha(window, 0);
-    }
+    // visible frame. A failed cloak also remains masked: callers requested
+    // hiding or preparation, and only a painted acknowledgement may reveal.
     // Single choke point for the logical-visibility flags: every cloak and
     // every painted-ack/fallback uncloak flows through here, so
     // is_overlay_visible() and is_main_visible() can never go stale.
@@ -188,6 +190,24 @@ static ENLARGED_SHOW_GEN: AtomicU64 = AtomicU64::new(0);
 /// lock, so this cannot deadlock.
 static OVERLAY_UNCLOAK_MTX: Mutex<()> = Mutex::new(());
 static ENLARGED_UNCLOAK_MTX: Mutex<()> = Mutex::new(());
+
+// Boot prewarm runs with CSS opacity zero. The first real reveal waits for
+// the unhidden tree while STILL DWM-cloaked, then shows at full opacity.
+// Native acrylic can remain visible at layered alpha zero: uncloaking first
+// exposes a bare glass slab before the content, even when the alpha is zero.
+// Subsequent opens retain their existing timings.
+static OVERLAY_FIRST_REVEAL: AtomicBool = AtomicBool::new(true);
+static MAIN_FIRST_REVEAL: AtomicBool = AtomicBool::new(true);
+
+fn settle_first_reveal(win: &tauri::WebviewWindow, first: &AtomicBool) -> bool {
+    if first.load(Ordering::SeqCst) {
+        crate::paste::log_diag(&format!("[FIRST_REVEAL] window='{}' waiting for content while cloaked", win.label()));
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        flush_dwm_ordering();
+        return true;
+    }
+    false
+}
 
 fn lock_uncloak_mtx(m: &'static Mutex<()>) -> std::sync::MutexGuard<'static, ()> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -489,6 +509,19 @@ fn uncloak_overlay_if_current(app: &AppHandle, token: Option<u64>) {
                 let _ = DwmFlush();
             }
         }
+        if settle_first_reveal(&win, &OVERLAY_FIRST_REVEAL) {
+            if OVERLAY_SHOW_GEN.load(Ordering::SeqCst) != expected_token { return; }
+            set_window_alpha(&win, 255);
+            set_window_cloaked(&win, false);
+            if OVERLAY_CLOAKED.load(Ordering::SeqCst) {
+                set_window_alpha(&win, 0);
+                return;
+            }
+            OVERLAY_FIRST_REVEAL.store(false, Ordering::SeqCst);
+            note_overlay_revealed();
+            crate::paste::log_diag("[SHOW_OVERLAY] first content frame revealed at full opacity");
+            return;
+        }
         set_window_alpha(&win, 0);
         set_window_cloaked(&win, false);
         crate::vibrancy::set_window_border_suppressed(&win);
@@ -633,6 +666,20 @@ fn uncloak_enlarged_if_current(app: &AppHandle, token: Option<u64>) {
             crate::paste::log_diag("[SHOW_MAIN] uncloak aborted: generation changed before uncloak");
             return;
         }
+        if settle_first_reveal(&win, &MAIN_FIRST_REVEAL) {
+            if ENLARGED_SHOW_GEN.load(Ordering::SeqCst) != expected_token { return; }
+            set_window_alpha(&win, 255);
+            set_window_cloaked(&win, false);
+            if MAIN_CLOAKED.load(Ordering::SeqCst) {
+                set_window_alpha(&win, 0);
+                return;
+            }
+            MAIN_FIRST_REVEAL.store(false, Ordering::SeqCst);
+            MAIN_HAS_PAINTED.store(true, Ordering::SeqCst);
+            note_main_revealed();
+            crate::paste::log_diag("[SHOW_MAIN] first content frame revealed at full opacity");
+            return;
+        }
         set_window_alpha(&win, 0);
         set_window_cloaked(&win, false);
         crate::vibrancy::set_window_border_suppressed(&win);
@@ -644,6 +691,7 @@ fn uncloak_enlarged_if_current(app: &AppHandle, token: Option<u64>) {
         // against a cold first present. Threaded + token-guarded either way,
         // so the duration never blocks presses — it only changes the fade.
         let ramp_ms = if main_surface_warm() { 30 } else { 100 };
+        let settle_ms = if main_surface_warm() { 20 } else { 50 };
         note_main_revealed();
         // Settle-then-ramp: WebView2 presents on its own cadence, so the
         // pre-uncloak present can still leave DWM one frame behind — the rare
@@ -657,7 +705,6 @@ fn uncloak_enlarged_if_current(app: &AppHandle, token: Option<u64>) {
         #[cfg(target_os = "windows")]
         unsafe {
             use windows::Win32::Graphics::Dwm::DwmFlush;
-            let settle_ms = if main_surface_warm() { 20 } else { 50 };
             if settle_ms > 20 {
                 crate::paste::log_diag("[SHOW_MAIN] stale surface: 50ms alpha-0 settle before ramp");
             }

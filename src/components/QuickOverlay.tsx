@@ -1,3 +1,4 @@
+import { ContentSearchInput } from './ContentSearchInput';
 import React, { useEffect, useLayoutEffect, useState, useRef, memo, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -25,6 +26,7 @@ import {
 import {
   ENTRY_UPDATED_EVENT,
   commitEntryText,
+  waitForEntryText,
   applyEntryUpdatedToList,
 } from '../lib/entryEdit';
 import {
@@ -199,6 +201,20 @@ export const QuickOverlay: React.FC = () => {
   const [newColName, setNewColName] = useState('');
   const [showCreateInline, setShowCreateInline] = useState(false);
   const [search, setSearch] = useState('');
+  const [searchLimit, setSearchLimit] = useState(200);
+  const [resultSearch, setResultSearch] = useState('');
+  const unfilteredItemsRef = useRef<ClipItem[]>(items);
+  const [hasMoreMatches, setHasMoreMatches] = useState(false);
+  const handleSearch = useCallback((value: string) => {
+    setSearch(value);
+    setSearchLimit(200);
+    setSelectedIndex(0);
+    setRenderMode(true);
+    if (!value.trim() && unfilteredItemsRef.current.length) {
+      setItems(unfilteredItemsRef.current);
+      setResultSearch('');
+    }
+  }, []);
   // Application filter chip in the searchbar (same behavior as the main app:
   // click the APPLICATION value in the preview to filter, ✕ to clear).
   const [sourceAppFilter, setSourceAppFilter] = useState<string | null>(null);
@@ -260,6 +276,7 @@ export const QuickOverlay: React.FC = () => {
     if (!pending) return Promise.resolve();
     editDirtyRef.current = null;
     return commitEntryText(pending.id, pending.text, 'overlay').catch((e) => {
+      if (!editDirtyRef.current) editDirtyRef.current = pending;
       console.error(`[overlay] commit-if-dirty (${reason}) failed:`, e);
     });
   }, []);
@@ -335,9 +352,15 @@ export const QuickOverlay: React.FC = () => {
         category: null,
         pinnedOnly: false,
         collectionId: null,
+        limit: !sourceAppFilter && typeFilter === '__all__' ? searchLimit + 1 : null,
       });
-      setItems(res || []);
-      setSelectedIndex(0);
+      if (readSeq !== readSeqRef.current) return;
+      setResultSearch(search);
+      const paged = !sourceAppFilter && typeFilter === '__all__';
+      if (!search.trim()) unfilteredItemsRef.current = res;
+      setHasMoreMatches(paged && res.length > searchLimit);
+      setItems(paged ? res.slice(0, searchLimit) : res || []);
+      if (searchLimit === 200 || !search.trim()) setSelectedIndex(0);
       // v36 A2: a full re-read absorbs every mutation to date. Sync (not +1)
       // to the last observed store version — a blind +1 invented a lead that
       // absorbed exactly one missed clipboard-updated push (false-fresh open).
@@ -376,7 +399,7 @@ export const QuickOverlay: React.FC = () => {
       return;
     }
     fetchItems();
-  }, [search]);
+  }, [search, searchLimit, sourceAppFilter, typeFilter]);
 
   // ── Snippets tab: data + derived state ────────────────────────────
   const fetchSnippets = async () => {
@@ -466,8 +489,8 @@ export const QuickOverlay: React.FC = () => {
     } else if (typeFilter !== '__all__') {
       out = out.filter((i) => String(i.content_type) === typeFilter);
     }
-    return out;
-  }, [items, sourceAppFilter, typeFilter]);
+    return out.slice(0, searchLimit);
+  }, [items, sourceAppFilter, typeFilter, searchLimit]);
 
   // Reset highlight when the filter changes so Enter/preview stay valid
   useEffect(() => {
@@ -641,11 +664,11 @@ export const QuickOverlay: React.FC = () => {
     const item = displayItems[selectedIndex];
     if (!item) return;
     setRenderMode(
-      item.content_type === 'rich_text' ||
+      !!search.trim() || item.content_type === 'rich_text' ||
         Boolean(item.html_content) ||
         (Boolean(item.text_content) && isMarkdownContent(item.text_content || ''))
     );
-  }, [selectedIndex, displayItems]);
+  }, [selectedIndex, displayItems, search]);
 
   const logClient = (msg: string) => {
     invoke('log_client_event', { event: msg }).catch(() => {});
@@ -962,7 +985,9 @@ export const QuickOverlay: React.FC = () => {
     fetchSnippets();
 
     window.__carbonSetData = (data: ClipItem[]) => {
+      if (searchRef.current.trim()) { fetchLatest(); return; }
       if (Array.isArray(data)) {
+        unfilteredItemsRef.current = data;
         setItems(data);
         setSelectedIndex(0);
         // Same accounting as fetchItems/overlay-data: sync to the last known
@@ -1021,6 +1046,7 @@ export const QuickOverlay: React.FC = () => {
     });
 
     const unlistenData = safeListen<ClipItem[]>('overlay-data', (e) => {
+      if (searchRef.current.trim()) { fetchLatest(); return; }
       if (Array.isArray(e.payload)) {
         // A prewarm snapshot must never clobber clips already applied via
         // live clipboard-updated pushes while hidden (stale open → visible
@@ -1041,6 +1067,7 @@ export const QuickOverlay: React.FC = () => {
           snapshotHasLocalHead ||
           (e.payload.length > local.length && snapHeadNotOlder);
         if (snapshotFresher) {
+          unfilteredItemsRef.current = e.payload;
           setItems(e.payload);
           setSelectedIndex(0);
           // Full snapshot absorbs mutations to date; sync to the open's store
@@ -1121,7 +1148,7 @@ export const QuickOverlay: React.FC = () => {
       if (searchRef.current.trim() !== '') {
         skipSearchFetchRef.current = true;
       }
-      setSearch('');
+      handleSearch('');
       setActionPanelOpen(false);
       setActionIndex(0);
       setSnSearch('');
@@ -1279,16 +1306,8 @@ export const QuickOverlay: React.FC = () => {
   const handlePaste = async (item: ClipItem, plainText: boolean = false, transform?: string) => {
     logClient(`handlePaste called for clip '${item.id}' (title='${item.title}', plainText=${plainText}, transform=${transform})`);
     try {
-      // W1.4: flush any pending edit first so Enter pastes the edited content.
-      const pending = editDirtyRef.current;
-      if (pending && pending.id === item.id) {
-        editDirtyRef.current = null;
-        try {
-          await commitEntryText(pending.id, pending.text, 'overlay');
-        } catch (e) {
-          console.error('Failed to flush pending edit before paste:', e);
-        }
-      }
+      await commitPendingEdit('paste');
+      await waitForEntryText(item.id);
       await invoke('paste_clip', { id: item.id, plainText, transform: transform ?? null });
       logClient(`handlePaste: paste_clip invoke resolved.`);
     } catch (err) {
@@ -1342,15 +1361,14 @@ export const QuickOverlay: React.FC = () => {
 
   const handleCopyOnly = async (item: ClipItem) => {
     try {
+      await commitPendingEdit('copy');
+      await waitForEntryText(item.id);
       await invoke('copy_clip', { id: item.id });
       setSelectedIndex(0);
       fetchItems();
       setActionPanelOpen(false);
     } catch (err) {
       console.error('Failed to copy to clipboard:', err);
-      if (item.text_content) {
-        await navigator.clipboard.writeText(item.text_content).catch(console.error);
-      }
     }
   };
 
@@ -1607,6 +1625,10 @@ export const QuickOverlay: React.FC = () => {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent | KeyboardEvent) => {
+    // The window's capture listener runs before React's input handler. Leave
+    // pending-query Enter to the input so it cannot paste an obsolete result.
+    if (e.key === 'Enter' && (e.target as HTMLElement)?.dataset?.searchPending === 'true') return;
+
     const target = e.target as HTMLElement;
     const isSearchInput = target === searchInputRef.current;
     const isTextarea = target && target.tagName === 'TEXTAREA';
@@ -1896,19 +1918,20 @@ export const QuickOverlay: React.FC = () => {
                 </button>
               </span>
             )}
-            <input
-              ref={searchInputRef}
+            <ContentSearchInput
+              inputRef={searchInputRef}
               className={sourceAppFilter ? 'has-filter-pill' : ''}
-              placeholder="Type to filter entries…"
+              placeholder="Search clip contents…"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onSearch={handleSearch}
+                  busy={search !== resultSearch}
               autoFocus
             />
             {search && (
               <button
                 className="searchbar-clear-btn"
                 onClick={() => {
-                  setSearch('');
+                  handleSearch('');
                   focusSearchInput();
                 }}
                 title="Clear search query"
@@ -2048,6 +2071,7 @@ export const QuickOverlay: React.FC = () => {
               ));
             })()
           )}
+            {(hasMoreMatches || items.length > displayItems.length) && <button className="btn subtle search-load-more" onClick={() => setSearchLimit((n) => n + 200)}>{search.trim() ? 'Load more matches' : 'Load more entries'}</button>}
           </div>
           {/* Snippets list (always mounted; hidden when the Clips tab is active) */}
           <div className={`overlay-list sn-overlay-list ${tab === 'clips' ? 'inactive-tab' : ''}`}>
@@ -2141,7 +2165,7 @@ export const QuickOverlay: React.FC = () => {
             ) : selectedItem ? (
               (() => {
                 const hasRenderedVersion =
-                  selectedItem.content_type === 'rich_text' ||
+                  !!search.trim() || selectedItem.content_type === 'rich_text' ||
                   (Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!));
 
                 return (
@@ -2185,11 +2209,11 @@ export const QuickOverlay: React.FC = () => {
                           onDragStart={(e) => handleOverlayDragStart(selectedItem, e)}
                           onDragEnd={handleOverlayDragEnd}
                         >
-                          <ClipPreview item={selectedItem} />
+                          <ClipPreview searchQuery={search} item={selectedItem} />
                         </div>
                       ) : hasRenderedVersion && renderMode ? (
                         <div className="preview-render">
-                          <ClipPreview item={selectedItem} forceRaw={false} />
+                          <ClipPreview searchQuery={search} item={selectedItem} forceRaw={false} />
                         </div>
                       ) : (
                         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>

@@ -476,23 +476,10 @@ fn show_arg_prompt(spec: &ArgPromptRequest) {
                 crate::hotkey::flush_dwm_ordering();
                 ARGPROMPT_UP.store(true, Ordering::SeqCst);
                 if ARG_PROMPT_PAINTED_ID.load(Ordering::SeqCst) == spec_id {
-                    // Ack-before-present race: the paint ack landed while this
-                    // closure was still queued (fast webview). Its own focus
-                    // request targeted a still-hidden window and was dropped,
-                    // so reveal + focus here instead. The cloak parked the
-                    // OS-alpha mask at 0 (flash belt): lift it to 255 before
-                    // uncloaking or the reveal would composite nothing.
-                    crate::hotkey::set_window_alpha(&win, 255);
-                    crate::hotkey::set_window_cloaked(&win, false);
-                    let _ = win.set_focus();
-                    crate::paste::log_diag(&format!(
-                        "[ARGPROMPT] presented id={} already painted — revealed at present",
-                        spec_id
-                    ));
+                    schedule_arg_prompt_reveal(app_present.clone(), spec_id);
                 } else {
                     crate::paste::log_diag(&format!(
-                        "[ARGPROMPT] presented id={} cloaked until paint ack",
-                        spec_id
+                        "[ARGPROMPT] presented id={} cloaked until paint ack", spec_id
                     ));
                 }
             }
@@ -550,7 +537,6 @@ fn show_arg_prompt(spec: &ArgPromptRequest) {
 /// Paint-ack from the argprompt frontend (first spec painted): lift the
 /// cloak and focus for typing. Stale acks (id mismatch) are ignored.
 pub fn note_arg_prompt_painted(id: u64) {
-    ARG_PROMPT_PAINTED_ID.store(id, Ordering::SeqCst);
     let pending_id = lock_recover(&ARG_PROMPT_PENDING)
         .as_ref()
         .map(|s| s.id);
@@ -564,29 +550,45 @@ pub fn note_arg_prompt_painted(id: u64) {
     if pending_id != Some(id) {
         return;
     }
-    if let Some(ctx) = lock_recover(&EXPANSION_CTX).as_ref() {
-        if let Some(win) = ctx.app_handle.get_webview_window("argprompt") {
-            // Settle-then-reveal (main-window parity): the ack fires on DOM
-            // commit, one frame before WebView2 submits the raster — and on a
-            // cold first prompt the surface's previous frame is an empty
-            // acrylic slab. Uncloaking in that same instant composites the
-            // old frame (the quick flash before the card pops). Flush DWM,
-            // hold ~two frames so the renderer submits, flush again, then
-            // reveal. Invisible (the window is still cloaked) and ~35ms on
-            // the IPC thread, never the hotkey thread.
-            #[cfg(target_os = "windows")]
-            unsafe {
-                use windows::Win32::Graphics::Dwm::DwmFlush;
-                let _ = DwmFlush();
-                std::thread::sleep(std::time::Duration::from_millis(35));
-                let _ = DwmFlush();
-            }
-            crate::hotkey::set_window_alpha(&win, 255);
-            crate::hotkey::set_window_cloaked(&win, false);
-            let _ = win.set_focus();
-            crate::paste::log_diag(&format!("[ARGPROMPT] prompt id={} painted — revealed", id));
-        }
+    ARG_PROMPT_PAINTED_ID.store(id, Ordering::SeqCst);
+    let app = lock_recover(&EXPANSION_CTX).as_ref().map(|ctx| ctx.app_handle.clone());
+    if let Some(app) = app {
+        schedule_arg_prompt_reveal(app, id);
     }
+}
+
+static ARG_PROMPT_FIRST_REVEAL: AtomicBool = AtomicBool::new(true);
+static ARG_PROMPT_REVEALING_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn schedule_arg_prompt_reveal(app: tauri::AppHandle, id: u64) {
+    // Ack-before-present is completed by the present closure. Never uncloak a
+    // still-hidden window here, or a later show can expose its empty surface.
+    if !ARGPROMPT_UP.load(Ordering::SeqCst)
+        || ARG_PROMPT_PAINTED_ID.load(Ordering::SeqCst) != id {
+        return;
+    }
+    if ARG_PROMPT_REVEALING_ID.swap(id, Ordering::SeqCst) == id { return; }
+    std::thread::spawn(move || {
+        // Only the first reveal waits for WebView2's cold raster submission.
+        // Hold the DWM cloak throughout; layered alpha alone does not mask
+        // native acrylic. Never sleep on the event loop or under context locks.
+        let cold = ARG_PROMPT_FIRST_REVEAL.load(Ordering::SeqCst);
+        if cold { std::thread::sleep(std::time::Duration::from_millis(150)); }
+        let reveal_app = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if lock_recover(&ARG_PROMPT_PENDING).as_ref().map(|s| s.id) != Some(id)
+                || ARG_PROMPT_PAINTED_ID.load(Ordering::SeqCst) != id
+                || !ARGPROMPT_UP.load(Ordering::SeqCst) { return; }
+            if let Some(win) = reveal_app.get_webview_window("argprompt") {
+                crate::hotkey::flush_dwm_ordering();
+                crate::hotkey::set_window_alpha(&win, 255);
+                crate::hotkey::set_window_cloaked(&win, false);
+                let _ = win.set_focus();
+                ARG_PROMPT_FIRST_REVEAL.store(false, Ordering::SeqCst);
+                crate::paste::log_diag(&format!("[ARGPROMPT] prompt id={} painted - revealed cold={}", id, cold));
+            }
+        });
+    });
 }
 
 fn hide_arg_prompt_window() {

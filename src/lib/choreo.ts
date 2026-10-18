@@ -153,13 +153,14 @@ export function initPaintGate(): () => void {
   html.dataset.painted = '0';
   let firstFrame = requestAnimationFrame(() => {
     firstFrame = requestAnimationFrame(() => {
-      html.dataset.painted = '1';
+      if (html.dataset.coldhold !== '1') html.dataset.painted = '1';
     });
   });
   return () => cancelAnimationFrame(firstFrame);
 }
 
 let showEpoch = 0;
+let firstShowSubmitted = false;
 
 export function executeWindowShow(
   windowName: 'overlay' | 'main' | 'settings',
@@ -194,10 +195,11 @@ export function executeWindowShow(
 
       const windowLoaded = document.readyState === 'complete';
       const isPainted = html.dataset.painted === '1';
+      const settingsReady = html.dataset.settingsReady !== '0';
 
       // I1: EVENT-DRIVEN GATE: opens purely on per-cycle present confirmation
       // All fixed settle delays removed from the happy path (settleMs=0)
-      if (windowLoaded && isPainted && framesSinceShow >= 2) {
+      if (windowLoaded && isPainted && framesSinceShow >= 2 && settingsReady) {
         assertLayoutRoot();
         const tGate = performance.now();
         traceChoreo(`${windowName} show gate opened in ${(tGate - tHotkey).toFixed(1)}ms (settle ${settleMs}ms)`);
@@ -222,6 +224,7 @@ export function executeWindowShow(
             if (cancelled || epoch !== showEpoch) return;
 
             const tAckReq = performance.now();
+            firstShowSubmitted = true;
             // Release native DWM cloak gate (forced present lands first, Rust-side)
             const paintedCmd = windowName === 'overlay' ? 'overlay_painted' : 'enlarged_painted';
             traceChoreo(`${windowName} invoking ${paintedCmd} (uncloak) at ${(tAckReq - tHotkey).toFixed(1)}ms`);
@@ -240,13 +243,10 @@ export function executeWindowShow(
             if (onRevealed) onRevealed();
           };
 
-          if (windowName === 'overlay') {
-            proceed();
-          } else {
-            requestAnimationFrame(() => {
-              proceed();
-            });
-          }
+          // rAF runs BEFORE paint. The first overlay reveal needs the next
+          // frame too; subsequent overlay opens keep their existing timing.
+          if (windowName === 'overlay' && firstShowSubmitted) proceed();
+          else requestAnimationFrame(proceed);
         });
         return;
       }
@@ -259,7 +259,8 @@ export function executeWindowShow(
       // by a margin — recovery still only fires on genuine hangs and never
       // cuts a content wait short.
       const gateBoundMs = html.dataset.coldhold === '1' ? 5600 : 300;
-      if (!warned && performance.now() - tHotkey > gateBoundMs) {
+      const readyBoundMs = settingsReady ? gateBoundMs : 5600;
+      if (!warned && performance.now() - tHotkey > readyBoundMs) {
         traceChoreo(`${windowName} show gate bounded wait (${gateBoundMs}ms) reached; initiating flash-safe recovery`);
         warned = true;
         cancelled = true;

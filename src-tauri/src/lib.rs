@@ -54,6 +54,7 @@ async fn get_all_clips(
     category: Option<String>,
     pinned_only: Option<bool>,
     collection_id: Option<String>,
+    limit: Option<usize>,
 ) -> Result<Vec<ClipItem>, String> {
     // Fast path: the unfiltered full-history fetch (main window first open)
     // is served from the prewarm snapshot so the first click shows instantly
@@ -76,18 +77,21 @@ async fn get_all_clips(
                     crate::hotkey::commit_main_refresh(fresh, gen_before);
                 }
             });
-            return Ok(cached);
+            return Ok(cached.into_iter().take(limit.unwrap_or(usize::MAX)).collect());
         }
         let res = state.db.get_all_entries(None, None, false, None)?;
         let _ = crate::hotkey::commit_main_refresh(res.clone(), gen_before);
-        return Ok(res);
+        return Ok(res.into_iter().take(limit.unwrap_or(usize::MAX)).collect());
     }
-    let res = state.db.get_all_entries(
+    // SQLite reads belong on the blocking pool, not the async IPC executor.
+    let db = state.db.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || db.get_all_entries_limited(
         search.as_deref(),
         category.as_deref(),
         pinned_only.unwrap_or(false),
         collection_id.as_deref(),
-    )?;
+        limit.map(|n| n.max(1)),
+    )).await.map_err(|e| e.to_string())??;
     Ok(res)
 }
 
@@ -754,8 +758,8 @@ async fn enlarged_painted(app_handle: AppHandle, token: Option<u64>) {
 
 /// Argprompt frontend confirms its first spec painted — lift cloak + focus.
 #[tauri::command]
-fn argprompt_painted(id: u64) {
-    expansion::note_arg_prompt_painted(id);
+async fn argprompt_painted(id: u64) {
+    tauri::async_runtime::spawn_blocking(move || expansion::note_arg_prompt_painted(id)).await.ok();
 }
 
 #[tauri::command]

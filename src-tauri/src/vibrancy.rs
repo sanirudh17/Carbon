@@ -44,35 +44,60 @@ pub fn get_tint_color() -> window_vibrancy::Color {
     (64, 64, 64, 90)
 }
 
-/// Configures Windows DWM rounded corners for the window.
-/// Deliberately DWM-only (no SetWindowRgn): the library window proves this is
-/// pixel-perfect — DWM rounds the whole surface including the acrylic blur at
-/// the compositor level. GDI round-rect regions were tried for overlay/pill
-/// and always left 1px halo tabs at the corners: GDI arcs can't match
-/// Chromium's Skia arcs subpixel-for-subpixel, and blur-behind vs. region
-/// disagree about the corner pixels.
+/// Keep the complete acrylic surface inside DWM's native rounded corners.
+/// A GDI window region clips client pixels but not the acrylic compositor,
+/// leaving translucent square protrusions outside the CSS corner arcs.
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn frameless_paint_proc(
+    hwnd: windows::Win32::Foundation::HWND,
+    message: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+    subclass_id: usize,
+    _data: usize,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Foundation::LRESULT;
+    use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass};
+    use windows::Win32::UI::WindowsAndMessaging::{WM_NCPAINT, WM_NCACTIVATE, WM_NCDESTROY};
+    // When DWM's automatic frame is off, DefWindowProc can paint a classic
+    // caption over our client area on activation, including a square corner.
+    // Only suppress that non-client paint; hit testing, resize and focus still
+    // run through Tauri's existing subclass chain.
+    match message {
+        WM_NCPAINT => LRESULT(0),
+        WM_NCACTIVATE => LRESULT(1),
+        WM_NCDESTROY => {
+            let _ = RemoveWindowSubclass(hwnd, Some(frameless_paint_proc), subclass_id);
+            DefSubclassProc(hwnd, message, wparam, lparam)
+        }
+        _ => DefSubclassProc(hwnd, message, wparam, lparam),
+    }
+}
+
 pub fn set_round_corners(window: &WebviewWindow) {
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Graphics::Dwm::{
-            DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE,
-        };
-
-        if let Ok(w_hwnd) = window.hwnd() {
-            unsafe {
-                let hwnd = windows::Win32::Foundation::HWND(w_hwnd.0 as _);
-                // DWMWCP_ROUND = 2
-                let preference = 2i32;
-                let _ = DwmSetWindowAttribute(
-                    hwnd,
-                    DWMWA_WINDOW_CORNER_PREFERENCE,
-                    &preference as *const _ as *const std::ffi::c_void,
-                    std::mem::size_of::<i32>() as u32,
-                );
-                // DWMWA_COLOR_NONE: suppress default Windows 11 window border
-                set_window_border_suppressed(window);
+        let win = window.clone();
+        // comctl32 subclasses must be installed on the HWND's owning thread.
+        let _ = window.run_on_main_thread(move || {
+            use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE};
+            use windows::Win32::UI::Shell::SetWindowSubclass;
+            if let Ok(handle) = win.hwnd() {
+                unsafe {
+                    let hwnd = windows::Win32::Foundation::HWND(handle.0 as _);
+                    let installed = SetWindowSubclass(hwnd, Some(frameless_paint_proc), 0x43415242, 0);
+                    if !installed.as_bool() {
+                        crate::paste::log_diag("[FRAME] failed to install frameless paint guard");
+                    }
+                    // DWMWCP_ROUND = 2: DWM clips both the client and acrylic.
+                    let preference = 2i32;
+                    let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
+                        &preference as *const _ as *const std::ffi::c_void,
+                        std::mem::size_of::<i32>() as u32);
+                }
+                set_window_border_suppressed(&win);
             }
-        }
+        });
     }
     #[cfg(not(target_os = "windows"))]
     let _ = window;

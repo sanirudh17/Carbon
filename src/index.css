@@ -87,7 +87,7 @@
   --glass-border: rgba(255, 255, 255, 0.08);
   --glass-border-inner: rgba(255, 255, 255, 0.06);
   --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07);
-  --glass-shadow: 0 24px 64px rgba(0, 0, 0, 0.42);
+  --glass-shadow: none;
   --glass-row-selected: var(--accent-soft);
   --glass-hairline: rgba(255, 255, 255, 0.07);
   --glass-pill-bg: rgba(255, 255, 255, 0.07);
@@ -106,7 +106,7 @@
   --surface-float: var(--surface-float-glass);
   --surface-float-bg: var(--surface-float-glass);
   --surface-float-border: 1px solid var(--glass-hairline);
-  --surface-float-shadow: 0 24px 64px rgba(0, 0, 0, 0.50);
+  --surface-float-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   --surface-float-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07);
   --backdrop-blur: blur(24px);
   --backdrop-dim: rgba(0, 0, 0, 0.30);
@@ -210,7 +210,7 @@ html.win-library body {
   --glass-border: rgba(0, 0, 0, 0.08);
   --glass-border-inner: rgba(0, 0, 0, 0.06);
   --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.70);
-  --glass-shadow: 0 24px 64px rgba(0, 0, 0, 0.18);
+  --glass-shadow: none;
   --glass-row-selected: var(--accent-soft);
   --glass-hairline: rgba(0, 0, 0, 0.08);
   --glass-pill-bg: rgba(0, 0, 0, 0.05);
@@ -228,7 +228,7 @@ html.win-library body {
   --surface-float: var(--surface-float-glass);
   --surface-float-bg: var(--surface-float-glass);
   --surface-float-border: 1px solid var(--glass-hairline);
-  --surface-float-shadow: 0 24px 64px rgba(0, 0, 0, 0.18);
+  --surface-float-shadow: 0 6px 20px rgba(0, 0, 0, 0.10);
   --surface-float-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.70);
   --backdrop-blur: blur(24px);
   --backdrop-dim: rgba(255, 255, 255, 0.25);
@@ -263,7 +263,7 @@ html[data-reduced-transparency="true"]:not([data-material="acrylic"]):not([data-
   --glass-border: var(--line);
   --glass-border-inner: var(--line-soft);
   --glass-highlight: none;
-  --glass-shadow: 0 24px 64px rgba(0, 0, 0, 0.42);
+  --glass-shadow: none;
   --glass-row-selected: var(--accent-soft);
   --glass-hairline: var(--line-soft);
   --glass-pill-bg: var(--elev);
@@ -6795,3 +6795,6 @@ html[data-theme="light"].win-overlay .c-dropdown-list {
   transition: width 160ms ease;
 }
 
+
+/* Native search ranges preserve rich formatting and copied text. */
+::highlight(carbon-search) { background-color: #f5cf62; color: #211a09; }

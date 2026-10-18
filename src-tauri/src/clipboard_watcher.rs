@@ -3,6 +3,15 @@ use crate::settings::SettingsState;
 use crate::titles::format_clean_title;
 use image::{ImageBuffer, Rgba};
 use regex::Regex;
+// Classification runs for every capture and during history repair. Compile
+// fixed expressions once instead of stalling captures on regex compilation.
+macro_rules! cached_regex {
+    ($pattern:literal) => {{
+        static VALUE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        VALUE.get_or_init(|| Regex::new($pattern).expect("valid built-in capture pattern"))
+    }};
+}
+
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -659,11 +668,8 @@ fn process_clipboard_change(
             if own_paste {
                 // Carbon's own clipboard write: acknowledge it, don't re-capture.
             } else {
-                // An external copy is ALWAYS considered, even an identical repeat:
-                // a repeat is precisely the trigger for ClipMerge (append) and, with
-                // ClipMerge off, for a fresh copy at the top. The old hash gate skipped
-                // identical content entirely, which is why re-copying "just moved" the
-                // existing clip (or did nothing) instead of appending.
+                // External repeats may bump an existing capture; they must never
+                // concatenate identical text into that capture.
 
                 // A single clipboard write can fire a BURST of identical
                 // WM_CLIPBOARDUPDATE notifications (each SetClipboardData can bump
@@ -685,16 +691,32 @@ fn process_clipboard_change(
 
                 let mut handled = false;
 
-                // 1. ClipMerge first: rapid successive text/code/link copies within the
-                //    window append to the last-captured clip. Identical repeats therefore
-                //    concatenate (A + A -> "A\nA"); different repeats build up one clip.
-                //    Runs before any duplicate handling so a repeat can never be mistaken
-                //    for a mere move.
+                // Resolve existing captures before ClipMerge. Re-copying an old
+                // clip bumps it intact, even during an active merge window.
+                if settings.clip_merge_enabled && !handled {
+                    if let Ok(Some(existing_bumped)) = db_state.find_and_bump_duplicate(&new_item) {
+                        if let (Some(ref new_p), Some(ref exist_p)) = (&new_item.image_path, &existing_bumped.image_path) {
+                            if new_p != exist_p {
+                                let _ = fs::remove_file(new_p);
+                            }
+                        }
+                        let _ = db_state.trim_history(settings.retention_days, settings.max_entries);
+                        *LAST_CAPTURED_CLIP.lock().unwrap() =
+                            Some((existing_bumped.id.clone(), now, existing_bumped.content_type.clone()));
+                        crate::hotkey::note_overlay_clip(&existing_bumped);
+                        crate::hotkey::note_main_clip(&existing_bumped);
+                        let _ = app_handle.emit("clipboard-updated", &existing_bumped);
+                        handled = true;
+                    }
+                }
+
+                // Only distinct new captures may append. append_to_clip also
+                // ignores complete blocks already present in a merged entry.
                 let mergeable = settings.clip_merge_enabled
                     && (new_item.content_type == "text"
                         || new_item.content_type == "code"
                         || new_item.content_type == "link");
-                if mergeable {
+                if mergeable && !handled {
                     let last_cap = LAST_CAPTURED_CLIP.lock().unwrap().clone();
                     if let Some((ref last_id, last_ts, ref last_type)) = last_cap {
                         if now.saturating_sub(last_ts) <= settings.clip_merge_window_ms
@@ -713,27 +735,6 @@ fn process_clipboard_change(
                                 }
                             }
                         }
-                    }
-                }
-
-                // 2. Dedup only while ClipMerge is enabled (i.e. the same content repeated
-                //    OUTSIDE the merge window) -> move the existing entry to the top so we
-                //    never spawn a duplicate tail. With ClipMerge OFF a re-copy means the
-                //    user wants a fresh entry, so we must NOT move - we fall through to insert.
-                if settings.clip_merge_enabled && !handled {
-                    if let Ok(Some(existing_bumped)) = db_state.find_and_bump_duplicate(&new_item) {
-                        if let (Some(ref new_p), Some(ref exist_p)) = (&new_item.image_path, &existing_bumped.image_path) {
-                            if new_p != exist_p {
-                                let _ = fs::remove_file(new_p);
-                            }
-                        }
-                        let _ = db_state.trim_history(settings.retention_days, settings.max_entries);
-                        *LAST_CAPTURED_CLIP.lock().unwrap() =
-                            Some((existing_bumped.id.clone(), now, existing_bumped.content_type.clone()));
-                        crate::hotkey::note_overlay_clip(&existing_bumped);
-                        crate::hotkey::note_main_clip(&existing_bumped);
-                        let _ = app_handle.emit("clipboard-updated", &existing_bumped);
-                        handled = true;
                     }
                 }
 
@@ -917,7 +918,7 @@ fn absolutize_html_image_urls(html: &str) -> String {
 
     // Rewrite relative <img src="..."> to absolute using the base URL.
     // Leave absolute (http, https, data:, blob:, file:) as-is.
-    let re = Regex::new(r#"<img([^>]*?)src\s*=\s*["']([^"']+)["']"#).unwrap();
+    let re = cached_regex!(r#"<img([^>]*?)src\s*=\s*["']([^"']+)["']"#);
     re.replace_all(html, |caps: &regex::Captures| {
         let pre = &caps[1];
         let src = &caps[2];
@@ -949,8 +950,8 @@ pub fn classify_text_content(
 
     // 1. Color hex/rgb/hsl (only for short single strings)
     if trimmed.len() <= 32 && !trimmed.contains('\n') {
-        let hex_re = Regex::new(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$").unwrap();
-        let rgb_re = Regex::new(r"^(rgb|rgba|hsl|hsla)\([0-9%.,\s]+\)$").unwrap();
+        let hex_re = cached_regex!(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$");
+        let rgb_re = cached_regex!(r"^(rgb|rgba|hsl|hsla)\([0-9%.,\s]+\)$");
         if hex_re.is_match(trimmed) || rgb_re.is_match(trimmed) {
             return "color".to_string();
         }
@@ -958,7 +959,7 @@ pub fn classify_text_content(
 
     // 2. Email (only for single words)
     if trimmed.len() <= 120 && !trimmed.contains('\n') && !trimmed.contains(' ') {
-        let email_re = Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$").unwrap();
+        let email_re = cached_regex!(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$");
         if email_re.is_match(trimmed) {
             return "email".to_string();
         }
@@ -973,8 +974,8 @@ pub fn classify_text_content(
             || trimmed.starts_with("localhost:")
             || trimmed.starts_with("127.0.0.1:");
 
-        let domain_re = Regex::new(r"^(?i)([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,24}(:\d+)?(/.*)?$").unwrap();
-        let ip_re = Regex::new(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?(/.*)?$").unwrap();
+        let domain_re = cached_regex!(r"^(?i)([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,24}(:\d+)?(/.*)?$");
+        let ip_re = cached_regex!(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?(/.*)?$");
 
         if is_url_prefix || domain_re.is_match(trimmed) || ip_re.is_match(trimmed) {
             return "link".to_string();
@@ -993,7 +994,7 @@ pub fn classify_text_content(
             .collect();
         if !lines.is_empty() && lines.len() <= 32 {
             let path_re =
-                Regex::new(r#"^(?:[A-Za-z]:[\\/].+|\\\\[^\\\r\n]+\\.*)$"#).unwrap();
+                cached_regex!(r#"^(?:[A-Za-z]:[\\/].+|\\\\[^\\\r\n]+\\.*)$"#);
             if lines.iter().all(|l| path_re.is_match(l)) {
                 let all_exist = lines.iter().all(|l| {
                     let normalized = l.replace('/', "\\");
@@ -1085,7 +1086,7 @@ pub fn looks_like_markdown(s: &str) -> bool {
     let t = s.trim();
     if !t.contains('\n') && !t.contains("```") {
         // Single-line snippets are rarely markdown documents unless clearly marked up.
-        let inline_re = Regex::new(r"\[[^\]\n]+\]\([^)\n]+\)|\*\*[^*\n]+\*\*|`[^`\n]+`").unwrap();
+        let inline_re = cached_regex!(r"\[[^\]\n]+\]\([^)\n]+\)|\*\*[^*\n]+\*\*|`[^`\n]+`");
         return inline_re.is_match(t);
     }
     // Shebang → shell/python script, not markdown.
@@ -1099,7 +1100,7 @@ pub fn looks_like_markdown(s: &str) -> bool {
         return true;
     }
     // ATX headings (# … ######), count them; needs company or multiples.
-    let heading_re = Regex::new(r"(?m)^\s*#{1,6}\s+\S").unwrap();
+    let heading_re = cached_regex!(r"(?m)^\s*#{1,6}\s+\S");
     let headings = heading_re.find_iter(t).count();
     if headings >= 2 {
         return true;
@@ -1108,28 +1109,28 @@ pub fn looks_like_markdown(s: &str) -> bool {
         markers += 2;
     }
     // Emphasis
-    if Regex::new(r"\*\*[^*\n]+\*\*|__[^_\n]+__").unwrap().is_match(t) {
+    if cached_regex!(r"\*\*[^*\n]+\*\*|__[^_\n]+__").is_match(t) {
         markers += 1;
     }
     // Links / images
-    if Regex::new(r"\[[^\]\n]+\]\([^)\n]+\)").unwrap().is_match(t) {
+    if cached_regex!(r"\[[^\]\n]+\]\([^)\n]+\)").is_match(t) {
         markers += 2;
     }
     // Bullet / ordered lists — two or more list lines.
-    let list_re = Regex::new(r"(?m)^\s*([-*+]|\d+[.)])\s+\S").unwrap();
+    let list_re = cached_regex!(r"(?m)^\s*([-*+]|\d+[.)])\s+\S");
     if list_re.find_iter(t).count() >= 2 {
         markers += 2;
     }
     // Blockquotes
-    if Regex::new(r"(?m)^\s*>\s+\S").unwrap().is_match(t) {
+    if cached_regex!(r"(?m)^\s*>\s+\S").is_match(t) {
         markers += 1;
     }
     // Inline code spans
-    if Regex::new(r"`[^`\n]+`").unwrap().is_match(t) {
+    if cached_regex!(r"`[^`\n]+`").is_match(t) {
         markers += 1;
     }
     // Tables
-    if Regex::new(r"(?m)^\s*\|.+\|\s*$").unwrap().is_match(t) {
+    if cached_regex!(r"(?m)^\s*\|.+\|\s*$").is_match(t) {
         markers += 2;
     }
     markers >= 3
@@ -1149,15 +1150,14 @@ fn is_structural_code(s: &str) -> bool {
     }
 
     // HTML / XML document pasted as plain text
-    if Regex::new(r"(?i)^\s*(<!DOCTYPE\s+html|<html[\s>])").unwrap().is_match(t)
-        || Regex::new(r"^\s*<[a-z][\w-]*(\s[^>]*)?>[\s\S]*</[a-z][\w-]*>\s*$").unwrap().is_match(t)
+    if cached_regex!(r"(?i)^\s*(<!DOCTYPE\s+html|<html[\s>])").is_match(t)
+        || cached_regex!(r"^\s*<[a-z][\w-]*(\s[^>]*)?>[\s\S]*</[a-z][\w-]*>\s*$").is_match(t)
     {
         return true;
     }
 
     // SQL statement
-    if Regex::new(r"(?i)^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|WITH)\s[^;]+;\s*$")
-        .unwrap()
+    if cached_regex!(r"(?i)^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|WITH)\s[^;]+;\s*$")
         .is_match(t)
     {
         return true;

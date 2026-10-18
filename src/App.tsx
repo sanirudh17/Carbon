@@ -92,14 +92,14 @@ export function App() {
   // Module-scoped once-flag survives StrictMode remounts; Rust guards too.
   useEffect(() => {
     if (uiReadySent) return;
-    uiReadySent = true;
     let cancelled = false;
     const label = windowLabel;
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         if (cancelled) return;
+        uiReadySent = true;
         import('@tauri-apps/api/event').then(({ emit }) => {
-          emit('carbon-ui-ready', { label }).catch(() => {});
+          emit('carbon-ui-ready', { label }).catch(() => { uiReadySent = false; });
         }).catch(() => {});
       });
     });
@@ -215,7 +215,14 @@ export function App() {
 
     invoke<AppSettings>('get_settings')
       .then(applySettingsData)
-      .catch(console.error);
+      .catch(console.error)
+      .finally(() => {
+        // The persisted theme/material must commit before the first reveal.
+        // Otherwise a fast packaged load presents the bootstrap appearance.
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          document.documentElement.dataset.settingsReady = '1';
+        }));
+      });
 
     const unlistenPromise = listen<AppSettings>('settings-updated', (event) => {
       applySettingsData(event.payload);

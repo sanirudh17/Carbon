@@ -1,3 +1,4 @@
+import { ContentSearchInput } from './ContentSearchInput';
 import React, { useEffect, useState, useRef, memo, useCallback, useMemo } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -11,6 +12,7 @@ import { setClipDragData, shouldNativeDrag, beginNativeDrag } from '../utils/cli
 import {
   ENTRY_UPDATED_EVENT,
   commitEntryText,
+  waitForEntryText,
   applyEntryUpdatedToList,
 } from '../lib/entryEdit';
 import { SnippetsView } from './SnippetsView';
@@ -201,9 +203,26 @@ interface EnlargedWindowProps {
 const COLD_HOLD_CAP_MS = 5000;
 
 export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }) => {
-  const [items, setItems] = useState<ClipItem[]>(() => (typeof window !== 'undefined' && window.__carbonInitialData) || []);
+  const [loadedItems, setItems] = useState<ClipItem[]>(() => (typeof window !== 'undefined' && window.__carbonInitialData) || []);
   const [initialLoaded, setInitialLoaded] = useState(() => Boolean(typeof window !== 'undefined' && window.__carbonInitialData && window.__carbonInitialData.length > 0));
   const [search, setSearch] = useState('');
+  const [searchLimit, setSearchLimit] = useState(200);
+  const items = useMemo(() => loadedItems.slice(0, searchLimit), [loadedItems, searchLimit]);
+  const [resultSearch, setResultSearch] = useState('');
+  const [hasMoreMatches, setHasMoreMatches] = useState(false);
+  const handleSearch = useCallback((value: string) => {
+    setSearch(value);
+    setSearchLimit(200);
+    setSelectedIndex(0);
+    setRenderMode(true);
+    if (!value.trim() && selectedFilterRef.current === 'all' && !sourceAppFilterRef.current && allCachedItemsRef.current.length) {
+      const cached = allCachedItemsRef.current;
+      setItems(cached);
+      setSelectedItem(cached[0]);
+      setEditingContent(cached[0].text_content || '');
+      setResultSearch('');
+    }
+  }, []);
   const [imageDataUrl, setImageDataUrl] = useState<string>('');
   const [selectedFilter, setSelectedFilter] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'clips' | 'snippets'>('clips');
@@ -227,6 +246,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     if (!pending) return Promise.resolve();
     editDirtyRef.current = null;
     return commitEntryText(pending.id, pending.text, 'main').catch((e) => {
+      if (!editDirtyRef.current) editDirtyRef.current = pending;
       console.error(`[main] commit-if-dirty (${reason}) failed:`, e);
     });
   }, []);
@@ -579,9 +599,14 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
         category,
         pinnedOnly: isPinned,
         collectionId: colId,
+        limit: !sourceAppFilter ? searchLimit + 1 : null,
       });
+      if (readSeq !== readSeqRef.current) return;
+      setResultSearch(search);
 
-      let list = res || [];
+      const paged = !sourceAppFilter;
+      setHasMoreMatches(paged && res.length > searchLimit);
+      let list = paged ? res.slice(0, searchLimit) : res || [];
       if (activeFilter === 'all' && !search.trim() && !colId) {
         allCachedItemsRef.current = list;
         // Full unfiltered re-read absorbs every mutation to date (overlay-A2
@@ -668,7 +693,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     setPinError(false);
 
     // Optimistic instantaneous in-memory filter (0ms visual switch)
-    if (allCachedItemsRef.current.length > 0) {
+    if (!search.trim() && allCachedItemsRef.current.length > 0) {
       const isCol = filterKey.startsWith('col_');
       const isPinned = filterKey === 'pinned';
       const category = !isCol && filterKey !== 'all' && filterKey !== 'pinned' ? filterKey : null;
@@ -706,7 +731,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     setPinInput('');
     setPinError(false);
     fetchItems();
-  }, [search, selectedFilter, sourceAppFilter]);
+  }, [search, searchLimit, selectedFilter, sourceAppFilter]);
 
   useEffect(() => {
     fetchCounts();
@@ -715,6 +740,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     loadSnippetCache();
 
     window.__carbonSetData = (data: ClipItem[]) => {
+      if (searchValueRef.current.trim()) { fetchRef.current(); return; }
       if (Array.isArray(data)) {
         setItems(data);
         setInitialLoaded(true);
@@ -1067,6 +1093,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       const updated = e.payload;
       if (!updated || typeof updated !== 'object' || !updated.id) return;
       setItems((prev) => applyEntryUpdatedToList(prev, updated));
+      allCachedItemsRef.current = applyEntryUpdatedToList(allCachedItemsRef.current, updated);
       // One observed store mutation (overlay-A2 bump).
       mainCacheVersionRef.current += 1;
       setSelectedItem((prev) => {
@@ -1076,9 +1103,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
         if (editDirtyRef.current && editDirtyRef.current.id === updated.id) return prev;
         return {
           ...prev,
-          text_content: updated.text_content ?? prev.text_content,
-          title: updated.title ?? prev.title,
-          updated_at: updated.updated_at ?? prev.updated_at,
+          ...updated,
         };
       });
       invoke('log_client_event', {
@@ -1311,16 +1336,8 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
   const handlePaste = async (item: ClipItem, plainText?: boolean, transform?: string) => {
     try {
-      // W1.4: flush any pending edit first so Enter pastes the edited content.
-      const pending = editDirtyRef.current;
-      if (pending && pending.id === item.id) {
-        editDirtyRef.current = null;
-        try {
-          await commitEntryText(pending.id, pending.text, 'main');
-        } catch (e) {
-          console.error('Failed to flush pending edit before paste:', e);
-        }
-      }
+      await commitPendingEdit('paste');
+      await waitForEntryText(item.id);
       await invoke('paste_clip', { id: item.id, plainText: plainText ?? false, transform });
     } catch (err) {
       console.error('Failed to paste clip in enlarged window:', err);
@@ -1391,12 +1408,11 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
   const handleCopyOnly = async (item: ClipItem) => {
     try {
+      await commitPendingEdit('copy');
+      await waitForEntryText(item.id);
       await invoke('copy_clip', { id: item.id });
     } catch (err) {
       console.error('Failed to copy to clipboard:', err);
-      if (item.text_content) {
-        await navigator.clipboard.writeText(item.text_content).catch(console.error);
-      }
     }
   };
 
@@ -1732,6 +1748,10 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent | KeyboardEvent) => {
+    // The window's capture listener runs before React's input handler. Leave
+    // pending-query Enter to the input so it cannot paste an obsolete result.
+    if (e.key === 'Enter' && (e.target as HTMLElement)?.dataset?.searchPending === 'true') return;
+
     // Global hotkey toggles: single-path routing — the OS global shortcut
     // owns every toggle so each physical press toggles exactly once even
     // under ultra-fast mashing (webview + hook both firing per press caused
@@ -2467,12 +2487,13 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                     </button>
                   </span>
                 )}
-                <input
-                  ref={searchInputRef}
+                <ContentSearchInput
+                  inputRef={searchInputRef}
                   className={sourceAppFilter ? 'has-filter-pill' : ''}
-                  placeholder="Search clipboard..."
+                  placeholder="Search clip contents…"
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onSearch={handleSearch}
+                  busy={search !== resultSearch}
                 />
                 {search && (
                   <button
@@ -2555,6 +2576,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   ));
                 })()
               )}
+              {(hasMoreMatches || loadedItems.length > items.length) && <button className="btn subtle search-load-more" onClick={() => setSearchLimit((n) => n + 200)}>{search.trim() ? 'Load more matches' : 'Load more entries'}</button>}
             </div>
           </>
         )}
@@ -2698,7 +2720,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                 {getSpecificTypeLabel(selectedItem)}
               </span>
               {selectedItem &&
-                (selectedItem.content_type === 'rich_text' ||
+                (!!search.trim() || selectedItem.content_type === 'rich_text' ||
                   (Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!))) && (
                 <div className="seg" style={{ marginRight: 4 }}>
                   <button
@@ -2856,7 +2878,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                     )}
                   </div>
                 </div>
-              ) : (selectedItem.content_type === 'rich_text' ||
+              ) : (!!search.trim() || selectedItem.content_type === 'rich_text' ||
                   (Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!))) &&
                 renderMode ? (
                 /* Read-only RENDERED preview (Rich text & Markdown). Toggle to Raw to edit the source. */
@@ -2867,7 +2889,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   title={previewFocused ? 'Focused — arrow keys scroll the document (Esc to release)' : 'Click to focus, then arrow keys scroll'}
                   onClick={() => setPreviewFocused(true)}
                 >
-                  <ClipPreview item={selectedItem} forceRaw={false} />
+                  <ClipPreview searchQuery={search} item={selectedItem} forceRaw={false} />
                 </div>
               ) : (
                 /* Editable Text / Code / Link / Email / Color Preview */
@@ -2911,7 +2933,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
               <CheckIcon />
               {selectedItem.content_type === 'image' || selectedItem.content_type === 'file'
                 ? 'Press Enter to paste item'
-                : renderMode && (selectedItem.content_type === 'rich_text' || (selectedItem.text_content && isMarkdownContent(selectedItem.text_content)))
+                : renderMode && (!!search.trim() || selectedItem.content_type === 'rich_text' || (selectedItem.text_content && isMarkdownContent(selectedItem.text_content)))
                   ? 'Read-only rendered preview — Enter pastes this content'
                   : 'Edits save to history — Enter pastes this content'}
             </div>

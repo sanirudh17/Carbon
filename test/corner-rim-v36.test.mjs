@@ -94,7 +94,7 @@ test('C1(iii) no CSS ring traces the window radius on html/body/#root/surface', 
   }
 });
 
-test('C1(iv) single radius: DWM ROUND + identical CSS radius everywhere', () => {
+test('C1(iv) compositor rounds acrylic and client together without a conflicting GDI clip', () => {
   const hotkey = fs.readFileSync(
     path.join(ROOT_DIR, 'src-tauri', 'src', 'hotkey.rs'),
     'utf8'
@@ -105,12 +105,13 @@ test('C1(iv) single radius: DWM ROUND + identical CSS radius everywhere', () => 
   );
   assert.ok(
     vibrancy.includes('DWMWA_WINDOW_CORNER_PREFERENCE'),
-    'corners must be DWM-owned'
+    'native corner preference must be explicit'
   );
   assert.ok(
-    /preference\s*=\s*2i32|DWMWCP_ROUND/.test(vibrancy),
-    'DWM preference must be ROUND'
+    /preference\s*=\s*2i32/.test(vibrancy),
+    'DWM must round the complete compositor surface'
   );
+  assert.ok(!vibrancy.includes('SetWindowRgn') && !vibrancy.includes('CreateRoundRectRgn'), 'a GDI region must not override compositor corner clipping');
   const css = readCss();
   for (const sel of ['body', '.overlay', '.enlarged']) {
     const body = ruleFor(css, sel);

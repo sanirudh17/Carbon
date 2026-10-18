@@ -282,8 +282,8 @@ test('Main Flash: the OS-alpha mask is installed at cloak and never removed (gla
   assert.equal(removals.length, 0, 'the layered bit may never be removed (a toggle rebuilds the acrylic surface)');
   assert.ok(!hotkeyRs.includes('fn clear_window_layered'), 'no layered-strip helper may exist');
 
-  // The mask must be applied on the cloak path, guarded on success: a failed
-  // cloak may leave the window visible, where masking would pop it invisible.
+  // Install the mask before DWM is asked to cloak. A failed/deferred cloak
+  // must still hide the raw surface during a cold ShowWindow transition.
   const cloakMatch = hotkeyRs.match(/pub fn set_window_cloaked\(window[\s\S]*?\r?\n\}\r?\n/);
   assert.ok(cloakMatch, 'set_window_cloaked (windows) found');
   assert.ok(
@@ -291,15 +291,15 @@ test('Main Flash: the OS-alpha mask is installed at cloak and never removed (gla
     'cloaking must park the OS-alpha mask at 0'
   );
   assert.ok(
-    cloakMatch[0].includes('cloaked && cloak_ok'),
-    'the mask must be guarded on cloak success'
+    cloakMatch[0].indexOf('set_window_alpha(window, 0)') < cloakMatch[0].indexOf('DwmSetWindowAttribute('),
+    'the mask must precede the fallible DWM cloak request'
   );
 
   // Every reveal path must lift the mask before uncloaking: main/overlay ramp
   // from 0, and the argprompt reveals (the two paths without a ramp) set 255.
   const expansionRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'expansion.rs'), 'utf8');
   assert.ok(
-    (expansionRs.match(/set_window_alpha\(&win, 255\)/g) || []).length >= 2,
+    (expansionRs.match(/set_window_alpha\(&win, 255\)/g) || []).length >= 1 && expansionRs.includes('fn schedule_arg_prompt_reveal'),
     'argprompt reveals must lift the cloak-parked alpha mask'
   );
 });
@@ -588,7 +588,7 @@ test('Unified Frame - permanent preview pane with media cap and info block', () 
     'empty list must render an in-pane placeholder, never unmount'
   );
   assert.ok(
-    qo.includes('placeholder="Type to filter entries…"'),
+    qo.includes('placeholder="Search clip contents…"'),
     'filter input must carry the unified placeholder'
   );
 });

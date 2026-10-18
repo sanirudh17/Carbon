@@ -1,4 +1,5 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import { highlightPreview } from '../lib/searchHighlights';
+import React, { useMemo, useState, useEffect, useRef, memo } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { ClipItem, ContentType } from '../types';
 import { getTypeColor, LockIcon, EyeIcon, EyeOffIcon } from './Icons';
@@ -483,7 +484,7 @@ export function renderMarkdownToHtml(markdown: string): string {
 
 // ── Content renderer ───────────────────────────────────────────────────
 
-export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ item, forceRaw = false }) => {
+const ClipPreviewBody = memo(function ClipPreviewBody({ item, forceRaw = false }: { item: ClipItem; forceRaw?: boolean }) {
   const [revealed, setRevealed] = useState(false);
 
   useEffect(() => {
@@ -709,7 +710,26 @@ export const ClipPreview: React.FC<{ item: ClipItem; forceRaw?: boolean }> = ({ 
       {renderContentBody()}
     </div>
   );
-};
+});
+
+export const ClipPreview = memo(function ClipPreview({ item, forceRaw, searchQuery = '' }: {
+  item: ClipItem; forceRaw?: boolean; searchQuery?: string;
+}) {
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!root.current || item.content_type === 'image') return;
+    let cleanup = () => {};
+    const update = () => {
+      cleanup();
+      if (root.current) cleanup = highlightPreview(root.current, searchQuery);
+    };
+    update();
+    const observer = new MutationObserver(update);
+    observer.observe(root.current, { childList: true, subtree: true });
+    return () => { observer.disconnect(); cleanup(); };
+  }, [item, forceRaw, searchQuery]);
+  return <div ref={root}><ClipPreviewBody item={item} forceRaw={forceRaw} /></div>;
+});
 
 // ── Metadata strip ─────────────────────────────────────────────────────
 

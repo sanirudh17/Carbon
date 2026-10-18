@@ -13,6 +13,14 @@ export const ENTRY_UPDATED_EVENT = 'entry-updated';
 
 export type EntrySourceWindow = 'overlay' | 'main';
 
+// Blur starts saving before the subsequent click/Enter handler runs. Keep
+// that write reachable even after the component has cleared its dirty buffer.
+const pendingWrites = new Map<string, Promise<void>>();
+
+export async function waitForEntryText(id: string): Promise<void> {
+  await pendingWrites.get(id);
+}
+
 export function entryTitleFor(text: string, fallback = ''): string {
   const first = text.split('\n')[0]?.trim() ?? '';
   return first || fallback;
@@ -27,7 +35,13 @@ export async function commitEntryText(
   const bytes = new Blob([text]).size;
   const t0 = performance.now();
   try {
-    await invoke('update_clip_text', { id, text });
+    const previous = pendingWrites.get(id);
+    const write = (previous ?? Promise.resolve()).catch(() => {}).then(async () => {
+      await invoke('update_clip_text', { id, text });
+    });
+    pendingWrites.set(id, write);
+    await write;
+    if (pendingWrites.get(id) === write) pendingWrites.delete(id);
     const ms = (performance.now() - t0).toFixed(1);
     invoke('log_client_event', {
       event: `[EDIT] source=${source} committed id=${id} chars=${text.length} bytes=${bytes} ms=${ms}`,
@@ -53,9 +67,7 @@ export function applyEntryUpdatedToList(prev: ClipItem[], updated: Partial<ClipI
     touched = true;
     return {
       ...i,
-      text_content: updated.text_content !== undefined ? updated.text_content : i.text_content,
-      title: updated.title !== undefined ? updated.title : i.title,
-      updated_at: (updated as ClipItem).updated_at ?? i.updated_at,
+      ...updated,
     };
   });
   return touched ? next : prev;

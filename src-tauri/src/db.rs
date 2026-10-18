@@ -183,6 +183,39 @@ pub struct DbState {
     pub db_path: PathBuf,
 }
 
+/// Word/prefix search uses the existing Unicode FTS index. Literal terms
+/// also match code identifiers and URLs; LIKE metacharacters remain
+/// literal. Collection, pin and type constraints apply to every match.
+fn append_content_search(
+    query: &mut String,
+    params: &mut Vec<Box<dyn rusqlite::ToSql>>,
+    search: Option<&str>,
+) {
+    let terms: Vec<&str> = search.unwrap_or("").split_whitespace().collect();
+    if terms.is_empty() {
+        return;
+    }
+    query.push_str(" AND content_type <> 'image'");
+    // Keep words on FTS. Punctuation uses indexed candidates before a literal
+    // check; OR-ing LIKE here scanned every stored document on every key.
+    let indexed: Vec<String> = terms.iter()
+        .filter(|term| term.chars().any(char::is_alphanumeric))
+        .map(|term| format!("\"{}\"*", term.replace('"', "\"\"")))
+        .collect();
+    if !indexed.is_empty() {
+        query.push_str(" AND id IN (SELECT id FROM entries_fts WHERE entries_fts MATCH ?)");
+        params.push(Box::new(indexed.join(" AND ")));
+    }
+    for term in terms.iter().filter(|term| !term.chars().all(char::is_alphanumeric)) {
+        query.push_str(" AND (title LIKE ? ESCAPE '\\' OR text_content LIKE ? ESCAPE '\\' OR file_paths LIKE ? ESCAPE '\\')");
+        let escaped = term.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let pattern = format!("%{}%", escaped);
+        for _ in 0..3 {
+            params.push(Box::new(pattern.clone()));
+        }
+    }
+}
+
 impl DbState {
     pub fn new(db_path: PathBuf) -> Result<Self, String> {
         if let Some(parent) = db_path.parent() {
@@ -203,6 +236,14 @@ impl DbState {
         };
 
         state.init_tables()?;
+        // Older histories may predate the FTS triggers. Backfill missing rows
+        // without rebuilding the index or changing any stored clip content.
+        state.conn.lock().map_err(|e| e.to_string())?.execute(
+            "INSERT INTO entries_fts(rowid, id, title, text_content, file_paths)
+             SELECT rowid, id, title, COALESCE(text_content, ''), COALESCE(file_paths, '')
+             FROM entries WHERE id NOT IN (SELECT id FROM entries_fts)",
+            [],
+        ).map_err(|e| e.to_string())?;
         state.refresh_titles()?;
         Ok(state)
     }
@@ -277,33 +318,40 @@ impl DbState {
         )
         .map_err(|e| e.to_string())?;
 
-        // Triggers to sync FTS5
-        conn.execute(
-            "CREATE TRIGGER IF NOT EXISTS entries_ai AFTER INSERT ON entries BEGIN
-                INSERT INTO entries_fts(id, title, text_content, file_paths)
-                VALUES (new.id, new.title, COALESCE(new.text_content, ''), COALESCE(new.file_paths, ''));
-            END;",
-            [],
-        )
-        .map_err(|e| e.to_string())?;
-
-        conn.execute(
-            "CREATE TRIGGER IF NOT EXISTS entries_ad AFTER DELETE ON entries BEGIN
-                DELETE FROM entries_fts WHERE id = old.id;
-            END;",
-            [],
-        )
-        .map_err(|e| e.to_string())?;
-
-        conn.execute(
-            "CREATE TRIGGER IF NOT EXISTS entries_au AFTER UPDATE ON entries BEGIN
-                DELETE FROM entries_fts WHERE id = old.id;
-                INSERT INTO entries_fts(id, title, text_content, file_paths)
-                VALUES (new.id, new.title, COALESCE(new.text_content, ''), COALESCE(new.file_paths, ''));
-            END;",
-            [],
-        )
-        .map_err(|e| e.to_string())?;
+        // FTS id is UNINDEXED. Deleting by id scanned all stored documents
+        // on every bump/edit. Align FTS rowids with entries and address the
+        // index by its native integer key. Migrate only the derived index,
+        // atomically; every stored capture and collection stays untouched.
+        let trigger_sql: String = conn.query_row(
+            "SELECT COALESCE((SELECT sql FROM sqlite_master WHERE type='trigger' AND name='entries_ai'), '')",
+            [], |row| row.get(0),
+        ).map_err(|e| e.to_string())?;
+        if !trigger_sql.contains("new.rowid") {
+            conn.execute_batch(
+                "BEGIN IMMEDIATE;
+                 DROP TRIGGER IF EXISTS entries_ai;
+                 DROP TRIGGER IF EXISTS entries_ad;
+                 DROP TRIGGER IF EXISTS entries_au;
+                 DELETE FROM entries_fts;
+                 INSERT INTO entries_fts(rowid, id, title, text_content, file_paths)
+                 SELECT rowid, id, title, COALESCE(text_content, ''), COALESCE(file_paths, '') FROM entries;
+                 CREATE TRIGGER entries_ai AFTER INSERT ON entries BEGIN
+                    INSERT INTO entries_fts(rowid, id, title, text_content, file_paths)
+                    VALUES (new.rowid, new.id, new.title, COALESCE(new.text_content, ''), COALESCE(new.file_paths, ''));
+                 END;
+                 CREATE TRIGGER entries_ad AFTER DELETE ON entries BEGIN
+                    DELETE FROM entries_fts WHERE rowid = old.rowid;
+                 END;
+                 CREATE TRIGGER entries_au AFTER UPDATE ON entries
+                 WHEN old.title IS NOT new.title OR old.text_content IS NOT new.text_content
+                      OR old.file_paths IS NOT new.file_paths OR old.rowid IS NOT new.rowid BEGIN
+                    DELETE FROM entries_fts WHERE rowid = old.rowid;
+                    INSERT INTO entries_fts(rowid, id, title, text_content, file_paths)
+                    VALUES (new.rowid, new.id, new.title, COALESCE(new.text_content, ''), COALESCE(new.file_paths, ''));
+                 END;
+                 COMMIT;"
+            ).map_err(|e| e.to_string())?;
+        }
 
         // Collections table
         conn.execute(
@@ -453,7 +501,6 @@ impl DbState {
             .map_err(|e| e.to_string())?;
 
         let mut to_update: Vec<(String, String, String)> = Vec::new(); // (id, clean_title, content_type)
-        let mut to_delete: Vec<String> = Vec::new();
         for r in rows {
             let (id, content_type, title, text_content, html_content, rtf_content, source_app) =
                 r.map_err(|e| e.to_string())?;
@@ -483,22 +530,16 @@ impl DbState {
                         source_app.as_deref(),
                     );
 
-                    // Legacy rows force-typed "code" by the old heuristic:
-                    // prose or markdown with no code anatomy renders wrong
-                    // under the code view — remove them outright.
-                    if content_type == "code"
-                        && detected_type == "text"
-                        && text_content.as_deref().map_or(false, |s| {
-                            crate::clipboard_watcher::looks_like_prose(s)
-                                || crate::clipboard_watcher::looks_like_markdown(s)
-                        })
-                    {
-                        to_delete.push(id);
-                        continue;
-                    }
+                    // A legacy classification repair must never delete a
+                    // capture (including pinned and collected captures).
+                    let legacy_prose = content_type == "code" && detected_type == "text"
+                        && (crate::clipboard_watcher::looks_like_prose(source)
+                            || crate::clipboard_watcher::looks_like_markdown(source));
 
                     // Fix misclassified rich_text that is actually plain text/code/link/email/color
-                    let target_type = if content_type == "rich_text" && detected_type != "rich_text" {
+                    let target_type = if legacy_prose {
+                        "text".to_string()
+                    } else if content_type == "rich_text" && detected_type != "rich_text" {
                         detected_type
                     } else if content_type == "text" && (detected_type == "link" || detected_type == "email" || detected_type == "color" || detected_type == "file") {
                         detected_type
@@ -524,11 +565,6 @@ impl DbState {
             .map_err(|e| e.to_string())?;
         }
 
-        for id in to_delete {
-            // The entries_ad trigger removes the matching FTS row.
-            conn.execute("DELETE FROM entries WHERE id = ?1", params![id])
-                .map_err(|e| e.to_string())?;
-        }
 
         Ok(())
     }
@@ -638,17 +674,11 @@ impl DbState {
             }
         }
 
-        if let Some(s) = search {
-            let s_trimmed = s.trim();
-            if !s_trimmed.is_empty() {
-                query.push_str(" AND (title LIKE ? OR text_content LIKE ? OR file_paths LIKE ? OR ocr_text LIKE ?)");
-                let pattern = format!("%{}%", s_trimmed);
-                params_vec.push(Box::new(pattern.clone()));
-                params_vec.push(Box::new(pattern.clone()));
-                params_vec.push(Box::new(pattern.clone()));
-                params_vec.push(Box::new(pattern));
-            }
+        if collection_id.filter(|id| !id.trim().is_empty()).is_none()
+            && search.map_or(false, |q| !q.trim().is_empty()) {
+            query.push_str(" AND id NOT IN (SELECT clip_id FROM clip_collections)");
         }
+        append_content_search(&mut query, &mut params_vec, search);
 
         query.push_str(" ORDER BY created_at DESC");
 
@@ -696,6 +726,13 @@ impl DbState {
         pinned_only: bool,
         collection_id: Option<&str>,
     ) -> Result<Vec<ClipItem>, String> {
+        self.get_all_entries_limited(search, category, pinned_only, collection_id, None)
+    }
+
+    pub fn get_all_entries_limited(
+        &self, search: Option<&str>, category: Option<&str>, pinned_only: bool,
+        collection_id: Option<&str>, limit: Option<usize>,
+    ) -> Result<Vec<ClipItem>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
 
         let mut query = String::from(
@@ -730,19 +767,18 @@ impl DbState {
             }
         }
 
-        if let Some(s) = search {
-            let s_trimmed = s.trim();
-            if !s_trimmed.is_empty() {
-                query.push_str(" AND (title LIKE ? OR text_content LIKE ? OR file_paths LIKE ? OR ocr_text LIKE ?)");
-                let pattern = format!("%{}%", s_trimmed);
-                params_vec.push(Box::new(pattern.clone()));
-                params_vec.push(Box::new(pattern.clone()));
-                params_vec.push(Box::new(pattern.clone()));
-                params_vec.push(Box::new(pattern));
-            }
+        if collection_id.filter(|id| !id.trim().is_empty()).is_none()
+            && search.map_or(false, |q| !q.trim().is_empty()) {
+            query.push_str(" AND id NOT IN (SELECT clip_id FROM clip_collections)");
         }
+        append_content_search(&mut query, &mut params_vec, search);
 
         query.push_str(" ORDER BY created_at DESC");
+        if let Some(limit) = limit {
+            query.push_str(" LIMIT ?");
+            params_vec.push(Box::new(limit as i64));
+        }
+
 
         let mut stmt = conn.prepare(&query).map_err(|e| e.to_string())?;
         let params_slice: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
@@ -1290,9 +1326,12 @@ impl DbState {
 
         conn.execute(
             "UPDATE entries
-             SET text_content = ?1, title = ?2, updated_at = datetime('now', 'localtime')
+             SET text_content = ?1, title = ?2, file_size = ?4,
+                 html_content = NULL, rtf_content = NULL,
+                 content_type = CASE WHEN content_type = 'rich_text' THEN 'text' ELSE content_type END,
+                 updated_at = datetime('now', 'localtime')
              WHERE id = ?3",
-            params![new_text, first_line, id],
+            params![new_text, first_line, id, new_text.len() as i64],
         )
         .map_err(|e| e.to_string())?;
 
@@ -1551,7 +1590,18 @@ impl DbState {
             })
             .map_err(|e| e.to_string())?;
 
+        // Delayed format notifications and a re-copy of a merged component
+        // must never append the same payload twice. Match whole newline-bound
+        // blocks, rather than substrings ("key" must still append after "keyboard").
+        let already_present = old_text.as_deref().is_some_and(|old| {
+            new_text.is_empty() || old.match_indices(new_text).any(|(start, _)| {
+                let end = start + new_text.len();
+                (start == 0 || old.as_bytes()[start - 1] == b'\n')
+                    && (end == old.len() || old.as_bytes()[end] == b'\n')
+            })
+        });
         let merged_text = match old_text {
+            Some(t) if already_present => t,
             Some(t) if !t.is_empty() => format!("{}\n{}", t, new_text),
             _ => new_text.to_string(),
         };
@@ -1559,7 +1609,7 @@ impl DbState {
         let new_size = merged_text.len() as u64;
 
         conn.execute(
-            "UPDATE entries SET text_content = ?1, title = ?2, file_size = ?3, created_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime') WHERE id = ?4",
+            "UPDATE entries SET text_content = ?1, title = ?2, file_size = ?3, html_content = NULL, rtf_content = NULL, created_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime') WHERE id = ?4",
             params![merged_text, new_title, new_size as i64, id],
         )
         .map_err(|e| e.to_string())?;
@@ -1728,11 +1778,19 @@ impl DbState {
             }
 
             let res = tx.execute(
-                "INSERT OR REPLACE INTO entries (
+                "INSERT INTO entries (
                     id, content_type, title, text_content, rtf_content, html_content,
                     image_path, image_width, image_height, file_paths, is_video, file_size,
                     is_pinned, source_app, created_at, updated_at, qr_content, is_sensitive, expires_at, ocr_text
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, 0, NULL, ?18)",
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, 0, NULL, ?18)
+                ON CONFLICT(id) DO UPDATE SET
+                    content_type=excluded.content_type, title=excluded.title, text_content=excluded.text_content,
+                    rtf_content=excluded.rtf_content, html_content=excluded.html_content,
+                    image_path=excluded.image_path, image_width=excluded.image_width, image_height=excluded.image_height,
+                    file_paths=excluded.file_paths, is_video=excluded.is_video, file_size=excluded.file_size,
+                    is_pinned=excluded.is_pinned, source_app=excluded.source_app,
+                    created_at=excluded.created_at, updated_at=excluded.updated_at, qr_content=excluded.qr_content,
+                    is_sensitive=excluded.is_sensitive, expires_at=excluded.expires_at, ocr_text=excluded.ocr_text",
                 params![
                     entry.id,
                     entry.content_type,
@@ -1922,6 +1980,10 @@ impl DbState {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "db_content_search_tests.rs"]
+mod content_search_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2339,8 +2401,34 @@ mod tests {
         };
         db.insert_entry(&mut item).unwrap();
 
+        let repeated = db.append_to_clip("merge-1", "Line 1").unwrap();
+        assert_eq!(repeated.text_content.as_deref(), Some("Line 1"));
         let merged = db.append_to_clip("merge-1", "Line 2").unwrap();
         assert_eq!(merged.text_content, Some("Line 1\nLine 2".to_string()));
+
+        // A delayed re-copy of either constituent or the whole merged clip
+        // must leave the capture intact, including multiline blocks.
+        for repeated in ["Line 1", "Line 2", "Line 1\nLine 2", ""] {
+            let clip = db.append_to_clip("merge-1", repeated).unwrap();
+            assert_eq!(clip.text_content.as_deref(), Some("Line 1\nLine 2"));
+        }
+        let partial = db.append_to_clip("merge-1", "Line").unwrap();
+        assert_eq!(partial.text_content.as_deref(), Some("Line 1\nLine 2\nLine"));
+
+        // Saved edits must discard formats containing the original payload.
+        let mut rich = item.clone();
+        rich.id = "rich-edit".to_string();
+        rich.content_type = "rich_text".to_string();
+        rich.html_content = Some("<b>old text</b>".to_string());
+        rich.rtf_content = Some("old rtf".to_string());
+        db.insert_entry(&mut rich).unwrap();
+        db.update_entry_text("rich-edit", "edited \u{1f600}").unwrap();
+        let edited = db.get_entry_by_id("rich-edit").unwrap().unwrap();
+        assert_eq!(edited.file_size, "edited \u{1f600}".len() as u64);
+        assert_eq!(edited.content_type, "text");
+        assert!(edited.html_content.is_none());
+        assert!(edited.rtf_content.is_none());
+        assert_eq!(edited.text_content.as_deref(), Some("edited \u{1f600}"));
 
         let _ = fs::remove_dir_all(temp_dir);
     }

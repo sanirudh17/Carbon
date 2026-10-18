@@ -66,8 +66,8 @@ test('v37-C arg prompt: pre-declared surface only, paint-gated, watchdog-cancell
   );
   const uncloakAt = showBody.indexOf('set_window_cloaked(&win, false)');
   assert.ok(
-    showBody.includes('set_window_alpha(&win, 255)'),
-    'the ack-before-present reveal must lift the cloak-parked alpha mask'
+    showBody.includes('schedule_arg_prompt_reveal(app_present.clone(), spec_id)'),
+    'the ack-before-present path must use the shared guarded reveal'
   );
   // The only reveal allowed inside present is the ack-before-present race
   // branch: the ack landed while the present closure was still queued, so its
@@ -163,12 +163,13 @@ test('v37-C arg prompt: pre-declared surface only, paint-gated, watchdog-cancell
   // Comments are stripped first so prose explaining the fix cannot satisfy or
   // break the assertion. Neither window needs rAF for anything else, so its
   // absence in code is the guard.
-  assert.doesNotMatch(
-    stripComments(tsx),
-    /requestAnimationFrame/,
-    'paint ack must not depend on requestAnimationFrame (cloaked windows produce no frames)'
-  );
-  assert.ok(tsx.includes('useLayoutEffect'), 'ack should fire on DOM commit, before paint');
+  const paintGate = fs.readFileSync(path.join(ROOT_DIR, 'src', 'lib', 'promptPaint.ts'), 'utf8');
+  assert.ok(paintGate.includes('setTimeout(finish, 160)'), 'throttled frames need a bounded fallback');
+  assert.ok(paintGate.includes('settingsReady'), 'cold prompt waits for its theme');
+  assert.ok(tsx.includes('schedulePromptPaint'), 'DOM commit schedules a later paint ack');
+  assert.ok(tsx.includes('useLayoutEffect'), 'paint scheduling starts after DOM commit');
+  assert.doesNotMatch(stripComments(tsx), /getCurrentWindow\(\)\.show\(/, 'only backend owns native presentation');
+
   // Focus ownership: the backend present path (main thread) and the paint
   // ack own the focus transition. A cross-process setFocus() from the
   // frontend raced those and bounced activation when the prompt popped —

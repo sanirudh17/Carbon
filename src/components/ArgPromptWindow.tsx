@@ -1,3 +1,4 @@
+import { schedulePromptPaint } from '../lib/promptPaint';
 import React, { useEffect, useLayoutEffect, useState, useRef, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -41,7 +42,6 @@ export const ArgPromptWindow: React.FC = () => {
     currentIdRef.current = s.id ?? null;
     setSpec(s);
     setValue(s.resolvedDefault ?? s.defaultValue ?? '');
-    getCurrentWindow().show().catch((e) => logClient(`show failed: ${e}`));
     // No setFocus() here: the backend present path (and the paint ack) own
     // the focus transition on the main thread. A second, cross-process focus
     // request from this listener raced those and bounced activation when the
@@ -71,16 +71,8 @@ export const ArgPromptWindow: React.FC = () => {
     } catch {}
   }, [loadSpec]);
 
-  // Paint gate: the backend cloaks the window until this ack, so the prompt
-  // is never revealed unpainted.
-  //
-  // This MUST NOT be requestAnimationFrame-based. The window is cloaked
-  // (DWM_CLOAK) while it waits for the ack, and a cloaked window produces no
-  // compositor frames — so rAF never fires, the ack never arrives, and the
-  // backend watchdog cancels every single prompt. useLayoutEffect runs after
-  // React commits the DOM but before the browser paints, which is exactly the
-  // guarantee the gate needs: the full content is in the DOM when the cloak is
-  // lifted, and it does not depend on frames being produced while cloaked.
+  // Native presentation belongs to the backend. Wait for settings and real
+  // browser frames before its cold-surface reveal; cancel obsolete prompt acks.
   const specId = spec?.id;
   useLayoutEffect(() => {
     if (specId === undefined || specId === null) return;
@@ -91,7 +83,11 @@ export const ArgPromptWindow: React.FC = () => {
     // — so argprompt stayed permanently invisible and presented as an empty
     // slab that swallowed clicks. Drop it now that the prompt DOM is committed.
     document.documentElement.classList.remove('wm-hidden');
-    invoke('argprompt_painted', { id: specId }).catch(() => {});
+    return schedulePromptPaint(() => {
+      if (currentIdRef.current === specId) {
+        invoke('argprompt_painted', { id: specId }).catch(() => {});
+      }
+    });
   }, [specId]);
 
   const handleSubmit = useCallback(
