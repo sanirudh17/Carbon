@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Carbon",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "identifier": "com.carbon.clipboard",
   "build": {
     "beforeDevCommand": "npm run dev",

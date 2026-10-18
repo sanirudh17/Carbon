@@ -2,6 +2,24 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
+## [0.1.19] - 2026-10-18
+
+### Fixed
+
+- Editing a clip before pasting now uses the updated text and clears stale formatted clipboard data.
+- Re-copying an existing clip no longer appends a duplicate copy through ClipMerge. Distinct successive captures still merge.
+- First-open rendering is held until settings and content are painted, reducing empty acrylic and white flashes in the quick overlay, main window, and snippet argument prompt.
+- Native rounded corners clip the acrylic backdrop together with the window content, removing translucent corner protrusions and the stray native title strip. Custom window shadows are removed; original glass settings are preserved.
+- Image previews wait for decoded pixels before becoming visible. Rapid navigation cannot display stale images, loading alt text, or a broken-image icon; fallback loading only runs when needed.
+- Legacy title refresh and backup restore preserve clipboard entries and collection membership.
+
+### Added and improved
+
+- Indexed content search across non-image clips, including plain text, code, Markdown, and formatted text.
+- Search match highlighting in previews, with automatic scrolling to the first match.
+- Faster typing and clearing searches, bounded result pages, and a Load more control for large histories.
+- Global content search excludes clips in all collections, including unlocked collections. Scoped collection search keeps its existing unlock protection.
+
 ## [0.1.18] — 2026-10-06
 
 ### Fixed

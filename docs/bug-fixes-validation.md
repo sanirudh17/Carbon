@@ -8,13 +8,13 @@ The final corner correction removes the GDI window region and uses `DWMWCP_ROUND
 
 Validation on 2026-10-18:
 
-- 170 JavaScript checks passed; 55 Rust tests passed.
+- 171 JavaScript checks passed; 55 Rust tests passed.
 - Production installer built with updater-artifact generation disabled for this local build.
 - Release runtime checks used synthetic fixtures in a disposable application profile. A copy of the production executable had only its equal-length application identifier changed (8 bytes); the shipped executable and installer were not modified.
 - Actual Windows clipboard paste returned edited text. Repeated capture and repeated old pinned-key capture remained single; distinct captures still merged.
 - With 2,500 synthetic clips, search highlights, deep-match scrolling, 200/400-result pagination, collection exclusions and membership preservation passed. Measured typing-to-paint was below 7 ms; clearing search restored cached history in about 85 ms on this machine. Production IPC call-count instrumentation was unavailable; debounce behavior is covered by interaction tests.
-- The final native-corner correction passed automated checks and compilation. A fresh visual confirmation was unavailable because the current desktop capture returned black. Earlier custom-region screenshot checks did not establish correct acrylic clipping and are superseded by this correction.
+- The final native-corner correction passed automated checks and compilation. The user subsequently confirmed that the native-corner installer worked correctly. Earlier custom-region screenshot checks did not establish correct acrylic clipping and are superseded by this correction.
 - The snippet argument prompt paint handshake is tested; a physical-keyboard first-open check remains unverified because the expansion hook intentionally rejects injected keystrokes.
 - Existing already-duplicated clipboard history is not rewritten.
 
-No installation, publishing, or merge into main was performed.
+Release version: v0.1.19. Image-preview regression coverage verifies decode-before-display, stale selection suppression, fallback loading, and permanent failure without broken-image UI.
