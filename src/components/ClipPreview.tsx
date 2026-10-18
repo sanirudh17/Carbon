@@ -1,3 +1,4 @@
+import { ImagePreview } from './ImagePreview';
 import { highlightPreview } from '../lib/searchHighlights';
 import React, { useMemo, useState, useEffect, useRef, memo } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
@@ -6,48 +7,6 @@ import { getTypeColor, LockIcon, EyeIcon, EyeOffIcon } from './Icons';
 import {
   prepareRichPreview,
 } from '../lib/richText';
-
-const ImagePreview: React.FC<{ item: ClipItem }> = ({ item }) => {
-  const [src, setSrc] = useState<string>(() => (item.image_path ? convertFileSrc(item.image_path) : ''));
-
-  useEffect(() => {
-    let active = true;
-    if (item.image_path) {
-      setSrc(convertFileSrc(item.image_path));
-      invoke<string>('get_image_data_url', { filePath: item.image_path })
-        .then((url) => {
-          if (active && url) setSrc(url);
-        })
-        .catch(() => {});
-    }
-    return () => {
-      active = false;
-    };
-  }, [item.image_path, item.id]);
-
-  return (
-    <div className="preview-media" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div className="preview-image-simple">
-        {src ? (
-          <img
-            src={src}
-            alt="Clipboard image preview"
-            draggable={false}
-            onError={() => {
-              if (item.image_path) {
-                invoke<string>('get_image_data_url', { filePath: item.image_path })
-                  .then((url) => url && setSrc(url))
-                  .catch(() => {});
-              }
-            }}
-          />
-        ) : (
-          <div className="preview-media-placeholder">Loading image preview...</div>
-        )}
-      </div>
-    </div>
-  );
-};
 
 /* ═════════════════════════════════════════════════════════════════════
  * Shared read-only preview rendering (used by the Quick Overlay pane and
