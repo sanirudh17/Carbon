@@ -8,7 +8,7 @@
   --control-selected: rgb(255 255 255 / 13%);
   --control-blur: blur(16px);
   --utility-bg: rgb(255 255 255 / 4%);
-  --editor-field: rgb(0 0 0 / 8%);
+  --editor-field: rgb(255 255 255 / 2.5%);
   --focus-color: var(--accent);
   --accent-fg: #000000;
   --accent-fg-hover: #000000;
@@ -46,7 +46,7 @@ body.win-library { background: var(--glass-base); }
 :root[data-theme] :is(.searchbar, .topbar, .preview-head, .preview-foot, .overlay-bar, .settings-head) {
   background: transparent;
 }
-:root[data-theme] :is(.preview-edit, .sn-textarea, .sn-editor-textarea, .sn-editor-input) {
+:root[data-theme] :is(.preview-edit, .sn-textarea, .sn-editor-textarea) {
   background: transparent;
   color: var(--text);
 }
@@ -73,7 +73,9 @@ body.win-library { background: var(--glass-base); }
   gap: 6px;
   min-height: 28px;
   padding-block: 0;
-  line-height: 16px;
+  line-height: 1;
+  font-weight: 500;
+  text-align: center;
   font-family: var(--font);
   box-sizing: border-box;
 }
@@ -107,7 +109,7 @@ body.win-library { background: var(--glass-base); }
 }
 
 :root[data-theme] :is(.modal-input, .sn-tag-edit, .sn-editor-wrap) {
-  background: var(--control-bg);
+  background: var(--editor-field);
   border-color: var(--control-edge);
   color: var(--text);
 }
@@ -139,3 +141,53 @@ input, textarea { caret-color: var(--accent); }
 
 /* The editing well is intentionally distinct from the list and pane wash. */
 :root[data-theme] .preview-edit { background: var(--editor-field); }
+
+/* Quiet content wells; only the text box receives a small lift. The snippet
+   textarea stays invisible over its syntax layer, including while focused. */
+:root[data-theme] .preview-edit { font-weight: 400; }
+:root[data-theme] .sn-editor-input { color: transparent; }
+:root[data-theme] :is(.sn-editor-input, .sn-editor-backdrop) { font-weight: 400; }
+:root[data-theme] :is(.btn, .hotkey-chip, .seg-btn) { font-weight: 500; }
+:root[data-theme] .settings .set-label { font-weight: 500; }
+
+/* Accent glass: a restrained tint for secondary actions and a fine specular
+   edge on filled actions. The opaque accent center preserves label contrast. */
+:root[data-theme]:not([data-material="solid"]):not([data-reduced-transparency="true"]) .btn.subtle:not(.accent):not(.primary) {
+  background: color-mix(in srgb, var(--control-bg) 88%, var(--accent-soft));
+  border-color: color-mix(in srgb, var(--control-edge) 75%, var(--accent-ring));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 5%);
+}
+:root[data-theme] :is(.btn.accent, .btn.primary, .update-banner-btn.primary) {
+  background-color: var(--accent);
+  background-image: linear-gradient(rgb(255 255 255 / 28%), rgb(255 255 255 / 28%)),
+    linear-gradient(rgb(0 0 0 / 10%), rgb(0 0 0 / 10%));
+  background-position: top, bottom;
+  background-size: 100% 1px;
+  background-repeat: no-repeat;
+  border: 1px solid color-mix(in srgb, var(--accent) 72%, white);
+  color: var(--accent-fg);
+  backdrop-filter: var(--control-blur);
+  -webkit-backdrop-filter: var(--control-blur);
+}
+:root[data-theme] :is(.btn.accent, .btn.primary, .update-banner-btn.primary):hover:not(:disabled) {
+  background-color: var(--accent-hover);
+  color: var(--accent-fg-hover);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-theme] .btn.subtle:not(.accent):not(.primary) {
+    background: var(--elev);
+    border-color: var(--line);
+    box-shadow: none;
+  }
+}
+@media (forced-colors: active) {
+  :root[data-theme] :is(.btn, .hotkey-chip, .seg-btn, .c-dropdown-trigger) {
+    background: ButtonFace;
+    color: ButtonText;
+    border: 1px solid ButtonText;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}

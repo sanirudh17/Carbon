@@ -78,10 +78,10 @@
   /* ── Raycast / Tinycast Frosted-Glass Material Tokens (Dark) ── */
   --glass-base: rgba(0, 0, 0, 0.72);   /* library window base */
   --glass-panel-bg: rgba(18, 18, 22, 0.70); /* overlay panel */
-  --glass-sidebar: rgba(255, 255, 255, 0.035);  /* lifted navigation */
-  --glass-list: transparent;     /* library list col */
-  --glass-overlay-scrim: transparent; /* overlay list-column content scrim */
-  --glass-preview: rgba(255, 255, 255, 0.055);  /* editing surface */
+  --glass-sidebar: rgba(255, 255, 255, 0.025);  /* lifted navigation */
+  --glass-list: rgba(255, 255, 255, 0.025); /* shared pane wash */
+  --glass-overlay-scrim: rgba(255, 255, 255, 0.025); /* shared pane wash */
+  --glass-preview: rgba(255, 255, 255, 0.025);  /* editing surface */
   --glass-elev: rgba(20, 20, 23, 0.30);
   --glass-elev-hover: rgba(255, 255, 255, 0.05);
   --glass-border: rgba(255, 255, 255, 0.08);
@@ -147,8 +147,8 @@ html.win-library #root {
   --line-soft: #E2E8F0;
   --well-bg: #F1F5F9;
   --well-line: #CBD5E1;
-  --text: #171717;
-  --text-2: #414141;
+  --text: #303034;
+  --text-2: #4C4C52;
   --text-3: #595959;
   --text-secondary: var(--text-2);
   --accent: color-mix(in srgb, var(--accent-base, #5B7CFA) 90%, black);

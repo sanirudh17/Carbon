@@ -34,3 +34,9 @@ After approval: build the latest source once, verify packaged OCR assets, test c
 - Revision history for edited clips, with restore after restarting the app.
 - Opt-in OCR search within an Images view, preserving the existing exclusion of images and collection clips from global text search.
 - Per-app auto-filing rules and collection-specific retention policies.
+
+## Surface and button refinement
+
+Dark navigation, list, and preview panes share a 2.5% white wash; content wells use the same small lift instead of a dark slab. Snippet fields share the well token. The snippet input remains transparent over its syntax backdrop, preventing duplicate glyph painting. Preview text uses regular weight, and light mode uses softer neutral text colors. Button labels use medium weight and centered line boxes. Secondary actions carry a restrained accent tint; filled actions retain an opaque accent center for contrast with thin glass highlights at their edges. Solid, reduced-transparency, and forced-color modes retain their fallbacks.
+
+Browser review covered main, Quick Overlay, snippet editor, and Settings in both themes. All eight combinations rendered; snippet input transparency and button centering/weight assertions passed (maximum text-box center difference 0.25px). TypeScript validation and 172 existing frontend checks passed. This remains browser simulation; no native build was performed for this refinement.
