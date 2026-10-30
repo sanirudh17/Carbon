@@ -3,7 +3,7 @@
    controls have a quiet surface, and menus retain contrast. */
 :root {
   --sidebar-divider: rgb(255 255 255 / 5%);
-  --pane-divider: rgb(255 255 255 / 13%);
+  --pane-divider: var(--sidebar-divider);
   --control-bg: rgb(255 255 255 / 7%);
   --control-hover: rgb(255 255 255 / 11%);
   --control-edge: rgb(255 255 255 / 13%);
@@ -251,4 +251,13 @@ input, textarea { caret-color: var(--accent); }
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
+}
+
+/* Dark picker uses one continuous pane wash, just like the main list and
+   its search header. Moving the wash to the parent avoids stacked tints. */
+:root[data-theme="dark"]:not([data-material="solid"]):not([data-reduced-transparency="true"]) .overlay-content {
+  background: var(--glass-list);
+}
+:root[data-theme="dark"]:not([data-material="solid"]):not([data-reduced-transparency="true"]) :is(.overlay-list, .overlay-preview) {
+  background: transparent;
 }

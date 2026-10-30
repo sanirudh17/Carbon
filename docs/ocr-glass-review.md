@@ -48,3 +48,7 @@ The approved dark theme is unchanged. Light glass uses a 52% white root tint wit
 ### Inner divider balance
 
 The sidebar edge is quieter (8% neutral in light, 5% white in dark). Main and Quick Overlay preview dividers now paint a single pixel inside the existing pane (19% neutral in light, 13% white in dark), without changing layout widths or introducing a window perimeter border. The old tests that required invisible inner dividers now reflect the requested visible divider while retaining reveal/hide assertions. Browser checks confirmed unchanged 480px main and 450px overlay preview widths, non-interactive absolute dividers, and zero body border in both themes. All 172 frontend checks passed. Native presentation, timing, masking, and material code were untouched; no packaged build was performed.
+
+### Dark picker continuity
+
+The dark Quick Overlay now applies its pane wash once to the content parent, including the search header and footer, with transparent list and preview children. This removes the separate darker header band without adding another tint layer. Dark preview dividers match the sidebar at 5% white. Light divider strength remains 19% neutral. All 172 frontend checks pass; four browser theme/window checks confirm unchanged pane geometry and inner divider colors. This CSS-only refinement does not change native presentation or flash-prevention behavior.
