@@ -286,3 +286,32 @@ input, textarea { caret-color: var(--accent); }
 :root[data-theme="dark"]:not([data-material="solid"]):not([data-reduced-transparency="true"]) :is(.overlay-list, .overlay-preview) {
   background: transparent;
 }
+
+/* Center the visible glyph area rather than Segoe's extra line leading.
+   Preview actions and shared labels retain flex centering as a fallback. */
+:root[data-theme] .btn > .button-label {
+  display: block;
+  line-height: 1;
+  flex: 0 1 auto;
+}
+@supports (text-box-trim: trim-both) {
+  :root[data-theme] .btn > .button-label {
+    text-box-trim: trim-both;
+    text-box-edge: cap alphabetic;
+  }
+}
+
+/* Collection dialogs keep the live desktop material visible. Full-window
+   backdrop filtering samples the dark app twice; blur belongs to the sheet. */
+:root[data-theme] .collection-modal-backdrop {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+:root[data-theme="dark"] .collection-modal-backdrop { background: rgb(0 0 0 / 10%); }
+:root[data-theme="light"] .collection-modal-backdrop { background: rgb(255 255 255 / 10%); }
+:root[data-theme="dark"] .collection-modal-backdrop .modal-card { background: rgb(18 18 18 / 72%); }
+:root[data-theme="light"] .collection-modal-backdrop .modal-card { background: rgb(255 255 255 / 70%); }
+:root[data-theme] .collection-modal-backdrop .modal-card {
+  backdrop-filter: blur(24px) saturate(110%);
+  -webkit-backdrop-filter: blur(24px) saturate(110%);
+}

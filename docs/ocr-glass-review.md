@@ -16,18 +16,25 @@ Reference implementation: Glint 0.2.1 (`material.rs`, `styles/material.css`, `st
 
 The first preview exposed a real composition incompatibility: Carbon retained `WS_EX_LAYERED` while visible, whereas Glint's glass windows are non-layered. A successful `DWMWA_SYSTEMBACKDROP_TYPE` assignment did not establish visible glass. The revised source retains cold/stale alpha-zero preparation but releases that style behind a verified cloak before revealing Desktop Acrylic. Solid keeps its alpha animation. Border color is reasserted without recreating the frame on every open. The existing content/settings paint gates and native rounded corners remain.
 
-The revised CSS uses Glint's theme-led glass: a 72% black / 60% white root tint, subtle pane washes, and a separate editing well. Overlay windows inherit the same theme token rather than overriding light mode with a dark tint. The theme remains dominant; backdrop color is a soft detail rather than the window's main color. Settings and secondary actions share centered control geometry; menus share a denser frosted surface. Filled-button labels choose a contrasting black/white foreground without changing the selected accent hue. Glass/Solid changes cover controllers before removing a backdrop and activate native material before publishing glass state.
+The revised CSS uses Glint's theme-led glass: a 72% black / 52% white root tint, subtle pane washes, and a separate editing well. Overlay windows inherit the same theme token rather than overriding light mode with a dark tint. The theme remains dominant; backdrop color is a soft detail rather than the window's main color. Settings and secondary actions share centered control geometry; menus share a denser frosted surface. Primary actions use quiet accent surfaces and related colored labels in both themes, without painted top highlight strips. Glass/Solid changes cover controllers before removing a backdrop and activate native material before publishing glass state.
 
-## Validation and approval boundary
+## Native validation after build approval
 
-- 172 JavaScript checks pass, including accent contrast and revised reveal-policy contracts.
-- TypeScript checking and Rust source parsing pass.
-- 56 Rust tests and prior installer/runtime checks passed before the last native composition correction. That final correction has deliberately not been compiled or packaged following the user's request to wait for approval.
-- Browser review uses real components and synthetic fixtures. Its backdrop is explicitly a browser simulation; it cannot prove Windows Desktop Acrylic or absence of native startup flashes.
-- The final native material correction still requires an approved build and native screenshot/cold-start validation. Earlier preview installers are obsolete for that correction.
-- Impeccable's detector reported seven pre-existing warnings: a semantic Markdown quote rule and existing layout/progress transitions. Those unrelated behaviors were preserved. Taste's generic marketing/title, dense desktop metadata, fixture content and permitted dialog-shadow heuristics were not treated as reasons to redesign this native utility.
+The user approved native implementation and testing on 2026-10-30. Main remains unmerged; no release or public artifacts were published.
 
-After approval: build the latest source once, verify packaged OCR assets, test cold/warm opens and mode switching, and compare actual native pixels over a controlled backdrop before proposing a merge.
+- 175 frontend checks, TypeScript/production frontend compilation, and 56 Rust tests passed.
+- Built NSIS preview `0.1.20-preview.4`. SHA-256: `616f77f73274d64d68cdba9e16c8f0f54768670ccea6cb4da49a312a7be10482` (39,493,518 bytes).
+- Extracted the actual installer and verified all seven pinned OCR runtime/model/dictionary/license files. The running preview loaded ONNX Runtime from that extracted `ocr` directory, not a development cache. Two synthetic screenshots took 760/731ms; cached reads took 4/5ms.
+- Four backend show/hide cycles per window and a theme roundtrip passed. Native screenshots then covered main, Quick Overlay, and collection dialogs in dark/light. Windows reported Desktop Acrylic=3, rounded corners=2, no cloak while visible, no layered flag while visible, and standard native frame rendering disabled.
+- Image-action labels measured centered to less than 0.5px in both themes. Collection dialogs use a 10% scrim, no full-window CSS blur, and a frosted dialog sheet; the underlying app and desktop remain visible.
+- Diagnostic logs contained no FAILED entries during this run. Existing content-paint gates, first-reveal hold, parking, and generation guards remain. These checks and native screenshots do not establish that no display driver can ever flash a frame.
+- Tests used the separate `com.carbon.ocr-glass-preview` profile and synthetic fixtures. The production history and installed executable were not replaced. The production startup entry was restored after testing.
+
+### Why the first packaged preview was opaque
+
+Carbon's old frameless paint hook swallowed `WM_NCACTIVATE`. The revised hook forwards activation with `lParam=-1` to preserve activation processing while suppressing classic non-client repaint. Standard DWM caption rendering is disabled independently with `DWMWA_NCRENDERING_POLICY`; client acrylic and native rounded corners remain enabled. Native and WebView background colors are now prepared together, following Glint's complete surface update. The real-window result shows blurred colors from content behind Carbon instead of the identical `(29,29,29)` pixels seen across the old preview. No simulated backdrop is used in the packaged app.
+
+Reference: [Microsoft WM_NCACTIVATE contract](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-ncactivate). The earlier browser captures were useful for typography and pane tones, but were not proof of native glass.
 
 ## Future ideas, not implemented
 

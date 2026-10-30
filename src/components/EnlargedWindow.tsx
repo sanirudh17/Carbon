@@ -2831,18 +2831,18 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   </div>
                   <div style={{ display: 'flex', gap: 6, width: '100%', justifyContent: 'center', flexWrap: 'wrap' }}>
                     <button className="btn subtle" onClick={() => setZoom100(!zoom100)}>
-                      {zoom100 ? 'Fit to pane' : '100% Zoom'}
+                      <span className="button-label">{zoom100 ? 'Fit to pane' : '100% Zoom'}</span>
                     </button>
                     <button className="btn subtle" onClick={() => handleCopyOnly(selectedItem)}>
-                      Copy Image
+                      <span className="button-label">Copy Image</span>
                     </button>
                     {selectedItem.qr_content && (
                       <button className="btn subtle" onClick={() => handleCopyDecodedQr(selectedItem)}>
-                        <CopyIcon /> {getQrCopyLabel(selectedItem.qr_content)}
+                        <CopyIcon /><span className="button-label">{getQrCopyLabel(selectedItem.qr_content)}</span>
                       </button>
                     )}
                     <button className="btn subtle" onClick={() => handleExtractOrCopyOcr(selectedItem)}>
-                      <OcrIcon /> {selectedItem.ocr_text ? 'Copy Extracted Text' : 'Extract Text (OCR)'}
+                      <OcrIcon /><span className="button-label">{selectedItem.ocr_text ? 'Copy Extracted Text' : 'Extract Text (OCR)'}</span>
                     </button>
                   </div>
                 </div>
@@ -2968,7 +2968,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
       {/* Create Collection Modal */}
       {createColModalOpen && (
-        <div className="modal-backdrop" onClick={() => setCreateColModalOpen(false)}>
+        <div className="modal-backdrop collection-modal-backdrop" onClick={() => setCreateColModalOpen(false)}>
           <div className="modal-card create-col-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <span className="modal-head-icon" style={{ color: collectionColorFor(newColName) }}>
@@ -3012,7 +3012,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
       {/* Change Collection Color Modal */}
       {changeColorModal && (
-        <div className="modal-backdrop" onClick={() => setChangeColorModal(null)}>
+        <div className="modal-backdrop collection-modal-backdrop" onClick={() => setChangeColorModal(null)}>
           <div className="modal-card change-color-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <span className="modal-head-icon" style={{ color: changeColorModal.color }}>
@@ -3073,7 +3073,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
       {/* Rename Collection Modal */}
       {renameColModal && (
-        <div className="modal-backdrop" onClick={() => setRenameColModal(null)}>
+        <div className="modal-backdrop collection-modal-backdrop" onClick={() => setRenameColModal(null)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <span className="modal-head-icon"><EditIcon /></span>
@@ -3106,7 +3106,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
       {/* Verify Current Passcode (Step 1 for Change Passcode) */}
       {verifyChangePinModal && (
-        <div className="modal-backdrop" onClick={() => setVerifyChangePinModal(null)}>
+        <div className="modal-backdrop collection-modal-backdrop" onClick={() => setVerifyChangePinModal(null)}>
           <div className="modal-card small-pin-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <span className="modal-head-icon">
@@ -3168,7 +3168,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
       {/* Set / Change Passcode Modal (Step 2) */}
       {pinModal && (
-        <div className="modal-backdrop" onClick={() => setPinModal(null)}>
+        <div className="modal-backdrop collection-modal-backdrop" onClick={() => setPinModal(null)}>
           <div className="modal-card pin-setup-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <span className="modal-head-icon">
@@ -3257,7 +3257,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
       {/* Save Recovery Code Modal */}
       {recoveryCodeModal && (
-        <div className="modal-backdrop">
+        <div className="modal-backdrop collection-modal-backdrop">
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <span className="modal-head-icon">
@@ -3316,7 +3316,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
       {/* Reset Collection Passcode Modal */}
       {resetPasscodeModal && (
-        <div className="modal-backdrop" onClick={() => setResetPasscodeModal(null)}>
+        <div className="modal-backdrop collection-modal-backdrop" onClick={() => setResetPasscodeModal(null)}>
           <div className="modal-card pin-setup-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <span className="modal-head-icon">
@@ -3416,7 +3416,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
       {/* Delete Collection Confirmation Modal */}
       {deleteColConfirm && (
-        <div className="modal-backdrop" onClick={() => setDeleteColConfirm(null)}>
+        <div className="modal-backdrop collection-modal-backdrop" onClick={() => setDeleteColConfirm(null)}>
           <div className="modal-card delete-col-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <span className="modal-head-icon modal-head-danger"><DeleteIcon /></span>
@@ -3489,7 +3489,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
       {/* Remove Passcode Lock Confirmation Modal */}
       {removePinModal && (
-        <div className="modal-backdrop" onClick={() => setRemovePinModal(null)}>
+        <div className="modal-backdrop collection-modal-backdrop" onClick={() => setRemovePinModal(null)}>
           <div className="modal-card remove-pin-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <span className="modal-head-icon"><UnlockIcon /></span>
@@ -3550,7 +3550,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
       {/* Add to Collection Modal */}
       {addToColModalOpen && (
-        <div className="modal-backdrop" onClick={() => setAddToColModalOpen(false)}>
+        <div className="modal-backdrop collection-modal-backdrop" onClick={() => setAddToColModalOpen(false)}>
           <div className="modal-card add-to-col-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <span className="modal-head-icon"><FolderIcon /></span>

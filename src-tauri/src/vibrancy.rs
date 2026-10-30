@@ -125,11 +125,15 @@ unsafe extern "system" fn frameless_paint_proc(
     use windows::Win32::UI::WindowsAndMessaging::{WM_NCPAINT, WM_NCACTIVATE, WM_NCDESTROY};
     // When DWM's automatic frame is off, DefWindowProc can paint a classic
     // caption over our client area on activation, including a square corner.
-    // Only suppress that non-client paint; hit testing, resize and focus still
-    // run through Tauri's existing subclass chain.
+    // Suppress classic frame paint, but keep activation flowing through Tao
+    // and DWM. Swallowing WM_NCACTIVATE leaves Desktop Acrylic in its flat
+    // inactive appearance even when the WebView has keyboard focus.
     match message {
         WM_NCPAINT => LRESULT(0),
-        WM_NCACTIVATE => LRESULT(1),
+        // Documented WM_NCACTIVATE contract: lParam=-1 updates activation
+        // without repainting the non-client area (and exposing a caption).
+        WM_NCACTIVATE => DefSubclassProc(hwnd, message, wparam,
+            windows::Win32::Foundation::LPARAM(-1)),
         WM_NCDESTROY => {
             let _ = RemoveWindowSubclass(hwnd, Some(frameless_paint_proc), subclass_id);
             DefSubclassProc(hwnd, message, wparam, lparam)
@@ -174,10 +178,17 @@ pub fn set_round_corners(window: &WebviewWindow) {
 pub fn set_window_border_suppressed(window: &WebviewWindow) {
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR};
+        use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_NCRENDERING_POLICY, DWMNCRP_DISABLED};
         if let Ok(w_hwnd) = window.hwnd() {
             unsafe {
                 let hwnd = windows::Win32::Foundation::HWND(w_hwnd.0 as _);
+                // Disable only DWM's standard caption/frame rendering. Keep
+                // its client backdrop and rounded compositor corners active.
+                // Activation must reach DWM for acrylic to show live content;
+                // hiding it by swallowing WM_NCACTIVATE leaves a flat fill.
+                let policy = DWMNCRP_DISABLED.0;
+                let _ = DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY,
+                    (&policy as *const i32).cast(), std::mem::size_of::<i32>() as u32);
                 // DWMWA_COLOR_NONE = 0xFFFFFFFE
                 let no_border = 0xFFFFFFFEu32;
                 let _ = DwmSetWindowAttribute(
@@ -431,6 +442,16 @@ pub fn set_window_default_background(
             WindowMaterial::Solid => COREWEBVIEW2_COLOR { A: 255, R: 14, G: 14, B: 16 },
             _ => COREWEBVIEW2_COLOR { A: 0, R: 0, G: 0, B: 0 },
         };
+        // Match Glint's complete surface update: the HWND backing surface
+        // and WebView controller must agree. Controller-only changes can
+        // leave an opaque native brush behind the translucent document.
+        // Callers prepare this surface while cloaked/covered before reveal.
+        if window.set_background_color(Some(tauri::window::Color(
+            color.R, color.G, color.B, color.A,
+        ))).is_err() {
+            crate::paste::log_diag("[VIBRANCY] native/webview background update failed");
+            return false;
+        }
         let applied_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let done_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let applied_flag_inner = applied_flag.clone();
