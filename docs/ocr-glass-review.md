@@ -1,6 +1,6 @@
 # OCR and glass refinement review
 
-Branch: `ocr-glass-polish`. Main remains at `79d1e2a`. No merge or release is authorized for this pass.
+Developed in the isolated `ocr-glass-polish` worktree. The user approved local integration into `main` after the native caption regression fix. No public release or publication is authorized for this pass.
 
 ## OCR
 
@@ -20,10 +20,10 @@ The revised CSS uses Glint's theme-led glass: a 72% black / 52% white root tint,
 
 ## Native validation after build approval
 
-The user approved native implementation and testing on 2026-10-30. Main remains unmerged; no release or public artifacts were published.
+The user approved native implementation and testing on 2026-10-30. The user subsequently approved local main-branch integration after the caption regression fix; no release or public artifacts were published.
 
-- 175 frontend checks, TypeScript/production frontend compilation, and 56 Rust tests passed.
-- Built NSIS preview `0.1.20-preview.4`. SHA-256: `616f77f73274d64d68cdba9e16c8f0f54768670ccea6cb4da49a312a7be10482` (39,493,518 bytes).
+- 176 frontend checks, TypeScript/production frontend compilation, and 57 Rust tests passed.
+- Built NSIS preview `0.1.20-preview.5`. SHA-256: `8ec744150b25058b85c5699b944ea365ce0ae6699f15ce7dc3eb29c6b468fed4` (39,536,740 bytes).
 - Extracted the actual installer and verified all seven pinned OCR runtime/model/dictionary/license files. The running preview loaded ONNX Runtime from that extracted `ocr` directory, not a development cache. Two synthetic screenshots took 760/731ms; cached reads took 4/5ms.
 - Four backend show/hide cycles per window and a theme roundtrip passed. Native screenshots then covered main, Quick Overlay, and collection dialogs in dark/light. Windows reported Desktop Acrylic=3, rounded corners=2, no cloak while visible, no layered flag while visible, and standard native frame rendering disabled.
 - Image-action labels measured centered to less than 0.5px in both themes. Collection dialogs use a 10% scrim, no full-window CSS blur, and a frosted dialog sheet; the underlying app and desktop remain visible.
@@ -39,8 +39,8 @@ Reference: [Microsoft WM_NCACTIVATE contract](https://learn.microsoft.com/en-us/
 ## Future ideas, not implemented
 
 - Revision history for edited clips, with restore after restarting the app.
-- Opt-in OCR search within an Images view, preserving the existing exclusion of images and collection clips from global text search.
-- Per-app auto-filing rules and collection-specific retention policies.
+- A recoverable trash view for accidental deletions, with a configurable expiry.
+- Optional encryption for stored collections and exported backups.
 
 ## Surface and button refinement
 
@@ -67,3 +67,11 @@ Dark Settings now matches the light-mode heading/hint weight hierarchy (600/400)
 ### Shared button treatment
 
 The approved dark Settings accent treatment is now the shared primary/accent button style across editors, prompts, collections, main/Quick Overlay actions, and update banners. Light actions retain the approved pale accent fill and colored ink. Removed the background-image highlight strips from both themes and the secondary button inset highlight. Browser assertions verified matching computed styles in Settings, snippet editor, and argument prompt in both themes, with no image strip, no inset shadow, and no black action labels. All 172 frontend checks pass. Window presentation and flash-prevention code remain unchanged; no native build or merge was performed.
+
+### Caption regression and Settings cleanup
+
+The intermittent screenshot/second-open title bar came from the native caption style remaining on the HWND despite the frameless configuration. The native guard now removes only `WS_CAPTION` at creation and filters `WM_STYLECHANGING` so later framework style regeneration cannot restore it. Resizing and min/max flags are preserved; DWM activation, client acrylic, native rounded corners, and existing first-paint/cloak gates remain.
+
+The packaged preview passed eight forced caption-style restoration, activation/deactivation, and `WM_PRINT` screenshot-repaint cycles on an actually visible main window. Caption bits stayed absent. Resizing and maximize/restore passed. Both themes and both windows retained Desktop Acrylic=3, rounded corners=2, no layered flag while visible, and no standard native frame. The Settings section describing the OCR model is removed; a native DOM check confirms Shortcuts is first and the model is absent. Engine and bundling details remain in README.
+
+References: [Windows caption and sizing styles](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-styles), [STYLESTRUCT changes](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-stylestruct).

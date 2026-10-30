@@ -108,6 +108,14 @@ fn system_acrylic(window: &WebviewWindow, enabled: bool) -> bool {
     enabled
 }
 
+/// Remove only the native title bar; sizing, system-menu and min/max flags
+/// remain intact so frameless main-window resizing and snapping still work.
+#[cfg(target_os = "windows")]
+fn captionless_style(style: u32) -> u32 {
+    use windows::Win32::UI::WindowsAndMessaging::WS_CAPTION;
+    style & !WS_CAPTION.0
+}
+
 /// Keep the complete acrylic surface inside DWM's native rounded corners.
 /// A GDI window region clips client pixels but not the acrylic compositor,
 /// leaving translucent square protrusions outside the CSS corner arcs.
@@ -122,13 +130,21 @@ unsafe extern "system" fn frameless_paint_proc(
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass};
-    use windows::Win32::UI::WindowsAndMessaging::{WM_NCPAINT, WM_NCACTIVATE, WM_NCDESTROY};
+    use windows::Win32::UI::WindowsAndMessaging::{WM_NCPAINT, WM_NCACTIVATE, WM_NCDESTROY, WM_STYLECHANGING, GWL_STYLE, STYLESTRUCT};
     // When DWM's automatic frame is off, DefWindowProc can paint a classic
     // caption over our client area on activation, including a square corner.
     // Suppress classic frame paint, but keep activation flowing through Tao
     // and DWM. Swallowing WM_NCACTIVATE leaves Desktop Acrylic in its flat
     // inactive appearance even when the WebView has keyboard focus.
     match message {
+        // Tao may regenerate its full overlapped style during show/restore.
+        // Prevent captures/activation from ever drawing a native caption,
+        // rather than merely hiding its last paint with DWM attributes.
+        WM_STYLECHANGING if wparam.0 as i32 == GWL_STYLE.0 && lparam.0 != 0 => {
+            let styles = &mut *(lparam.0 as *mut STYLESTRUCT);
+            styles.styleNew = captionless_style(styles.styleNew);
+            DefSubclassProc(hwnd, message, wparam, lparam)
+        }
         WM_NCPAINT => LRESULT(0),
         // Documented WM_NCACTIVATE contract: lParam=-1 updates activation
         // without repainting the non-client area (and exposing a caption).
@@ -156,6 +172,20 @@ pub fn set_round_corners(window: &WebviewWindow) {
                     let installed = SetWindowSubclass(hwnd, Some(frameless_paint_proc), 0x43415242, 0);
                     if !installed.as_bool() {
                         crate::paste::log_diag("[FRAME] failed to install frameless paint guard");
+                    }
+                    // Install the guard before changing style. This runs at
+                    // window creation while hidden/cloaked, before any reveal.
+                    use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW,
+                        SetWindowLongW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
+                        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE,
+                        SWP_NOOWNERZORDER};
+                    let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+                    let frameless = captionless_style(style);
+                    if installed.as_bool() && style != frameless {
+                        SetWindowLongW(hwnd, GWL_STYLE, frameless as i32);
+                        let _ = SetWindowPos(hwnd, windows::Win32::Foundation::HWND::default(),
+                            0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE |
+                            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
                     }
                     // DWMWCP_ROUND = 2: DWM clips both the client and acrylic.
                     let preference = 2i32;
@@ -1035,4 +1065,20 @@ pub fn spawn_overlay_warmth_loop(app: &AppHandle) {
             }
         }
     });
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod frame_style_tests {
+    use super::captionless_style;
+    use windows::Win32::UI::WindowsAndMessaging::{WS_CAPTION, WS_THICKFRAME,
+        WS_SYSMENU, WS_MINIMIZEBOX, WS_MAXIMIZEBOX, WS_VISIBLE};
+
+    #[test]
+    fn caption_is_removed_without_changing_resize_or_window_controls() {
+        let preserved = WS_THICKFRAME.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 |
+            WS_MAXIMIZEBOX.0 | WS_VISIBLE.0;
+        assert_eq!(captionless_style(preserved | WS_CAPTION.0), preserved);
+        assert_eq!(captionless_style(preserved), preserved);
+        assert_eq!(captionless_style(WS_CAPTION.0), 0);
+    }
 }

@@ -61,7 +61,7 @@ Everything lives in a local SQLite database (`carbon_history.db`) with image fil
 
 **Image & Text Tools**
 
-- **OCR** ? extract text from image clips locally with bundled PP-OCRv6 Small and ONNX Runtime CPU. Models load on first use; full-window and tall images use overlapping native-resolution strips. No Python, GPU, system OCR installation, or first-use download is required.
+- **OCR** — extract text from image clips locally with bundled PP-OCRv6 Small and ONNX Runtime CPU. Models load on first use; full-window and tall images use overlapping native-resolution strips. No Python, GPU, system OCR installation, or first-use download is required.
 - **Transforms on paste** — choose per-paste or set default plain-text pasting and move-to-top behavior.
 
 **Smart Capture**
@@ -74,7 +74,7 @@ Everything lives in a local SQLite database (`carbon_history.db`) with image fil
 **Hotkeys, Theming & Glass Materials**
 
 - Two swappable global shortcuts with atomic `unregister_all`/`reapply` and strict rollback. `Ctrl+Alt` handled via `AltGraph` parity and a `WH_KEYBOARD_LL` hook so GPU software can't steal focus; conflicts show inline errors and toast pop-ups.
-- **Frosted-glass translucency** — Native OS blur-behind powered by `window-vibrancy` with layered semi-transparent glass panels, 1px borders, subtle highlight insets, anti-banding noise grain, floating glass pills, and selective in-app popover blurs.
+- **Frosted-glass translucency** — Native Desktop Acrylic on Windows 11, with a blur fallback on older Windows. Shared theme tints, quiet pane dividers, accent glass controls, and frosted dialog sheets keep the desktop visible without adding noise textures.
 - **Dark/light themes** with PNG badge at native resolution (1.2–1.3 MB dark/light), 6 accent swatches + custom picker, and 4 window materials (`Glass (Acrylic)`, `Mica`, `Blur`, `Solid`). All settings persist in `settings.json`.
 
 ### Window Translucency & Materials (Frosted Glass)
@@ -91,7 +91,7 @@ Carbon provides Raycast- and Tinycast-style OS compositor translucency for both 
 **Resilient Fallbacks & Accessibility:**
 - **Automatic fallback chain**: If a chosen material (e.g. Mica or Acrylic) is unsupported on the user's Windows build, Carbon automatically falls back (`Acrylic` → `Blur` → `Solid`) without crashing or panicking.
 - **Accessibility aware**: If *"Turn off transparency"* is enabled in Windows Settings or the system requests reduced transparency (`prefers-reduced-transparency: reduce`), Carbon automatically defaults to solid opaque panels.
-- **DWM rounded corners & gutters**: Uses `DwmSetWindowAttribute(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND)` alongside transparent CSS margin gutters to guarantee crisp rounded corners and shadows without black rectangular clipping artifacts.
+- **DWM rounded corners & gutters**: Uses native DWM rounded corners for both the client and compositor material. The native caption style is removed and guarded against restoration during window and screenshot activation; resizable windows retain their sizing frame.
 - **Zero latency**: Vibrancy is applied once during window creation and theme updates; hidden windows stay warm in memory so hotkey invocation remains instant.
 
 ## How It Works

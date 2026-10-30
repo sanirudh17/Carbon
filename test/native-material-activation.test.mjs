@@ -25,3 +25,10 @@ test('DWM caption suppression keeps client acrylic and native rounding independe
  assert.match(native,/DwmExtendFrameIntoClientArea/);
  assert.match(native,/let preference = 2i32/);
 });
+
+test('frameless guard removes caption style at creation and when Tao regenerates styles',()=>{
+ assert.match(native,/style & !WS_CAPTION\.0/);
+ assert.match(native,/WM_STYLECHANGING if wparam\.0 as i32 == GWL_STYLE\.0/);
+ assert.match(native,/styles\.styleNew = captionless_style\(styles\.styleNew\)/);
+ assert.match(native,/SetWindowLongW\(hwnd, GWL_STYLE, frameless as i32\)/);
+});
