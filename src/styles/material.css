@@ -174,7 +174,64 @@ input, textarea { caret-color: var(--accent); }
   color: var(--accent-fg-hover);
 }
 
+/* Light glass keeps a clear hierarchy without ink-black accents. */
+:root[data-theme="light"] {
+  --glass-base: rgb(255 255 255 / 52%);
+  --glass-sidebar: rgb(255 255 255 / 7%);
+  --glass-preview: rgb(255 255 255 / 10%);
+  --glass-hairline: rgb(30 35 45 / 16%);
+  --line-soft: rgb(30 35 45 / 16%);
+  --editor-field: rgb(255 255 255 / 14%);
+  --text-3: #62626a;
+}
+:root[data-theme="light"] .settings .set-label {
+  font-weight: 600;
+  color: var(--text);
+}
+:root[data-theme="light"] .settings .set-hint {
+  color: var(--text-3);
+  font-weight: 400;
+  margin-top: 3px;
+  line-height: 1.45;
+}
+:root[data-theme="light"] .btn:not(.icon-btn) {
+  /* Segoe's visible capitals sit below the line-box center: a half-pixel
+     optical lift keeps labels centered alongside the icons. */
+  padding-block: 0 1px;
+}
+:root[data-theme="light"] :is(.btn.accent, .btn.primary, .update-banner-btn.primary) {
+  background-color: color-mix(in srgb, var(--accent-base) 16%, white);
+  border-color: color-mix(in srgb, var(--accent-base) 38%, white);
+}
+:root[data-theme="light"] :is(.btn.accent, .btn.primary, .update-banner-btn.primary):hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--accent-base) 22%, white);
+}
+:root[data-theme="light"] .modal-backdrop:has(.sn-modal) {
+  /* Blur at the glass sheet, avoiding nested backdrop sampling of sharp
+     content in Chromium. The outer scrim only dims the inactive app. */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+:root[data-theme="light"] .sn-modal {
+  background: rgb(255 255 255 / 70%);
+  backdrop-filter: blur(24px) saturate(110%);
+  -webkit-backdrop-filter: blur(24px) saturate(110%);
+}
+/* Solid and accessibility modes retain opaque panes and dialog surfaces. */
+:root[data-theme="light"][data-material="solid"],
+:root[data-theme="light"][data-reduced-transparency="true"] {
+  --glass-base: var(--solid-controller-bg);
+  --glass-sidebar: var(--surface);
+  --glass-preview: var(--surface);
+  --editor-field: #f6f7f9;
+}
+:root[data-theme="light"][data-material="solid"] .sn-modal,
+:root[data-theme="light"][data-reduced-transparency="true"] .sn-modal {
+  background: var(--surface-float-solid);
+}
+
 @media (prefers-reduced-transparency: reduce) {
+  :root[data-theme="light"] .sn-modal { background: var(--surface-float-solid); }
   :root[data-theme] .btn.subtle:not(.accent):not(.primary) {
     background: var(--elev);
     border-color: var(--line);
