@@ -2,6 +2,8 @@
    Native acrylic blurs the desktop. Tint belongs to the window once; light pane washes preserve hierarchy,
    controls have a quiet surface, and menus retain contrast. */
 :root {
+  --sidebar-divider: rgb(255 255 255 / 5%);
+  --pane-divider: rgb(255 255 255 / 13%);
   --control-bg: rgb(255 255 255 / 7%);
   --control-hover: rgb(255 255 255 / 11%);
   --control-edge: rgb(255 255 255 / 13%);
@@ -14,6 +16,8 @@
   --accent-fg-hover: #000000;
 }
 :root[data-theme="light"] {
+  --sidebar-divider: rgb(30 35 45 / 8%);
+  --pane-divider: rgb(30 35 45 / 19%);
   --control-bg: rgb(255 255 255 / 26%);
   --control-hover: rgb(255 255 255 / 62%);
   --control-edge: rgb(0 0 0 / 20%);

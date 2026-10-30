@@ -1240,7 +1240,7 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   display: flex;
   flex-direction: column;
   background: var(--glass-sidebar);
-  border-right: 1px solid var(--glass-hairline);
+  border-right: 1px solid var(--sidebar-divider);
   padding: 12px 10px;
   gap: 4px;
   overflow: hidden;
@@ -1623,9 +1623,9 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
   left: 0;
   top: 0;
   bottom: 0;
-  width: 0;
-  background: transparent;
-  opacity: 0;
+  width: 1px;
+  background: var(--pane-divider);
+  opacity: 1;
   pointer-events: none;
   z-index: 1;
 }
@@ -1636,7 +1636,7 @@ html:not([data-material="solid"]) .overlay-list .empty .sub {
 }
 
 .preview.open::before {
-  opacity: 0;
+  opacity: 1;
 }
 
 .preview-inner {
@@ -2638,17 +2638,17 @@ section:last-child {
   opacity: 1;
 }
 
-/* v37: no divider hairline — list and preview panes separate by their
-   background tones (list scrim vs preview pane), not by a painted line. */
+/* A painted inner divider separates captures from previews without taking
+   layout space or changing window edges and reveal choreography. */
 .overlay-preview::before {
   content: "";
   position: absolute;
   left: 0;
   top: 0;
   bottom: 0;
-  width: 0;
-  background: transparent;
-  opacity: 0;
+  width: 1px;
+  background: var(--pane-divider);
+  opacity: 1;
   pointer-events: none;
   z-index: 1;
 }
