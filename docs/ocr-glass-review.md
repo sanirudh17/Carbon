@@ -52,3 +52,7 @@ The sidebar edge is quieter (8% neutral in light, 5% white in dark). Main and Qu
 ### Dark picker continuity
 
 The dark Quick Overlay now applies its pane wash once to the content parent, including the search header and footer, with transparent list and preview children. This removes the separate darker header band without adding another tint layer. Dark preview dividers match the sidebar at 5% white. Light divider strength remains 19% neutral. All 172 frontend checks pass; four browser theme/window checks confirm unchanged pane geometry and inner divider colors. This CSS-only refinement does not change native presentation or flash-prevention behavior.
+
+### Dark Settings controls
+
+Dark Settings now matches the light-mode heading/hint weight hierarchy (600/400). Its update action uses a quiet accent wash and accent-colored label, removing the black text and bright background-image strip. Toggle knobs are explicitly dark in dark mode and white in light mode for both on/off states; inactive tracks and forced-color fallbacks keep the knob distinguishable. Browser assertions checked both themes, heading/hint weights, all nine knobs including both states, and the absence of a background image on the dark update action. All 172 frontend checks pass. No native presentation code, build, or merge was involved.

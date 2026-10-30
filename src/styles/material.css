@@ -234,6 +234,32 @@ input, textarea { caret-color: var(--accent); }
   background: var(--surface-float-solid);
 }
 
+/* Settings descriptions should read as supporting text, in either theme. */
+:root[data-theme="dark"] .settings .set-label { font-weight: 600; }
+:root[data-theme="dark"] .settings .set-hint {
+  font-weight: 400;
+  color: var(--text-3);
+  margin-top: 3px;
+  line-height: 1.45;
+}
+/* Quiet accent glass removes the bright image strip and black label from
+   the dark Settings update action without affecting editor actions. */
+:root[data-theme="dark"] .settings .btn.accent {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-ring);
+  color: var(--accent-text);
+  box-shadow: none;
+}
+:root[data-theme="dark"] .settings .btn.accent:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent-text);
+}
+/* Toggle polarity belongs to the theme, not the button contrast helper. */
+:root[data-theme="dark"] .toggle .knob { background: #15161a; }
+:root[data-theme="light"] .toggle .knob { background: #ffffff; }
+:root[data-theme="dark"] .toggle:not(.on) { background: rgb(255 255 255 / 28%); }
+:root[data-theme="light"] .toggle:not(.on) { background: rgb(0 0 0 / 22%); }
+
 @media (prefers-reduced-transparency: reduce) {
   :root[data-theme="light"] .sn-modal { background: var(--surface-float-solid); }
   :root[data-theme] .btn.subtle:not(.accent):not(.primary) {
@@ -243,6 +269,8 @@ input, textarea { caret-color: var(--accent); }
   }
 }
 @media (forced-colors: active) {
+  :root[data-theme] .toggle .knob { background: ButtonText; }
+  :root[data-theme] .toggle { background: ButtonFace; border: 1px solid ButtonText; }
   :root[data-theme] :is(.btn, .hotkey-chip, .seg-btn, .c-dropdown-trigger) {
     background: ButtonFace;
     color: ButtonText;
