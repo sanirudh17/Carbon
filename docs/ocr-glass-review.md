@@ -56,3 +56,7 @@ The dark Quick Overlay now applies its pane wash once to the content parent, inc
 ### Dark Settings controls
 
 Dark Settings now matches the light-mode heading/hint weight hierarchy (600/400). Its update action uses a quiet accent wash and accent-colored label, removing the black text and bright background-image strip. Toggle knobs are explicitly dark in dark mode and white in light mode for both on/off states; inactive tracks and forced-color fallbacks keep the knob distinguishable. Browser assertions checked both themes, heading/hint weights, all nine knobs including both states, and the absence of a background image on the dark update action. All 172 frontend checks pass. No native presentation code, build, or merge was involved.
+
+### Shared button treatment
+
+The approved dark Settings accent treatment is now the shared primary/accent button style across editors, prompts, collections, main/Quick Overlay actions, and update banners. Light actions retain the approved pale accent fill and colored ink. Removed the background-image highlight strips from both themes and the secondary button inset highlight. Browser assertions verified matching computed styles in Settings, snippet editor, and argument prompt in both themes, with no image strip, no inset shadow, and no black action labels. All 172 frontend checks pass. Window presentation and flash-prevention code remain unchanged; no native build or merge was performed.

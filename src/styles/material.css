@@ -154,20 +154,17 @@ input, textarea { caret-color: var(--accent); }
 :root[data-theme] :is(.btn, .hotkey-chip, .seg-btn) { font-weight: 500; }
 :root[data-theme] .settings .set-label { font-weight: 500; }
 
-/* Accent glass: a restrained tint for secondary actions and a fine specular
-   edge on filled actions. The opaque accent center preserves label contrast. */
+/* Accent glass: shared secondary tint and primary surfaces, without a
+   painted highlight strip at the top edge. */
 :root[data-theme]:not([data-material="solid"]):not([data-reduced-transparency="true"]) .btn.subtle:not(.accent):not(.primary) {
   background: color-mix(in srgb, var(--control-bg) 88%, var(--accent-soft));
   border-color: color-mix(in srgb, var(--control-edge) 75%, var(--accent-ring));
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 5%);
+  box-shadow: none;
 }
 :root[data-theme] :is(.btn.accent, .btn.primary, .update-banner-btn.primary) {
   background-color: var(--accent);
-  background-image: linear-gradient(rgb(255 255 255 / 28%), rgb(255 255 255 / 28%)),
-    linear-gradient(rgb(0 0 0 / 10%), rgb(0 0 0 / 10%));
-  background-position: top, bottom;
-  background-size: 100% 1px;
-  background-repeat: no-repeat;
+  background-image: none;
+  box-shadow: none;
   border: 1px solid color-mix(in srgb, var(--accent) 72%, white);
   color: var(--accent-fg);
   backdrop-filter: var(--control-blur);
@@ -242,15 +239,15 @@ input, textarea { caret-color: var(--accent); }
   margin-top: 3px;
   line-height: 1.45;
 }
-/* Quiet accent glass removes the bright image strip and black label from
-   the dark Settings update action without affecting editor actions. */
-:root[data-theme="dark"] .settings .btn.accent {
+/* The approved quiet accent treatment applies to every primary action,
+   including editors, argument prompts, collections, and update banners. */
+:root[data-theme="dark"] :is(.btn.accent, .btn.primary, .update-banner-btn.primary) {
   background: var(--accent-soft);
   border: 1px solid var(--accent-ring);
   color: var(--accent-text);
   box-shadow: none;
 }
-:root[data-theme="dark"] .settings .btn.accent:hover:not(:disabled) {
+:root[data-theme="dark"] :is(.btn.accent, .btn.primary, .update-banner-btn.primary):hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 20%, transparent);
   color: var(--accent-text);
 }
