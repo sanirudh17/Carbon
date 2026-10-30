@@ -1437,9 +1437,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
   const handleExtractOrCopyOcr = async (item: ClipItem) => {
     try {
-      const text = item.ocr_text && item.ocr_text.trim()
-        ? item.ocr_text
-        : await invoke<string>('extract_image_ocr', { id: item.id });
+      const text = await invoke<string>('extract_image_ocr', { id: item.id });
 
       if (text && text.trim()) {
         await navigator.clipboard.writeText(text).catch(console.error);

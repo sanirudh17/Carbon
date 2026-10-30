@@ -1,3 +1,4 @@
+import { applyAccentContrast } from '../lib/accentContrast';
 import React, { useEffect, useState, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -432,6 +433,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
   const applyAccentColor = (color: string) => {
     document.documentElement.style.setProperty('--accent-base', color);
+    applyAccentContrast(color, currentTheme);
   };
 
   const updateSetting = async <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
@@ -668,6 +670,15 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       </div>
 
       <div className="settings-body">
+        <section>
+          <div className="sec-title">Text extraction</div>
+          <div className="set-row">
+            <div className="set-label">PP-OCRv6 Small
+              <div className="set-hint">Included with Carbon. Image text is recognized on this device, without a download.</div>
+            </div>
+            <span className="set-hint">Offline</span>
+          </div>
+        </section>
         {/* Shortcuts */}
         <section>
           <div className="sec-title">Shortcuts</div>
@@ -1020,7 +1031,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               <span className="capture-rules-title">Custom Find & Replace Rules</span>
               <button
                 className="btn subtle"
-                style={{ fontSize: 11, padding: '4px 10px', height: 26 }}
+                style={{ fontSize: 11 }}
                 onClick={() => {
                   const uid = (globalThis.crypto as Crypto | undefined)?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
                   const newRule = {

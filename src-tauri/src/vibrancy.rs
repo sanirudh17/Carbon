@@ -44,6 +44,70 @@ pub fn get_tint_color() -> window_vibrancy::Color {
     (64, 64, 64, 90)
 }
 
+/// Desktop Acrylic needs a non-layered HWND, as in Glint's Tauri windows.
+/// Solid windows can keep Carbon's native alpha animation without changing
+/// the glass compositor. The paint/cloak gates remain shared by both modes.
+pub fn uses_compositor_glass(window: &WebviewWindow) -> bool {
+    window.app_handle().try_state::<crate::AppState>()
+        .map(|state| WindowMaterial::from_str(&state.settings.get().window_material) != WindowMaterial::Solid)
+        .unwrap_or(true)
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn has_layered_mask(window: &WebviewWindow) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, GWL_EXSTYLE, WS_EX_LAYERED};
+    window.hwnd().is_ok_and(|handle| unsafe {
+        GetWindowLongW(windows::Win32::Foundation::HWND(handle.0 as _), GWL_EXSTYLE) & WS_EX_LAYERED.0 as i32 != 0
+    })
+}
+
+/// Only call under a verified cloak or an opaque controller/HTML surface.
+#[cfg(target_os = "windows")]
+pub(crate) fn release_layered_mask(window: &WebviewWindow) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, WS_EX_LAYERED};
+    let Ok(handle) = window.hwnd() else { return false; };
+    unsafe {
+        let hwnd = windows::Win32::Foundation::HWND(handle.0 as _);
+        let style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+        if style & WS_EX_LAYERED.0 as i32 == 0 { return true; }
+        SetWindowLongW(hwnd, GWL_EXSTYLE, style & !(WS_EX_LAYERED.0 as i32));
+    }
+    !has_layered_mask(window)
+}
+
+/// Match Glint's theme flag without rebuilding its live backdrop.
+pub fn update_native_theme(window: &WebviewWindow, theme: &str) {
+    #[cfg(target_os = "windows")]
+    if let Ok(handle) = window.hwnd() {
+        use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+        let dark = i32::from(theme != "light");
+        unsafe { let _ = DwmSetWindowAttribute(windows::Win32::Foundation::HWND(handle.0 as _), DWMWA_USE_IMMERSIVE_DARK_MODE, (&dark as *const i32).cast(), 4); }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = (window, theme);
+}
+
+/// The same whole-window Desktop Acrylic material used by Glint. Earlier
+/// Windows versions retain the existing window-vibrancy fallback.
+#[cfg(target_os = "windows")]
+fn system_acrylic(window: &WebviewWindow, enabled: bool) -> bool {
+    use windows::Win32::{Graphics::Dwm::{DwmSetWindowAttribute, DwmExtendFrameIntoClientArea, DWMWINDOWATTRIBUTE}, UI::Controls::MARGINS};
+    let Ok(handle) = window.hwnd() else { return false; };
+    let hwnd = windows::Win32::Foundation::HWND(handle.0 as _);
+    let material = if enabled { 3u32 } else { 1u32 };
+    unsafe {
+        if DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE(38), (&material as *const u32).cast(), 4).is_err() { return false; }
+        let inset = if enabled { -1 } else { 0 };
+        let margins = MARGINS { cxLeftWidth: inset, cxRightWidth: inset, cyTopHeight: inset, cyBottomHeight: inset };
+        if DwmExtendFrameIntoClientArea(hwnd, &margins).is_err() {
+            let off = 1u32;
+            let _ = DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE(38), (&off as *const u32).cast(), 4);
+            return false;
+        }
+    }
+    enabled
+}
+
 /// Keep the complete acrylic surface inside DWM's native rounded corners.
 /// A GDI window region clips client pixels but not the acrylic compositor,
 /// leaving translucent square protrusions outside the CSS corner arcs.
@@ -111,9 +175,6 @@ pub fn set_window_border_suppressed(window: &WebviewWindow) {
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR};
-        use windows::Win32::UI::WindowsAndMessaging::{
-            SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_NOOWNERZORDER,
-        };
         if let Ok(w_hwnd) = window.hwnd() {
             unsafe {
                 let hwnd = windows::Win32::Foundation::HWND(w_hwnd.0 as _);
@@ -124,15 +185,6 @@ pub fn set_window_border_suppressed(window: &WebviewWindow) {
                     DWMWA_BORDER_COLOR,
                     &no_border as *const _ as *const std::ffi::c_void,
                     std::mem::size_of::<u32>() as u32,
-                );
-                let _ = SetWindowPos(
-                    hwnd,
-                    windows::Win32::Foundation::HWND(std::ptr::null_mut()),
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
                 );
             }
         }
@@ -146,6 +198,7 @@ pub fn set_window_border_suppressed(window: &WebviewWindow) {
 pub fn clear_window_effects(window: &WebviewWindow) {
     #[cfg(target_os = "windows")]
     {
+        system_acrylic(window, false);
         let _ = window_vibrancy::clear_acrylic(window);
     }
     #[cfg(target_os = "macos")]
@@ -168,7 +221,7 @@ pub fn apply_window_material(window: &WebviewWindow, material: WindowMaterial) {
         if let Ok(w_hwnd) = window.hwnd() {
             unsafe {
                 let hwnd = windows::Win32::Foundation::HWND(w_hwnd.0 as _);
-                let is_dark: i32 = 1;
+                let is_dark = i32::from(window.app_handle().try_state::<crate::AppState>().map(|state| state.settings.get().theme != "light").unwrap_or(true));
                 let _ = DwmSetWindowAttribute(
                     hwnd,
                     DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -180,6 +233,7 @@ pub fn apply_window_material(window: &WebviewWindow, material: WindowMaterial) {
         set_round_corners(window);
         match material {
             WindowMaterial::Solid => {
+                system_acrylic(window, false);
                 let _ = window_vibrancy::clear_acrylic(window);
                 log::info!(
                     "[Vibrancy] Window '{}' set to solid material",
@@ -191,6 +245,21 @@ pub fn apply_window_material(window: &WebviewWindow, material: WindowMaterial) {
                 ));
             }
             WindowMaterial::Acrylic | WindowMaterial::Mica | WindowMaterial::Blur => {
+                // Solid -> Glass stays covered until the new material is ready.
+                // Glint does not leave WS_EX_LAYERED on its glass HWNDs.
+                if has_layered_mask(window) {
+                    let theme = window.app_handle().try_state::<crate::AppState>()
+                        .map(|state| state.settings.get().theme).unwrap_or_else(|| "dark".into());
+                    if !set_window_default_background(window, WindowMaterial::Solid, &theme)
+                        || !release_layered_mask(window) {
+                        crate::paste::log_diag("[VIBRANCY] glass preparation deferred; controller/mask not ready");
+                        return;
+                    }
+                }
+                if system_acrylic(window, true) {
+                    set_window_border_suppressed(window);
+                    return;
+                }
                 let tint = get_tint_color();
                 if let Err(e) = window_vibrancy::apply_acrylic(window, Some(tint)) {
                     log::warn!(
@@ -266,7 +335,12 @@ pub fn apply_window_material(window: &WebviewWindow, material: WindowMaterial) {
 /// Applies the given material to all live webview windows.
 pub fn apply_to_all_windows(app: &AppHandle, material: WindowMaterial, theme: &str) {
     for (_, win) in app.webview_windows() {
+        if material == WindowMaterial::Solid {
+            // Cover every controller before removing the native backdrop.
+            set_window_default_background(&win, material, theme);
+        }
         apply_window_material(&win, material);
+        update_native_theme(&win, theme);
         set_window_default_background(&win, material, theme);
     }
 }
@@ -275,6 +349,7 @@ pub fn apply_to_all_windows(app: &AppHandle, material: WindowMaterial, theme: &s
 /// does not touch DWM material and is safe during a live Solid theme switch.
 pub fn set_default_background_for_all(app: &AppHandle, material: WindowMaterial, theme: &str) {
     for (_, win) in app.webview_windows() {
+        update_native_theme(&win, theme);
         set_window_default_background(&win, material, theme);
     }
 }

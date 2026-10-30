@@ -1,6 +1,33 @@
 use super::*;
 
 #[test]
+fn ocr_cache_upgrade_preserves_old_text_pins_and_collection_membership() {
+    let dir = std::env::temp_dir().join(format!("carbon_ocr_cache_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let path = dir.join("history.db");
+    let db = DbState::new(path.clone()).unwrap();
+    let mut clip = fixture("image", "image", "");
+    clip.is_pinned = true;
+    clip.ocr_text = Some("Original Tesseract transcription".into());
+    db.insert_entry(&mut clip).unwrap();
+    let collection = db.create_collection("Keep OCR clip".into(), None, None).unwrap();
+    db.add_clip_to_collection("image", &collection.id).unwrap();
+    assert_eq!(db.get_current_ocr_text("image").unwrap(), None);
+    assert_eq!(db.get_entry_by_id("image").unwrap().unwrap().ocr_text.as_deref(), Some("Original Tesseract transcription"));
+    db.update_ocr_text("image", "C# rate 25% --dpi 300").unwrap();
+    assert_eq!(db.get_current_ocr_text("image").unwrap().as_deref(), Some("C# rate 25% --dpi 300"));
+    assert!(db.get_entry_by_id("image").unwrap().unwrap().is_pinned);
+    let backup = db.export_backup().unwrap();
+    db.import_backup(backup, &dir.join("media")).unwrap();
+    assert_eq!(db.get_clip_collection_ids("image").unwrap(), vec![collection.id]);
+    assert!(db.get_current_ocr_text("image").unwrap().is_none(), "imported text must not inherit an unrelated engine marker");
+    drop(db);
+    let reopened = DbState::new(path).unwrap();
+    assert_eq!(reopened.get_entry_by_id("image").unwrap().unwrap().ocr_text.as_deref(), Some("C# rate 25% --dpi 300"));
+    drop(reopened);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn legacy_index_migration_preserves_collected_clips_and_metadata_bumps_skip_fts() {
     let dir = std::env::temp_dir().join(format!("carbon_index_migration_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
     let path = dir.join("history.db");

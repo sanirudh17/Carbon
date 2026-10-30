@@ -269,39 +269,22 @@ test('Main First-Open Flash: second-launch path matches the hotkey pre-show disc
   );
 });
 
-test('Main Flash: the OS-alpha mask is installed at cloak and never removed (glass rebuild = white frame)', () => {
+test('Glass uses a non-layered HWND while Solid keeps the alpha mask and both retain the paint gate', () => {
   const hotkeyRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'hotkey.rs'), 'utf8');
-
-  // Removing WS_EX_LAYERED rebuilds the DWM acrylic composition surface — a
-  // white frame in glass mode. The mask is installed when a window is cloaked
-  // (alpha 0, BEFORE any ShowWindow/SetWindowPos/unminimize transition can
-  // clear the cloak — the startup flash when main's taskbar icon appears and
-  // the off-screen warm-up cycles' re-present) and is NEVER removed, so the
-  // visible lifetime never toggles the bit.
-  const removals = hotkeyRs.match(/ex & !\(WS_EX_LAYERED/g) || [];
-  assert.equal(removals.length, 0, 'the layered bit may never be removed (a toggle rebuilds the acrylic surface)');
-  assert.ok(!hotkeyRs.includes('fn clear_window_layered'), 'no layered-strip helper may exist');
-
-  // Install the mask before DWM is asked to cloak. A failed/deferred cloak
-  // must still hide the raw surface during a cold ShowWindow transition.
-  const cloakMatch = hotkeyRs.match(/pub fn set_window_cloaked\(window[\s\S]*?\r?\n\}\r?\n/);
-  assert.ok(cloakMatch, 'set_window_cloaked (windows) found');
-  assert.ok(
-    cloakMatch[0].includes('set_window_alpha(window, 0)'),
-    'cloaking must park the OS-alpha mask at 0'
-  );
-  assert.ok(
-    cloakMatch[0].indexOf('set_window_alpha(window, 0)') < cloakMatch[0].indexOf('DwmSetWindowAttribute('),
-    'the mask must precede the fallible DWM cloak request'
-  );
-
-  // Every reveal path must lift the mask before uncloaking: main/overlay ramp
-  // from 0, and the argprompt reveals (the two paths without a ramp) set 255.
-  const expansionRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'expansion.rs'), 'utf8');
-  assert.ok(
-    (expansionRs.match(/set_window_alpha\(&win, 255\)/g) || []).length >= 1 && expansionRs.includes('fn schedule_arg_prompt_reveal'),
-    'argprompt reveals must lift the cloak-parked alpha mask'
-  );
+  const vibrancyRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'vibrancy.rs'), 'utf8');
+  const alpha = hotkeyRs.match(/pub fn set_window_alpha\(window[\s\S]*?\r?\n\}/)?.[0];
+  assert.ok(alpha?.includes('uses_compositor_glass(window)'), 'glass has a separate compositor policy');
+  assert.ok(alpha?.includes('alpha == 0 && stale'), 'glass keeps alpha masking only for cold/stale preparation');
+  assert.ok(alpha.indexOf('return;') < alpha.indexOf('set_native_window_alpha(window, alpha)'), 'visible glass must not enter the steady-state alpha path');
+  assert.ok(alpha?.includes('set_native_window_alpha(window, alpha)'), 'Solid keeps native alpha masking');
+  const cloak = hotkeyRs.match(/pub fn set_window_cloaked\(window[\s\S]*?\r?\n\}/)?.[0];
+  assert.ok(cloak?.includes('physical_cloak_state(window) != Some(true)'), 'emergency mask removal needs a verified cloak');
+  assert.ok(cloak.indexOf('physical_cloak_state(window)') < cloak.indexOf('release_layered_mask(window)'), 'never remove a live emergency mask');
+  assert.ok(cloak.includes('current != generation'), 'a stale recovery must not reveal a newer hidden cycle');
+  assert.ok(cloak.includes('set_native_window_alpha(window, 0)'), 'a failed cloak remains emergency-masked');
+  assert.ok(vibrancyRs.includes('DWMWINDOWATTRIBUTE(38)') && vibrancyRs.includes('3u32'), 'Glint Desktop Acrylic material is explicit');
+  assert.ok(vibrancyRs.includes('if enabled { -1 }'), 'the native material covers the complete window');
+  assert.ok(vibrancyRs.includes('release_layered_mask(window)'), 'Solid to Glass removes the incompatible style');
 });
 
 test('Main Flash: transparent surface retries bound the cold-controller race', () => {

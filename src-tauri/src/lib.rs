@@ -511,10 +511,8 @@ fn save_settings(
         let mat = vibrancy::WindowMaterial::from_str(&current.window_material);
         vibrancy::apply_to_all_windows(&app, mat, &current.theme);
         let _ = app.emit("window-material-changed", mat.as_str());
-    } else if old_theme != current.theme
-        && vibrancy::WindowMaterial::from_str(&current.window_material) == vibrancy::WindowMaterial::Solid
-    {
-        vibrancy::set_default_background_for_all(&app, vibrancy::WindowMaterial::Solid, &current.theme);
+    } else if old_theme != current.theme {
+        vibrancy::set_default_background_for_all(&app, vibrancy::WindowMaterial::from_str(&current.window_material), &current.theme);
     }
 
     // Swappable hotkeys (Glint-style): on save, clear everything and
@@ -551,10 +549,10 @@ fn set_window_material(
         let mut s = state.settings.get();
         s.window_material = mat.as_str().to_string();
         state.settings.update(s.clone())?;
-        let _ = app.emit("settings-updated", &s);
     }
     let theme = app.state::<AppState>().settings.get().theme;
     vibrancy::apply_to_all_windows(&app, mat, &theme);
+    let _ = app.emit("settings-updated", &state.settings.get());
     let _ = app.emit("window-material-changed", mat.as_str());
     Ok(mat.as_str().to_string())
 }
@@ -834,28 +832,18 @@ async fn extract_image_ocr(
     id: String,
     app_handle: AppHandle,
 ) -> Result<String, String> {
-    let (cached_text, img_path) = {
-        let clip = state.db.get_entry_by_id(&id)?.ok_or_else(|| "Clip not found".to_string())?;
-        (clip.ocr_text, clip.image_path)
-    };
-
-    if let Some(cached) = cached_text {
-        if !cached.trim().is_empty() {
-            return Ok(cached);
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let clip = db.get_entry_by_id(&id)?.ok_or("Clip not found")?;
+        if let Some(cached) = db.get_current_ocr_text(&id)? { return Ok(cached); }
+        let path = std::path::PathBuf::from(clip.image_path.ok_or("Item has no image")?);
+        let text = ocr::recognize_file(&path)?.text;
+        db.update_ocr_text(&id, &text)?;
+        if let Ok(Some(updated)) = db.get_entry_by_id(&id) {
+            let _ = app_handle.emit("clipboard-updated", &updated);
         }
-    }
-
-    let path_str = img_path.ok_or_else(|| "Item has no image".to_string())?;
-    let path = std::path::PathBuf::from(path_str);
-
-    let out = ocr::recognize_file(&path)?;
-    let text = out.text;
-
-    state.db.update_ocr_text(&id, &text)?;
-    if let Ok(Some(updated_clip)) = state.db.get_entry_by_id(&id) {
-        let _ = app_handle.emit("clipboard-updated", &updated_clip);
-    }
-    Ok(text)
+        Ok(text)
+    }).await.map_err(|e| format!("Text extraction worker failed: {e}"))?
 }
 
 #[tauri::command]
@@ -1227,10 +1215,11 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             {
                 unsafe {
-                    use windows::core::w;
+                    use windows::core::PCWSTR;
                     use windows::Win32::Foundation::{GetLastError, BOOL, ERROR_ALREADY_EXISTS};
                     use windows::Win32::System::Threading::CreateMutexW;
-                    match CreateMutexW(None, BOOL(1), w!("com.carbon.clipboard.single-instance")) {
+                    let mutex_name: Vec<u16> = format!("{}.single-instance", app.config().identifier).encode_utf16().chain(Some(0)).collect();
+                    match CreateMutexW(None, BOOL(1), PCWSTR(mutex_name.as_ptr())) {
                         Ok(handle) => {
                             if GetLastError() == ERROR_ALREADY_EXISTS {
                                 eprintln!("[SINGLETON] Duplicate carbon.exe detected — exiting so the first instance keeps the hotkeys.");
@@ -1245,6 +1234,7 @@ pub fn run() {
                 }
             }
 
+            ocr::initialize(app.path().resource_dir()?.join("ocr"));
             let app_handle = app.handle().clone();
 
             let app_data_dir = app

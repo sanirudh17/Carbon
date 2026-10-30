@@ -1,0 +1,344 @@
+{
+  "pipeline": "Native Carbon Rust, ONNX Runtime CPU; synthetic English screenshots only",
+  "results": [
+    {
+      "cer": 0.04487179487179487,
+      "cold": true,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": false,
+      "file": "consola-11-light.png",
+      "ms": 1927.4898999999998,
+      "text": "Carbon keeps clipboard history on this device\n\nEmail: demo.user+notes@example.com\n\nsynthetic token: test_IoJv3AcUYHL2qgOrhvsAjQjkfbs jRW6VCIA7U\nconst selected = items[@]?.id >? \"missing\";\n\nPath: C:\\Projects\\carbon\\preview_@1.tsx\n\nc# rate: 25% | --dpi 3e@ | total $1,234.56\n\nMixed: O@ I11 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.038461538461538464,
+      "cold": false,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": false,
+      "file": "consola-11-dark.png",
+      "ms": 1258.4882,
+      "text": "Carbon keeps clipboard history on this device\n\nEmail: demo.user+notes@example.com\n\nsynthetic token: test_IoJv3AcUYHL2qgOrhvsAjQjkfbs jRW6VCIA7U\nconst selected = items[@]?.id >? \"missing\";\n\nPath: C:\\Projects\\carbon\\preview_@1.tsx\n\nc# rate: 25% | --dpi 300 | total $1,234.56\n\nMixed: O@ I11 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.022435897435897436,
+      "cold": false,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": true,
+      "file": "consola-15-light.png",
+      "ms": 1983.5720999999999,
+      "text": "Carbon keeps clipboard history on this device\n\nEmail: demo.user+notes@example.com\n\nSynthetic token: test_IoJv3AcUYHL2qOrhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[@]?.id ?? \"missing\";\n\nPath: C:\\Projects\\carbon\\preview_@1.tsx\n\n(# rate: 25% | --dpi 300 | total $1,234.56\n\nMixed: 0@ I11 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.02564102564102564,
+      "cold": false,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": true,
+      "file": "consola-15-dark.png",
+      "ms": 2062.8085,
+      "text": "Carbon keeps clipboard history on this device\n\nEmail: demo.user+notes@example.com\n\nSynthetic token: test_IoJv3AcUYHL2qOrhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[@]?.id >? \"missing\";\n\nPath: C:\\Projects\\carbon\\preview_@1.tsx\n\n(# rate: 25% | --dpi 300 | total $1,234.56\n\nMixed: 0@ I11 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.04487179487179487,
+      "cold": false,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": false,
+      "file": "segoeui-11-light.png",
+      "ms": 1815.2692,
+      "text": "Carbon keeps clipboard history on this device\n\nEmail: demo.user+ notes @example.com\n\nSynthetic token: test_loJv3ACUYHL2gOrhvsAjQjkfbsjRw6VCIA7uU\nconst selected = items[0]?.id ?? \u201cmissing\n\nPath: C:\\Projects\\carbon\\preview_01 .tsx\n\n(# rate: 25% | --dpi 300 | total $1,234.56\n\nMixed: 00 II1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.04487179487179487,
+      "cold": false,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": false,
+      "file": "segoeui-11-dark.png",
+      "ms": 1745.8283,
+      "text": "Carbon keeps clipboard history on this device\n\nEmail: demo.user+ notes @example.com\n\nSynthetic token: test_loJv3ACUYHL2gOrhvsAjQjkfbsjRw6VCIA7uU\nconst selected = items[0]?.id ?? \u201cmissing\n\nPath: C:\\Projects\\carbon\\preview_01 .tsx\n\n(# rate: 25% | --dpi 300 | total $1,234.56\n\nMixed: 00 II1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.03205128205128205,
+      "cold": false,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": false,
+      "file": "segoeui-15-light.png",
+      "ms": 2033.5763,
+      "text": "Carbon keeps clipboard history on this device\n\nEmail: demo.user+notes@example.com\n\nSynthetic token: test_loJv3AcUYHL2qOrhvsAj QjkfbsjRW6VCIA7u\nconst selected = items[0]?.id ?? \u201cmissing\n\nPath: C:\\Projects\\carbon\\preview_01.tsx\n\n(# rate: 25% | --dpi 300 | total $1,234.56\n\nMixed: 00 II1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.03205128205128205,
+      "cold": false,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": false,
+      "file": "segoeui-15-dark.png",
+      "ms": 1961.2412,
+      "text": "Carbon keeps clipboard history on this device\n\nEmail: demo.user+notes@example.com\n\nSynthetic token: test_loJv3AcUYHL2qOrhvsAj QjkfbsjRwW6VCIA7u\nconst selected = items[0]?.id ?? \u201cmissing\n\nPath: C:\\Projects\\carbon\\preview_01.tsx\n\n(# rate: 25% | --dpi 300 | total $1,234.56\n\nMixed: 00 II1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.10576923076923077,
+      "cold": false,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": false,
+      "file": "reduced-0.5-light.png",
+      "ms": 711.3091000000001,
+      "text": "carbon keeps clipboard history on this device\n\nEmail; demo,user+notes@example,com\n\nSynthetic token: test IoJvIACUYHL 24gOrhvsaAjQjktbs jaw6VC LAU\nconst selected = items[@}?.id ?? \u201cmissing\u2019;\n\nPath: C:\\Projects\\carbon\\preview_O1.%5x\n\ncu rate: 25% | --dpi 3@@ | total $1,234.56\n\nMixed: O68 I11 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.0673076923076923,
+      "cold": false,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": false,
+      "file": "reduced-0.5-dark.png",
+      "ms": 688.9212,
+      "text": "carbon keeps clipboard history on this device\n\nEmail: demo,user+notes@example,com\n\nSynthetic token: test _IoJv3ACUYHL 2qOrhvsAjQjkfbs jAWwGVC TA7u\nconst selected = items[@]?.id ?? \"missing\";\n\nPath: C:\\Projects\\carbon\\preview_@1.tsx\n\ncu rate: 25% | --dpi 300 | total $1,234.56\n\nMixed: O08 111 {json} [array] foo_bar/path,ts"
+    },
+    {
+      "cer": 0.022435897435897436,
+      "cold": false,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": false,
+      "file": "reduced-0.75-light.png",
+      "ms": 1308.4106,
+      "text": "Carbon keeps clipboard history on this device\n\nEmail: demo.user+notes@example.com\n\nSynthetic token: test_IoJv3AcUYHL2qOrhvsAjQjkfbs jRW6VCIA7u\nconst selected = items[@]?.id ?? \"missing\";\n\nPath: C:\\Projects\\carbon\\preview_01.tsx\n\n(# rate: 25% | --dpi 300 | total $1,234.56\n\nMixed: 0@ Il1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.019230769230769232,
+      "cold": false,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": false,
+      "file": "reduced-0.75-dark.png",
+      "ms": 1344.9994000000002,
+      "text": "Carbon keeps clipboard history on this device\n\nEmail: demo.user+notes@example.com\n\nSynthetic token: test_IoJv3AcUYHL2qOrhvsAjQjkfbs jRw6VCIA7u\nconst selected = items[@]?.id ?? \"missing\";\n\nPath: C:\\Projects\\carbon\\preview_01.tsx\n\n(# rate: 25% | --dpi 300 | total $1,234.56\n\nMixed: 0@ Il1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.04487179487179487,
+      "cold": false,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": false,
+      "file": "reduced-1-light.png",
+      "ms": 2260.4867,
+      "text": "Carbon keeps clipboard history on this device\n\nEmail: demo.user+notes@example.com\n\nSynthetic token: test _IoJv3ACUYHL2qgOrhvsAjQjkfbs jRw6VCIA7u\nconst selected = items[@]?.id ?? \"missing\";\n\nPath: C:\\Projects\\carbon\\preview_ @1.tsx\n\n(# rate: 25% | --dpi 30e@ | total $1,234.56\n\nMixed: 0@ I11 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.041666666666666664,
+      "cold": false,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": false,
+      "file": "reduced-1-dark.png",
+      "ms": 2136.1047000000003,
+      "text": "Carbon keeps clipboard history on this device\n\nEmail: demo.user+notes@example.com\n\nSynthetic token: test _IoJv3ACcUYHL2gOrhvsAjQjkfbs jRw6VCIA7u\nconst selected = items[@]?.id ?? \"missing\";\n\nPath: C:\\Projects\\carbon\\preview_ @1.tsx\n\n(# rate: 25% | --dpi 30e@ | total $1,234.56\n\nMixed: O@ I11 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.028846153846153848,
+      "cold": false,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": false,
+      "file": "full-light.png",
+      "ms": 19507.4414,
+      "text": "Carbon keeps clipboard history on this device\n\nEmail: demo.user+notes@example.com\n\nSynthetic token: test_loJv3AcUYHL2qgOrhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \u201cmissing\n\nPath: C:\\Projects\\carbon\\preview_01.tsx\n\n(# rate: 25% | --dpi 300 | total $1,234.56\n\nMixed: 00 II1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.03998298596341982,
+      "cold": false,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": null,
+      "file": "tall-light.png",
+      "ms": 18609.0572,
+      "text": "Clipboard line @@: Keep code (# and rate 25% unchanged\nClipboard line @1: Keep code (# and rate 25% unchanged\nClipboard line @2: Keep code (# and rate 25% unchanged\nClipboard line @3: Keep code (# and rate 25% unchanged\nClipboard line @4: Keep code (# and rate 25% unchanged\nClipboard line @5: Keep code (# and rate 25% unchanged\nClipboard line @6: Keep code (# and rate 25% unchanged\nClipboard line @7: Keep code (# and rate 25% unchanged\nClipboard line 08: Keep code (# and rate 25% unchanged\nClipboard line 69: Keep code (# and rate 25% unchanged\nClipboard line 10: Keep code (# and rate 25% unchanged\nClipboard line 11: Keep code (# and rate 25% unchanged\nClipboard line 12: Keep code (# and rate 25% unchanged\nClipboard line 13: Keep code (# and rate 25% unchanged\nClipboard line 14: Keep code (# and rate 25% unchanged\nClipboard line 15: Keep code (# and rate 25% unchanged\nClipboard line 16: Keep code (# and rate 25% unchanged\nClipboard line 17: Keep code (# and rate 25% unchanged\nClipboard line 18: Keep code (# and rate 25% unchanged\nClipboard line 19: Keep code (# and rate 25% unchanged\nClipboard line 20: Keep code (# and rate 25% unchanged\nClipboard line 21: Keep code (# and rate 25% unchanged\nClipboard line 22: Keep code (# and rate 25% unchanged\nClipboard line 23: Keep code (# and rate 25% unchanged\nClipboard line 24: Keep code (# and rate 25% unchanged\nClipboard line 25: Keep code (# and rate 25% unchanged\nClipboard line 26: Keep code (# and rate 25% unchanged\nClipboard line 27: Keep code (# and rate 25% unchanged\nClipboard line 28: Keep code (# and rate 25% unchanged\nClipboard line 29: Keep code (# and rate 25% unchanged\nClipboard line 30: Keep code (# and rate 25% unchanged\nClipboard line 31: Keep code (# and rate 25% unchanged\nClipboard line 32: Keep code (# and rate 25% unchanged\nClipboard line 33: Keep code (# and rate 25% unchanged\nClipboard line 34: Keep code (# and rate 25% unchanged\nClipboard line 35: Keep code (# and rate 25% unchanged\nClipboard line 36: Keep code (# and rate 25% unchanged\nClipboard line 37: Keep code (# and rate 25% unchanged\nClipboard line 38: Keep code (# and rate 25% unchanged\nClipboard line 39: Keep code (# and rate 25% unchanged\nClipboard line 40: Keep code (# and rate 25% unchanged\nClipboard line 41: Keep code (# and rate 25% unchanged"
+    },
+    {
+      "cer": 0.028846153846153848,
+      "cold": false,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": false,
+      "file": "full-dark.png",
+      "ms": 20625.6024,
+      "text": "Carbon keeps clipboard history on this device\n\nEmail: demo.user+notes@example.com\n\nSynthetic token: test_loJv3AcUYHL2gOrhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \u201cmissing\n\nPath: C:\\Projects\\carbon\\preview_01.tsx\n\n(# rate: 25% | --dpi 300 | total $1,234.56\n\nMixed: 00 II1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.03998298596341982,
+      "cold": false,
+      "engine": "tesseract-carbon-0.1.19",
+      "exact_token": null,
+      "file": "tall-dark.png",
+      "ms": 18471.4705,
+      "text": "Clipboard line @@: Keep code (# and rate 25% unchanged\nClipboard line 61: Keep code (# and rate 25% unchanged\nClipboard line @2: Keep code (# and rate 25% unchanged\nClipboard line @3: Keep code (# and rate 25% unchanged\nClipboard line @4: Keep code (# and rate 25% unchanged\nClipboard line @5: Keep code (# and rate 25% unchanged\nClipboard line @6: Keep code (# and rate 25% unchanged\nClipboard line @7: Keep code (# and rate 25% unchanged\nClipboard line 08: Keep code (# and rate 25% unchanged\nClipboard line 69: Keep code (# and rate 25% unchanged\nClipboard line 10: Keep code (# and rate 25% unchanged\nClipboard line 11: Keep code (# and rate 25% unchanged\nClipboard line 12: Keep code (# and rate 25% unchanged\nClipboard line 13: Keep code (# and rate 25% unchanged\nClipboard line 14: Keep code (# and rate 25% unchanged\nClipboard line 15: Keep code (# and rate 25% unchanged\nClipboard line 16: Keep code (# and rate 25% unchanged\nClipboard line 17: Keep code (# and rate 25% unchanged\nClipboard line 18: Keep code (# and rate 25% unchanged\nClipboard line 19: Keep code (# and rate 25% unchanged\nClipboard line 20: Keep code (# and rate 25% unchanged\nClipboard line 21: Keep code (# and rate 25% unchanged\nClipboard line 22: Keep code (# and rate 25% unchanged\nClipboard line 23: Keep code (# and rate 25% unchanged\nClipboard line 24: Keep code (# and rate 25% unchanged\nClipboard line 25: Keep code (# and rate 25% unchanged\nClipboard line 26: Keep code (# and rate 25% unchanged\nClipboard line 27: Keep code (# and rate 25% unchanged\nClipboard line 28: Keep code (# and rate 25% unchanged\nClipboard line 29: Keep code (# and rate 25% unchanged\nClipboard line 30: Keep code (# and rate 25% unchanged\nClipboard line 31: Keep code (# and rate 25% unchanged\nClipboard line 32: Keep code (# and rate 25% unchanged\nClipboard line 33: Keep code (# and rate 25% unchanged\nClipboard line 34: Keep code (# and rate 25% unchanged\nClipboard line 35: Keep code (# and rate 25% unchanged\nClipboard line 36: Keep code (# and rate 25% unchanged\nClipboard line 37: Keep code (# and rate 25% unchanged\nClipboard line 38: Keep code (# and rate 25% unchanged\nClipboard line 39: Keep code (# and rate 25% unchanged\nClipboard line 40: Keep code (# and rate 25% unchanged\nClipboard line 41: Keep code (# and rate 25% unchanged"
+    },
+    {
+      "cer": 0.00641025641025641,
+      "cold": true,
+      "engine": "ppocrv6-small",
+      "exact_token": false,
+      "file": "consola-11-light.png",
+      "ms": 1131.7036,
+      "text": "Carbon keeps clipboard history on this device.\nEmail: demo.user+notes@example.com\nSynthetic token: test_IoJv3AcUYHL2qorhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \"missing\";\nPath: C:\\Projects\\carbon\\preview_01.tsx\nC# rate: 25% | --dpi 300 | total $1,234.56\nMixed: 00 Il1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.00641025641025641,
+      "cold": false,
+      "engine": "ppocrv6-small",
+      "exact_token": false,
+      "file": "consola-11-dark.png",
+      "ms": 723.4066,
+      "text": "Carbon keeps clipboard history on this device.\nEmail: demo.user+notes@example.com\nSynthetic token: test_IoJv3AcUYHL2q0rhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \"missing\";\nPath: C:\\Projects\\carbon\\preview_01.tsx\nC# rate: 25% | --dpi 300 | total $1,234.56\nMixed: 00 Il1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.02564102564102564,
+      "cold": false,
+      "engine": "ppocrv6-small",
+      "exact_token": true,
+      "file": "consola-15-light.png",
+      "ms": 808.1551999999999,
+      "text": "Carbon keeps clipboard history on this device.\nEmail: demo.user+notes@example.com\nSynthetic token: test_IoJv3AcUYHL2qOrhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \"missing\";\nPath: C:\\Projects\\carbon\\preview_01.tsx\nC# rate: 25%--dpi 300total $1,234.56\nMixed: 00 I11 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.00641025641025641,
+      "cold": false,
+      "engine": "ppocrv6-small",
+      "exact_token": false,
+      "file": "consola-15-dark.png",
+      "ms": 832.2230000000001,
+      "text": "Carbon keeps clipboard history on this device.\nEmail: demo.user+notes@example.com\nSynthetic token: test_IoJv3AcUYHL2q0rhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \"missing\";\nPath: C:\\Projects\\carbon\\preview_01.tsx\nC# rate: 25% | --dpi 300 | total $1,234.56\nMixed: 00 Il1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.009615384615384616,
+      "cold": false,
+      "engine": "ppocrv6-small",
+      "exact_token": false,
+      "file": "segoeui-11-light.png",
+      "ms": 542.5727,
+      "text": "Carbon keeps clipboard history on this device.\nEmail: demo.user+notes@example.com\nSynthetic token: test_loJv3AcUYHL2qOrhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \"missing\";\nPath: C:AProjects\\carbon\\preview_01.tsx\nC# rate: 25% | --dpi 300 | total $1,234.56\nMixed: O0 II1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.01282051282051282,
+      "cold": false,
+      "engine": "ppocrv6-small",
+      "exact_token": false,
+      "file": "segoeui-11-dark.png",
+      "ms": 616.9574,
+      "text": "Carbon keeps clipboard history on this device\nEmail: demo.user+notes@example.com\nSynthetic token: test_loJv3AcUYHL2qOrhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \"missing\";\nPath: C:\\Projects\\carbon\\preview_01.tsx\nC# rate: 25% | --dpi 300 | total $1,234.56\nMixed: O0 II1 (json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.00641025641025641,
+      "cold": false,
+      "engine": "ppocrv6-small",
+      "exact_token": false,
+      "file": "segoeui-15-light.png",
+      "ms": 668.9399999999999,
+      "text": "Carbon keeps clipboard history on this device.\nEmail: demo.user+notes@example.com\nSynthetic token: test_loJv3AcUYHL2qOrhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \"missing\";\nPath: C:\\Projects\\carbon\\preview_01.tsx\nC# rate: 25% | --dpi 300 | total $1,234.56\nMixed: O0 II1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.00641025641025641,
+      "cold": false,
+      "engine": "ppocrv6-small",
+      "exact_token": false,
+      "file": "segoeui-15-dark.png",
+      "ms": 642.5153,
+      "text": "Carbon keeps clipboard history on this device.\nEmail: demo.user+notes@example.com\nSynthetic token: test_loJv3AcUYHL2qOrhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \"missing\";\nPath: C:\\Projects\\carbon\\preview_01.tsx\nC# rate: 25% | --dpi 300 | total $1,234.56\nMixed: O0 II1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.00641025641025641,
+      "cold": false,
+      "engine": "ppocrv6-small",
+      "exact_token": true,
+      "file": "reduced-0.5-light.png",
+      "ms": 610.7568,
+      "text": "Carbon keeps clipboard history on this device.\nEmail: demo,user+notes@example.com\nSynthetic token: test_IoJv3AcUYHL2qOrhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \"missing\";\nPath: C:\\Projects\\carbon\\preview_01.tsx\nC# rate: 25% | --dpi 300 | total $1,234.56\nMixed: 00 Il1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.003205128205128205,
+      "cold": false,
+      "engine": "ppocrv6-small",
+      "exact_token": true,
+      "file": "reduced-0.5-dark.png",
+      "ms": 611.1695000000001,
+      "text": "Carbon keeps clipboard history on this device.\nEmail: demo.user+notes@example.com\nSynthetic token: test_IoJv3AcUYHL2qOrhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \"missing\";\nPath: C:\\Projects\\carbon\\preview_01.tsx\nC# rate: 25% | --dpi 300 | total $1,234.56\nMixed: 00 Il1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.016025641025641024,
+      "cold": false,
+      "engine": "ppocrv6-small",
+      "exact_token": true,
+      "file": "reduced-0.75-light.png",
+      "ms": 702.6265999999999,
+      "text": "Carbon keeps clipboard history on this device.\nEmail: demo.user+notes@example.com\nSynthetic token: test_IoJv3AcUYHL2qOrhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \"missing\";\nPath: C:\\Projects\\carbon\\preview_01.tsx\nC# rate: 25% --dpi 300 total $1,234.56\nMixed: 00 Il1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.019230769230769232,
+      "cold": false,
+      "engine": "ppocrv6-small",
+      "exact_token": true,
+      "file": "reduced-0.75-dark.png",
+      "ms": 885.5653,
+      "text": "Carbon keeps clipboard history on this device.\nEmail: demo.user+notes@example.com\nSynthetic token: test_IoJv3AcUYHL2qOrhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \"missing\";\nPath: c:\\Projects\\carbon\\preview_01.tsx\nC# rate: 25% --dpi 300 total $1,234.56\nMixed: 00 Il1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.00641025641025641,
+      "cold": false,
+      "engine": "ppocrv6-small",
+      "exact_token": false,
+      "file": "reduced-1-light.png",
+      "ms": 824.3618,
+      "text": "Carbon keeps clipboard history on this device.\nEmail: demo.user+notes@example.com\nSynthetic token: test_IoJv3AcUYHL2q0rhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \"missing\";\nPath: C:\\Projects\\carbon\\preview_01.tsx\nC# rate: 25% | --dpi 300 | total $1,234.56\nMixed: 00 Il1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.009615384615384616,
+      "cold": false,
+      "engine": "ppocrv6-small",
+      "exact_token": false,
+      "file": "reduced-1-dark.png",
+      "ms": 858.5163,
+      "text": "Carbon keeps clipboard history on this device.\nEmail: demo.user+notes@example.com\nSynthetic token: test_IoJv3AcUYHL2q0rhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \"missing\";\nPath: C:\\Projects\\carbon\\preview 01.tsx\nC# rate: 25% | --dpi 300 | total $1,234.56\nMixed: 00 Il1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.00641025641025641,
+      "cold": false,
+      "engine": "ppocrv6-small",
+      "exact_token": false,
+      "file": "full-light.png",
+      "ms": 1881.0799,
+      "text": "Carbon keeps clipboard history on this device.\nEmail: demo.user+notes@example.com\nSynthetic token: test_loJv3AcUYHL2qOrhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \"missing\";\nPath: C:\\Projects\\carbon\\preview_01.tsx\nC# rate: 25% | --dpi 300 | total $1,234.56\nMixed: O0 II1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.0,
+      "cold": false,
+      "engine": "ppocrv6-small",
+      "exact_token": null,
+      "file": "tall-light.png",
+      "ms": 6241.5671,
+      "text": "Clipboard line 00: Keep code C# and rate 25% unchanged.\nClipboard line 01: Keep code C# and rate 25% unchanged.\nClipboard line 02: Keep code C# and rate 25% unchanged.\nClipboard line 03: Keep code C# and rate 25% unchanged.\nClipboard line 04: Keep code C# and rate 25% unchanged.\nClipboard line 05: Keep code C# and rate 25% unchanged.\nClipboard line 06: Keep code C# and rate 25% unchanged.\nClipboard line 07: Keep code C# and rate 25% unchanged.\nClipboard line 08: Keep code C# and rate 25% unchanged.\nClipboard line 09: Keep code C# and rate 25% unchanged.\nClipboard line 10: Keep code C# and rate 25% unchanged.\nClipboard line 11: Keep code C# and rate 25% unchanged.\nClipboard line 12: Keep code C# and rate 25% unchanged.\nClipboard line 13: Keep code C# and rate 25% unchanged.\nClipboard line 14: Keep code C# and rate 25% unchanged.\nClipboard line 15: Keep code C# and rate 25% unchanged.\nClipboard line 16: Keep code C# and rate 25% unchanged.\nClipboard line 17: Keep code C# and rate 25% unchanged.\nClipboard line 18: Keep code C# and rate 25% unchanged.\nClipboard line 19: Keep code C# and rate 25% unchanged.\nClipboard line 20: Keep code C# and rate 25% unchanged.\nClipboard line 21: Keep code C# and rate 25% unchanged.\nClipboard line 22: Keep code C# and rate 25% unchanged.\nClipboard line 23: Keep code C# and rate 25% unchanged.\nClipboard line 24: Keep code C# and rate 25% unchanged.\nClipboard line 25: Keep code C# and rate 25% unchanged.\nClipboard line 26: Keep code C# and rate 25% unchanged.\nClipboard line 27: Keep code C# and rate 25% unchanged.\nClipboard line 28: Keep code C# and rate 25% unchanged.\nClipboard line 29: Keep code C# and rate 25% unchanged.\nClipboard line 30: Keep code C# and rate 25% unchanged.\nClipboard line 31: Keep code C# and rate 25% unchanged.\nClipboard line 32: Keep code C# and rate 25% unchanged.\nClipboard line 33: Keep code C# and rate 25% unchanged.\nClipboard line 34: Keep code C# and rate 25% unchanged.\nClipboard line 35: Keep code C# and rate 25% unchanged.\nClipboard line 36: Keep code C# and rate 25% unchanged.\nClipboard line 37: Keep code C# and rate 25% unchanged.\nClipboard line 38: Keep code C# and rate 25% unchanged.\nClipboard line 39: Keep code C# and rate 25% unchanged.\nClipboard line 40: Keep code C# and rate 25% unchanged.\nClipboard line 41: Keep code C# and rate 25% unchanged."
+    },
+    {
+      "cer": 0.00641025641025641,
+      "cold": false,
+      "engine": "ppocrv6-small",
+      "exact_token": false,
+      "file": "full-dark.png",
+      "ms": 1969.2791,
+      "text": "Carbon keeps clipboard history on this device.\nEmail: demo.user+notes@example.com\nSynthetic token: test_loJv3AcUYHL2qOrhvsAjQjkfbsjRw6VCIA7u\nconst selected = items[0]?.id ?? \"missing\";\nPath: C:\\Projects\\carbon\\preview_01.tsx\nC# rate: 25% | --dpi 300 | total $1,234.56\nMixed: O0 II1 {json} [array] foo_bar/path.ts"
+    },
+    {
+      "cer": 0.0,
+      "cold": false,
+      "engine": "ppocrv6-small",
+      "exact_token": null,
+      "file": "tall-dark.png",
+      "ms": 6335.4377,
+      "text": "Clipboard line 00: Keep code C# and rate 25% unchanged.\nClipboard line 01: Keep code C# and rate 25% unchanged.\nClipboard line 02: Keep code C# and rate 25% unchanged.\nClipboard line 03: Keep code C# and rate 25% unchanged.\nClipboard line 04: Keep code C# and rate 25% unchanged.\nClipboard line 05: Keep code C# and rate 25% unchanged.\nClipboard line 06: Keep code C# and rate 25% unchanged.\nClipboard line 07: Keep code C# and rate 25% unchanged.\nClipboard line 08: Keep code C# and rate 25% unchanged.\nClipboard line 09: Keep code C# and rate 25% unchanged.\nClipboard line 10: Keep code C# and rate 25% unchanged.\nClipboard line 11: Keep code C# and rate 25% unchanged.\nClipboard line 12: Keep code C# and rate 25% unchanged.\nClipboard line 13: Keep code C# and rate 25% unchanged.\nClipboard line 14: Keep code C# and rate 25% unchanged.\nClipboard line 15: Keep code C# and rate 25% unchanged.\nClipboard line 16: Keep code C# and rate 25% unchanged.\nClipboard line 17: Keep code C# and rate 25% unchanged.\nClipboard line 18: Keep code C# and rate 25% unchanged.\nClipboard line 19: Keep code C# and rate 25% unchanged.\nClipboard line 20: Keep code C# and rate 25% unchanged.\nClipboard line 21: Keep code C# and rate 25% unchanged.\nClipboard line 22: Keep code C# and rate 25% unchanged.\nClipboard line 23: Keep code C# and rate 25% unchanged.\nClipboard line 24: Keep code C# and rate 25% unchanged.\nClipboard line 25: Keep code C# and rate 25% unchanged.\nClipboard line 26: Keep code C# and rate 25% unchanged.\nClipboard line 27: Keep code C# and rate 25% unchanged.\nClipboard line 28: Keep code C# and rate 25% unchanged.\nClipboard line 29: Keep code C# and rate 25% unchanged.\nClipboard line 30: Keep code C# and rate 25% unchanged.\nClipboard line 31: Keep code C# and rate 25% unchanged.\nClipboard line 32: Keep code C# and rate 25% unchanged.\nClipboard line 33: Keep code C# and rate 25% unchanged.\nClipboard line 34: Keep code C# and rate 25% unchanged.\nClipboard line 35: Keep code C# and rate 25% unchanged.\nClipboard line 36: Keep code C# and rate 25% unchanged.\nClipboard line 37: Keep code C# and rate 25% unchanged.\nClipboard line 38: Keep code C# and rate 25% unchanged.\nClipboard line 39: Keep code C# and rate 25% unchanged.\nClipboard line 40: Keep code C# and rate 25% unchanged.\nClipboard line 41: Keep code C# and rate 25% unchanged."
+    }
+  ],
+  "summary": {
+    "ppocrv6-small": {
+      "exact_token_matches": 5,
+      "mean_cer": 0.008547008547008548,
+      "samples": 18,
+      "warm_mean_ms": 1515.0076647058827
+    },
+    "tesseract-carbon-0.1.19": {
+      "exact_token_matches": 2,
+      "mean_cer": 0.040233152286533826,
+      "samples": 18,
+      "warm_mean_ms": 5795.5639411764705
+    }
+  },
+  "build_profile": "debug: accuracy is representative; these wall times are not release-performance claims"
+}

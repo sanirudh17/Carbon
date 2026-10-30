@@ -20,7 +20,7 @@
 
 ## Overview
 
-Carbon is a local-first clipboard manager for Windows. Press a hotkey to summon an overlay anywhere, paste from a searchable history, organize clips into collections, expand snippets system-wide, and extract text from images with bundled Tesseract OCR — all without cloud, accounts, or telemetry.
+Carbon is a local-first clipboard manager for Windows. Press a hotkey to summon an overlay anywhere, paste from a searchable history, organize clips into collections, expand snippets system-wide, and extract text from images with bundled PP-OCRv6 Small OCR — all without cloud, accounts, or telemetry.
 
 Everything lives in a local SQLite database (`carbon_history.db`) with image files on disk in `%APPDATA%\com.carbon.clipboard\`. History, snippets, and settings never leave your computer.
 
@@ -61,7 +61,7 @@ Everything lives in a local SQLite database (`carbon_history.db`) with image fil
 
 **Image & Text Tools**
 
-- **OCR** — extract text from any image clip with one click. Preprocessing upscales 3×, enhances contrast, adds white padding, and runs two Tesseract PSM passes (`6` then `3` fallback); `eng.traineddata` ships inside the installer.
+- **OCR** ? extract text from image clips locally with bundled PP-OCRv6 Small and ONNX Runtime CPU. Models load on first use; full-window and tall images use overlapping native-resolution strips. No Python, GPU, system OCR installation, or first-use download is required.
 - **Transforms on paste** — choose per-paste or set default plain-text pasting and move-to-top behavior.
 
 **Smart Capture**
@@ -165,16 +165,15 @@ cd Carbon
 npm install
 ```
 
-### 2. Fetch the bundled OCR runtime
+### 2. Prepare the bundled OCR assets
 
-Tesseract is large (~164 MB) and not committed. Fetch once per machine:
-
-```powershell
-# Fetch tesseract to src-tauri/binaries/tesseract/ (tesseract.exe, DLLs, tessdata/eng.traineddata)
-# Use your preferred fetch script or copy from an existing local build
+```bash
+npm run prepare:ocr
+# Already-cached assets can be verified without network access:
+node scripts/prepare-ocr.mjs --offline
 ```
 
-This populates `src-tauri/binaries/tesseract/` (`tesseract.exe`, DLLs, `tessdata/eng.traineddata`) which `npm run tauri build` bundles via `tauri.conf.json` `bundle.resources: {"binaries/tesseract":"tesseract"}`. Without it the app builds but OCR will report `TESS_MISSING`.
+This fetches pinned PP-OCRv6 Small models and ONNX Runtime 1.31.0 CPU resources into `src-tauri/binaries/ocr/`. Sizes and SHA-256 hashes are recorded in `src-tauri/resources/ocr/manifest.json`; required license notices are bundled too. `npm run build` prepares/verifies these files automatically. Native builds fail if any resource is missing or modified. Recognition itself never downloads anything.
 
 ### 3. Run in development
 
@@ -203,7 +202,7 @@ npm run build
 | App shell | [Tauri v2](https://v2.tauri.app/) — Rust core + WebView2 |
 | Frontend | React 19, TypeScript, Vite, Zustand |
 | Database | SQLite (`rusqlite` bundled, WAL) |
-| OCR | Tesseract 5 (`eng.traineddata` bundled) |
+| OCR | PP-OCRv6 Small, OAR-OCR 0.10, ONNX Runtime 1.31 CPU (bundled) |
 | Hotkeys | `tauri-plugin-global-shortcut` + `WH_KEYBOARD_LL` hook |
 | Clipboard | Windows `Win32_System_DataExchange`, `html2md`, `image` |
 
@@ -216,7 +215,7 @@ src/               React + TypeScript frontend (Vite)
 src-tauri/
   src/             Rust core (clipboard_watcher, db, hotkey, shortcuts, expansion, ocr, paste, history, settings)
   icons/           Generated from dark PNG (128x128@2x, icon.ico/icns, StoreLogo)
-  binaries/tesseract/  Bundled OCR runtime (not committed, fetched per-machine)
+  binaries/ocr/        Bundled pinned OCR models/runtime (prepared at build time)
 ```
 
 ## Configuration & Data
@@ -241,8 +240,8 @@ Carbon is **local-first**. No network code, no cloud sync, no accounts, no telem
 **Overlay doesn't appear with the hotkey.**
 Another app may own that combo — Windows gives it to whoever registered first. Carbon keeps your previous hotkey and shows an inline error + toast. Try a different combo (`Ctrl+Shift+Z` is free by default).
 
-**OCR says “Tesseract is not installed”.**
-The `src-tauri/binaries/tesseract` folder is missing. Fetch it (see Building step 2) and rebuild, or install Tesseract via `winget install UB-Mannheim.TesseractOCR` for a system-wide fallback.
+**OCR reports missing bundled files.**
+Reinstall Carbon from the complete installer. For a development build, run `npm run prepare:ocr` before building. A separate Tesseract installation is not used by this OCR engine.
 
 **Nothing happens when I paste.**
 Check `Behavior → Keep window warm` and `Paste plain text` settings. If `move to top on paste` is on, the pasted clip bumps to the top of history.
@@ -258,4 +257,4 @@ Bundled Tesseract is third-party software under [Apache-2.0](https://github.com/
 
 ## Acknowledgements
 
-Built with [Tauri](https://v2.tauri.app/) and [Tesseract OCR](https://github.com/tesseract-ocr/tesseract). Icon design from the Carbon layered-clipboard illustration.
+Built with [Tauri](https://v2.tauri.app/) and [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) / [OAR-OCR](https://github.com/GreatV/oar-ocr). Icon design from the Carbon layered-clipboard illustration.

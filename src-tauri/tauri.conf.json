@@ -103,7 +103,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "binaries/tesseract": "tesseract"
+      "binaries/ocr": "ocr"
     }
   },
   "plugins": {

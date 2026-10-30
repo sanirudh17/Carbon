@@ -1,0 +1,141 @@
+/* Carbon's shared material foundation, adapted from Glint 0.2.1.
+   Native acrylic blurs the desktop. Tint belongs to the window once; light pane washes preserve hierarchy,
+   controls have a quiet surface, and menus retain contrast. */
+:root {
+  --control-bg: rgb(255 255 255 / 7%);
+  --control-hover: rgb(255 255 255 / 11%);
+  --control-edge: rgb(255 255 255 / 13%);
+  --control-selected: rgb(255 255 255 / 13%);
+  --control-blur: blur(16px);
+  --utility-bg: rgb(255 255 255 / 4%);
+  --editor-field: rgb(0 0 0 / 8%);
+  --focus-color: var(--accent);
+  --accent-fg: #000000;
+  --accent-fg-hover: #000000;
+}
+:root[data-theme="light"] {
+  --control-bg: rgb(255 255 255 / 26%);
+  --control-hover: rgb(255 255 255 / 62%);
+  --control-edge: rgb(0 0 0 / 20%);
+  --control-selected: rgb(255 255 255 / 65%);
+  --utility-bg: rgb(255 255 255 / 18%);
+  --editor-field: rgb(255 255 255 / 20%);
+}
+
+/* The platform fallback and Solid setting keep controls genuinely opaque. */
+html[data-material="solid"] {
+  --control-bg: #242424;
+  --control-hover: #303030;
+  --control-edge: #414141;
+  --control-selected: #363636;
+  --control-blur: none;
+  --utility-bg: #1b1b1b;
+  --editor-field: #171717;
+}
+html[data-material="solid"][data-theme="light"] {
+  --control-bg: #ffffff;
+  --control-hover: #f0f1f3;
+  --control-edge: #c1c5cb;
+  --control-selected: #e7e7e7;
+  --utility-bg: #f6f7f9;
+  --editor-field: #f6f7f9;
+}
+
+/* Main, Settings and the quick picker all use the same single root tint. */
+body.win-library { background: var(--glass-base); }
+:root[data-theme] :is(.searchbar, .topbar, .preview-head, .preview-foot, .overlay-bar, .settings-head) {
+  background: transparent;
+}
+:root[data-theme] :is(.preview-edit, .sn-textarea, .sn-editor-textarea, .sn-editor-input) {
+  background: transparent;
+  color: var(--text);
+}
+
+/* One secondary-action primitive, including settings and OCR actions. */
+:root[data-theme] :is(.btn.subtle:not(.accent):not(.primary), .c-dropdown-trigger, .hotkey-chip, .ocr-extract-btn, .recovery-copy-btn) {
+  background: var(--control-bg);
+  border: 1px solid var(--control-edge);
+  box-shadow: none;
+  color: var(--text-2);
+  backdrop-filter: var(--control-blur);
+  -webkit-backdrop-filter: var(--control-blur);
+}
+:root[data-theme] :is(.btn.subtle:not(.accent):not(.primary), .c-dropdown-trigger, .hotkey-chip, .ocr-extract-btn, .recovery-copy-btn):hover:not(:disabled) {
+  background: var(--control-hover);
+  border-color: var(--control-edge);
+  color: var(--text);
+}
+:root[data-theme] :is(.btn, .hotkey-chip, .seg-btn, .ocr-extract-btn, .recovery-copy-btn) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  gap: 6px;
+  min-height: 28px;
+  padding-block: 0;
+  line-height: 16px;
+  font-family: var(--font);
+  box-sizing: border-box;
+}
+:root[data-theme] :is(.btn, .seg-btn, .hotkey-chip) > span { line-height: inherit; }
+:root[data-theme] :is(.btn, .seg-btn, .hotkey-chip) > svg { flex-shrink: 0; align-self: center; }
+:root[data-theme] .settings .btn:not(.icon-btn) { min-height: 32px; }
+:root[data-theme] .settings .hotkey-chip { min-height: 30px; padding-inline: 10px; }
+:root[data-theme] .segmented-control { background: var(--control-bg); border-color: var(--control-edge); }
+:root[data-theme] .segmented-control .seg-btn.active {
+  background: var(--control-selected);
+  color: var(--text);
+  box-shadow: none;
+}
+:root[data-theme] .btn:disabled { opacity: .6; }
+
+/* All floating menus use the same denser, low-saturation frost. No
+   quick-overlay-only alpha override or duplicate translucent slab. */
+:root[data-theme] :is(.c-dropdown-list, .paste-dropdown-menu, .context-menu-popover, .sn-help-pop) {
+  background: var(--surface-float-bg);
+  backdrop-filter: var(--inapp-blur);
+  -webkit-backdrop-filter: var(--inapp-blur);
+}
+:root[data-theme] :is(.hotkey-guide, .settings .capture-rule-row) {
+  background: var(--utility-bg);
+  border-color: var(--glass-hairline);
+}
+:root[data-theme] .settings :is(input[type="number"], input[type="text"], textarea) {
+  background: var(--control-bg);
+  border-color: var(--control-edge);
+  color: var(--text);
+}
+
+:root[data-theme] :is(.modal-input, .sn-tag-edit, .sn-editor-wrap) {
+  background: var(--control-bg);
+  border-color: var(--control-edge);
+  color: var(--text);
+}
+
+/* Keep the existing accent palette; strengthen keyboard cues, not saturation. */
+:root[data-theme] :is(button, input, textarea, [role="option"]):focus-visible {
+  outline: 2px solid var(--focus-color);
+  outline-offset: 2px;
+}
+::selection { background: var(--accent-soft); color: var(--text); }
+input, textarea { caret-color: var(--accent); }
+.meta-value, .side-count, .row-meta { font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --control-blur: none;
+    --control-bg: var(--elev);
+    --control-hover: var(--elev-hover);
+    --utility-bg: var(--surface);
+  }
+}
+@media (forced-colors: active) {
+  :root { --control-bg: ButtonFace; --control-edge: ButtonText; --focus-color: Highlight; }
+  :root[data-theme] :is(.btn, .hotkey-chip, .seg-btn, .c-dropdown-trigger) { color: ButtonText; border-color: ButtonText; }
+}
+
+:root[data-theme] :is(.btn.accent, .btn.primary, .update-banner-btn.primary):hover:not(:disabled) { color: var(--accent-fg-hover, var(--accent-fg)); }
+:root[data-theme] :is(.sec-title, .set-hint, .side-section-title, .meta-label) { font-size: 11px; }
+
+/* The editing well is intentionally distinct from the list and pane wash. */
+:root[data-theme] .preview-edit { background: var(--editor-field); }

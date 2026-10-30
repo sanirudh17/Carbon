@@ -37,19 +37,40 @@ static OVERLAY_HIDE_ACK: AtomicU64 = AtomicU64::new(0);
 /// (overlay_painted / enlarged_painted), with a timeout fallback so a dead
 /// renderer can never leave a window stuck invisible.
 ///
-/// The cloak ALSO parks the OS-alpha mask at 0 (WS_EX_LAYERED + LWA_ALPHA)
-/// as a belt for the transitions the cloak itself cannot cover: ShowWindow /
-/// SetWindowPos / unminimize can clear DWMWA_CLOAK on some drivers (and the
-/// cold-boot cloak can transiently fail), and an unmasked window then
-/// composites its raw (white) surface for a frame — the white flash at
-/// startup when the main window's taskbar icon first appears, and the
-/// off-screen warm-up cycles' re-present. The layered bit is installed on
-/// the first cloak and never removed: the reveal path goes alpha 0 →
-/// uncloak → ramp to 255 layered throughout, so the acrylic-surface rebuild
-/// a toggle would trigger never lands on a visible frame.
+/// Solid keeps its native alpha animation. Desktop Acrylic uses Glint's
+/// non-layered HWND configuration while visible. Cold/stale preparation can
+/// still use an alpha-zero safety mask, removed behind the verified cloak
+/// before reveal, after the renderer has submitted its content frames.
 #[cfg(target_os = "windows")]
 pub fn set_window_cloaked(window: &tauri::WebviewWindow, cloaked: bool) {
     use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+    // A failed Solid cloak can still use the persistent alpha mask. Glass
+    // normally has no layered style; recover a rare emergency mask only
+    // while the physical cloak is verified, never on a visible frame.
+    if !cloaked && crate::vibrancy::uses_compositor_glass(window)
+        && crate::vibrancy::has_layered_mask(window) {
+        let generation = match window.label() {
+            "overlay" => OVERLAY_SHOW_GEN.load(Ordering::SeqCst),
+            _ => ENLARGED_SHOW_GEN.load(Ordering::SeqCst),
+        };
+        if let Ok(handle) = window.hwnd() {
+            let hidden = 1i32;
+            unsafe {
+                if DwmSetWindowAttribute(HWND(handle.0 as _), DWMWA_CLOAK,
+                    (&hidden as *const i32).cast(), 4).is_err() { return; }
+            }
+        }
+        if physical_cloak_state(window) != Some(true)
+            || !crate::vibrancy::release_layered_mask(window) { return; }
+        present_window_now(window);
+        flush_dwm_ordering();
+        flush_dwm_ordering();
+        let current = match window.label() {
+            "overlay" => OVERLAY_SHOW_GEN.load(Ordering::SeqCst),
+            _ => ENLARGED_SHOW_GEN.load(Ordering::SeqCst),
+        };
+        if current != generation { return; }
+    }
     // Mask BEFORE requesting a cloak. At cold boot DWM can reject or defer
     // the attribute; that must not expose a raw surface during ShowWindow.
     if cloaked {
@@ -82,23 +103,15 @@ pub fn set_window_cloaked(window: &tauri::WebviewWindow, cloaked: bool) {
         std::thread::sleep(std::time::Duration::from_millis(3));
     }
     if !cloak_ok {
+        if cloaked { set_native_window_alpha(window, 0); }
         crate::paste::log_diag(&format!(
             "[DWM_CLOAK] FAILED window='{}' cloaked={} after 3 attempts (cold-flash risk) — flag NOT updated; next show/hide retries.",
             window.label(),
             cloaked
         ));
     }
-    // While cloaked the window is excluded from DWM composition: park the
-    // OS-alpha mask at 0 (invisibly). The mask must already be in place
-    // before every ShowWindow / SetWindowPos / unminimize transition — those
-    // can clear the cloak on some drivers, and an unmasked window then
-    // composites its raw (white) surface for a frame: the cold-boot flash
-    // when the main window first appears, and the off-screen warm-up cycles'
-    // re-present. Layered-from-here-on also means the bit is NEVER toggled
-    // during the visible lifetime (reveal goes 0 → uncloak → ramp 255), so
-    // the acrylic-surface rebuild a toggle would trigger can't land on a
-    // visible frame. A failed cloak also remains masked: callers requested
-    // hiding or preparation, and only a painted acknowledgement may reveal.
+    // Solid keeps its alpha mask between reveals. Glass keeps a verified
+    // DWM cloak instead, without the incompatible steady-state layered flag.
     // Single choke point for the logical-visibility flags: every cloak and
     // every painted-ack/fallback uncloak flows through here, so
     // is_overlay_visible() and is_main_visible() can never go stale.
@@ -283,6 +296,23 @@ fn present_window_now(_win: &tauri::WebviewWindow) {}
 /// Used at uncloak so residual unpainted compositor frames composite at alpha ~0 (invisible).
 #[cfg(target_os = "windows")]
 pub fn set_window_alpha(window: &tauri::WebviewWindow, alpha: u8) {
+    if crate::vibrancy::uses_compositor_glass(window) {
+        let stale = match window.label() {
+            "overlay" => !overlay_surface_warm(),
+            "main" | "enlarged" => !main_surface_warm(),
+            _ => true,
+        };
+        // Keep the cold-frame safety belt, but never retain a layered HWND
+        // for visible glass. set_window_cloaked(false) releases it under cloak.
+        if alpha == 0 && stale { set_native_window_alpha(window, 0); }
+        return;
+    }
+    set_native_window_alpha(window, alpha);
+}
+
+#[cfg(target_os = "windows")]
+fn set_native_window_alpha(window: &tauri::WebviewWindow, alpha: u8) {
+
     use windows::Win32::UI::WindowsAndMessaging::{
         GetWindowLongW, SetLayeredWindowAttributes, SetWindowLongW, GWL_EXSTYLE, LWA_ALPHA,
         WS_EX_LAYERED,
@@ -293,14 +323,9 @@ pub fn set_window_alpha(window: &tauri::WebviewWindow, alpha: u8) {
             let native = HWND(hwnd.0 as *mut _);
             let ex = GetWindowLongW(native, GWL_EXSTYLE);
             if alpha == 255 {
-                // Steady-state reveal: KEEP WS_EX_LAYERED. Removing it here
-                // rebuilt the DWM acrylic composition surface on EVERY
-                // reveal — a white frame in glass mode (the old every-open
-                // flash this gate replaced). Layered + LWA_ALPHA 255
-                // composites identically to non-layered; the bit is installed
-                // by the first cloak and never removed (see
-                // set_window_cloaked), so the visible lifetime never toggles
-                // it.
+                // Solid keeps its native alpha mask between reveals.
+                // Visible glass never reaches this branch; its cold mask
+                // is released behind the verified DWM cloak instead.
                 let _ = SetLayeredWindowAttributes(native, COLORREF(0), 255, LWA_ALPHA);
                 crate::vibrancy::set_window_border_suppressed(window);
             } else {
@@ -327,6 +352,11 @@ pub fn ramp_window_alpha(
     token: u64,
     is_overlay: bool,
 ) {
+    if crate::vibrancy::uses_compositor_glass(&window) {
+        // Glass reveal uses the painted/cloaked gate and its existing CSS fade.
+        // Never create an alpha animation that disables the native backdrop.
+        return;
+    }
     if duration_ms == 0 {
         set_window_alpha(&window, target);
         return;

@@ -5,12 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "node scripts/prepare-ocr.mjs && tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "node --test test/*.test.mjs",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --lib",
-    "canary": "node scripts/visual-canary.mjs"
+    "canary": "node scripts/visual-canary.mjs",
+    "prepare:ocr": "node scripts/prepare-ocr.mjs"
   },
   "dependencies": {
     "@hugeicons/core-free-icons": "^4.3.2",

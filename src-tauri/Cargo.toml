@@ -10,6 +10,8 @@ name = "carbon_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
+sha2 = "0.10"
+serde_json = "1"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
@@ -39,6 +41,7 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Dwm",
     "Win32_Storage_FileSystem",
     "Win32_UI_Shell",
+    "Win32_UI_Controls",
     "Win32_Security",
     "Win32_System_Com",
     "Win32_System_Variant",
@@ -70,3 +73,14 @@ webview2-com = "0.38"
 windows-core = "0.61"
 
 
+
+# Pinned CPU-only neural OCR; runtime and weights ship as resources.
+[dependencies.oar-ocr]
+version = "=0.10.0"
+default-features = false
+features = ["simd"]
+
+[dependencies.ort]
+version = "=2.0.0-rc.13"
+default-features = false
+features = ["std", "load-dynamic"]

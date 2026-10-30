@@ -40,3 +40,8 @@ src-tauri/target/release/bundle/
 
 # Updater signing keys (private — never commit)
 .updater-key*
+
+# Local comparison captures and build tooling
+.validation/
+.taste-skill/
+.taste-direction.txt

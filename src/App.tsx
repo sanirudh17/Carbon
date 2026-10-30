@@ -1,3 +1,4 @@
+import { applyAccentContrast } from './lib/accentContrast';
 import { useEffect, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { QuickOverlay } from './components/QuickOverlay';
@@ -120,9 +121,10 @@ export function App() {
       try { localStorage.setItem('carbon_theme', 'light'); } catch {}
     } else if (settings.theme === 'dark') {
       setTheme('dark');
-      document.documentElement.removeAttribute('data-theme');
+      document.documentElement.setAttribute('data-theme', 'dark');
       try { localStorage.setItem('carbon_theme', 'dark'); } catch {}
     }
+    applyAccentContrast(settings.accent_color || getComputedStyle(document.documentElement).getPropertyValue('--accent-base').trim() || '#5B7CFA', settings.theme || document.documentElement.dataset.theme || 'dark');
     if (settings.window_material) {
       const mat = settings.window_material === 'acrylic' ? 'glass' : settings.window_material;
       document.documentElement.setAttribute('data-material', mat);
@@ -337,11 +339,12 @@ export function App() {
 
   const toggleTheme = async () => {
     const nextTheme = theme === 'dark' ? 'light' : 'dark';
+    applyAccentContrast(getComputedStyle(document.documentElement).getPropertyValue('--accent-base').trim() || '#5B7CFA', nextTheme);
     setTheme(nextTheme);
     if (nextTheme === 'light') {
       document.documentElement.setAttribute('data-theme', 'light');
     } else {
-      document.documentElement.removeAttribute('data-theme');
+      document.documentElement.setAttribute('data-theme', 'dark');
     }
     try {
       const current = await invoke<Record<string, unknown>>('get_settings');

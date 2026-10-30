@@ -304,6 +304,10 @@ impl DbState {
             conn.execute("ALTER TABLE entries ADD COLUMN ocr_text TEXT", [])
                 .map_err(|e| e.to_string())?;
         }
+        if !col_names.contains(&"ocr_engine".to_string()) {
+            conn.execute("ALTER TABLE entries ADD COLUMN ocr_engine TEXT", []).map_err(|e| e.to_string())?;
+        }
+
 
         // FTS5 Table for fast search
         conn.execute(
@@ -1564,10 +1568,17 @@ impl DbState {
         Ok(item)
     }
 
+    pub fn get_current_ocr_text(&self, id: &str) -> Result<Option<String>, String> {
+        use rusqlite::OptionalExtension;
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.query_row("SELECT ocr_text FROM entries WHERE id = ?1 AND ocr_engine = 'ppocrv6-small-1'", [id], |row| row.get::<_, Option<String>>(0))
+            .optional().map(|value| value.flatten()).map_err(|e| e.to_string())
+    }
+
     pub fn update_ocr_text(&self, id: &str, ocr_text: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
-            "UPDATE entries SET ocr_text = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2",
+            "UPDATE entries SET ocr_text = ?1, ocr_engine = 'ppocrv6-small-1', updated_at = datetime('now', 'localtime') WHERE id = ?2",
             params![ocr_text, id],
         )
         .map_err(|e| e.to_string())?;
@@ -1790,7 +1801,7 @@ impl DbState {
                     file_paths=excluded.file_paths, is_video=excluded.is_video, file_size=excluded.file_size,
                     is_pinned=excluded.is_pinned, source_app=excluded.source_app,
                     created_at=excluded.created_at, updated_at=excluded.updated_at, qr_content=excluded.qr_content,
-                    is_sensitive=excluded.is_sensitive, expires_at=excluded.expires_at, ocr_text=excluded.ocr_text",
+                    is_sensitive=excluded.is_sensitive, expires_at=excluded.expires_at, ocr_text=excluded.ocr_text, ocr_engine=NULL",
                 params![
                     entry.id,
                     entry.content_type,

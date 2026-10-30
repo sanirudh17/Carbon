@@ -278,7 +278,7 @@ export const ArgPromptWindow: React.FC = () => {
               padding: '10px 12px',
               borderRadius: 8,
               border: '1px solid var(--glass-border)',
-              background: 'var(--glass-elev)',
+              background: 'var(--control-bg, var(--glass-elev))',
               color: 'var(--text)',
               fontSize: 13,
               outline: 'none',
