@@ -128,6 +128,7 @@ const EnlargedRow = memo(function EnlargedRow({
   isDragging,
   queueIdx,
   onRowClick,
+  onOpenActions,
   onDragStart,
   onDragEnd,
 }: {
@@ -138,6 +139,7 @@ const EnlargedRow = memo(function EnlargedRow({
   isDragging: boolean;
   queueIdx: number;
   onRowClick: (item: ClipItem, idx: number, e: React.MouseEvent) => void;
+  onOpenActions: (item: ClipItem, idx: number, e: React.MouseEvent) => void;
   onDragStart: (item: ClipItem, e: React.DragEvent) => void;
   onDragEnd: () => void;
 }) {
@@ -149,6 +151,7 @@ const EnlargedRow = memo(function EnlargedRow({
       onDragEnd={onDragEnd}
       className={`row ${isSelected ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragging ? 'is-dragging' : ''} ${queueIdx >= 0 ? 'in-queue' : ''}`}
       onClick={(e) => onRowClick(item, index, e)}
+      onContextMenu={(e) => onOpenActions(item, index, e)}
     >
       <div className={`type-icon ${item.content_type === 'image' && item.image_path && !item.is_sensitive ? 'has-thumb' : ''}`}>
         <ClipTileIcon item={item} />
@@ -1242,6 +1245,15 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       setRenderMode(true);
     }
   }, [items, selectedIndex]);
+
+  const handleRowActions = useCallback((item: ClipItem, idx: number, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    handleRowClick(item, idx, e);
+    setActionIndex(0);
+    setActionPanelOpen(true);
+  }, [handleRowClick]);
+
 
   // Group once per items change — toggling the sidebar must not regroup the list
   const dateGroups = useMemo(() => groupItemsByDate(items), [items]);
@@ -2425,7 +2437,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                 {pinError && <div className="pin-error-msg">Incorrect passcode. Try again.</div>}
                 <div className="col-pin-actions">
                   <button type="submit" className="btn primary" disabled={!pinInput}>
-                    Unlock Collection
+                    <span className="carbon-control-label">Unlock Collection</span>
                   </button>
                 </div>
               </form>
@@ -2499,7 +2511,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                     onClick={() => setSearch('')}
                     title="Clear search query"
                   >
-                    ✕
+                    <span className="carbon-control-label">✕</span>
                   </button>
                 )}
               </div>
@@ -2526,7 +2538,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                       handleClearQueue();
                     }}
                   >
-                    Clear
+                    <span className="carbon-control-label">Clear</span>
                   </button>
                 </div>
               </div>
@@ -2565,6 +2577,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                             isDragging={draggingId === item.id}
                             queueIdx={queueIdx}
                             onRowClick={handleRowClick}
+                            onOpenActions={handleRowActions}
                             onDragStart={handleDragStart}
                             onDragEnd={handleDragEnd}
                           />
@@ -2574,7 +2587,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   ));
                 })()
               )}
-              {(hasMoreMatches || loadedItems.length > items.length) && <button className="btn subtle search-load-more" onClick={() => setSearchLimit((n) => n + 200)}>{search.trim() ? 'Load more matches' : 'Load more entries'}</button>}
+              {(hasMoreMatches || loadedItems.length > items.length) && <button className="btn subtle search-load-more" onClick={() => setSearchLimit((n) => n + 200)}><span className="carbon-control-label">{search.trim() ? 'Load more matches' : 'Load more entries'}</span></button>}
             </div>
           </>
         )}
@@ -2608,10 +2621,10 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   </div>
                   <div className="bulk-confirm-actions">
                     <button className="btn subtle" onClick={() => setBulkConfirmDelete(false)}>
-                      Cancel
+                      <span className="carbon-control-label">Cancel</span>
                     </button>
                     <button className="btn danger" onClick={handleBulkDelete}>
-                      Confirm Delete ({selectedIds.size})
+                      <span className="carbon-control-label">Confirm Delete (</span>{selectedIds.size}<span className="carbon-control-label">)</span>
                     </button>
                   </div>
                 </div>
@@ -2719,19 +2732,19 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
               </span>
               {selectedItem &&
                 (!!search.trim() || selectedItem.content_type === 'rich_text' ||
-                  (Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!))) && (
+                  (selectedItem.content_type === 'text' && Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!))) && (
                 <div className="seg" style={{ marginRight: 4 }}>
                   <button
                     className={`seg-btn ${renderMode ? 'active' : ''}`}
                     onClick={() => setRenderMode(true)}
                   >
-                    Render
+                    <span className="carbon-control-label">Render</span>
                   </button>
                   <button
                     className={`seg-btn ${!renderMode ? 'active' : ''}`}
                     onClick={() => setRenderMode(false)}
                   >
-                    Raw
+                    <span className="carbon-control-label">Raw</span>
                   </button>
                 </div>
               )}
@@ -2758,7 +2771,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                           }}
                         >
                           <span>{act.label}</span>
-                          {act.shortcut ? <span className="key">{act.shortcut}</span> : null}
+                          {act.shortcut ? <span className="key"><span className="carbon-control-label">{act.shortcut}</span></span> : null}
                         </div>
                       ))}
                     </div>
@@ -2871,13 +2884,13 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                         style={{ marginTop: 8 }}
                         onClick={() => handleRevealFile(selectedItem.text_content!.split('\n')[0])}
                       >
-                        <FolderIcon /> Reveal in Explorer
+                        <FolderIcon /> <span className="carbon-control-label">Reveal in Explorer</span>
                       </button>
                     )}
                   </div>
                 </div>
               ) : (!!search.trim() || selectedItem.content_type === 'rich_text' ||
-                  (Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!))) &&
+                  (selectedItem.content_type === 'text' && Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!))) &&
                 renderMode ? (
                 /* Read-only RENDERED preview (Rich text & Markdown). Toggle to Raw to edit the source. */
                 <div
@@ -2959,7 +2972,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                 <span className="action-item-left">
                   {act.icon} {act.label}
                 </span>
-                {act.shortcut ? <span className="key">{act.shortcut}</span> : null}
+                {act.shortcut ? <span className="key"><span className="carbon-control-label">{act.shortcut}</span></span> : null}
               </div>
             ))}
           </div>
@@ -2975,7 +2988,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                 <FolderIcon />
               </span>
               <span className="modal-title">New Collection</span>
-              <button className="modal-close-btn" onClick={() => setCreateColModalOpen(false)}>✕</button>
+              <button className="modal-close-btn" onClick={() => setCreateColModalOpen(false)}><span className="carbon-control-label">✕</span></button>
             </div>
             <form onSubmit={handleCreateCollectionSubmit}>
               <div className="modal-body">
@@ -2999,10 +3012,10 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn subtle" onClick={() => setCreateColModalOpen(false)}>
-                  Cancel
+                  <span className="carbon-control-label">Cancel</span>
                 </button>
                 <button type="submit" className="btn primary" disabled={!newColName.trim()}>
-                  Create Collection
+                  <span className="carbon-control-label">Create Collection</span>
                 </button>
               </div>
             </form>
@@ -3019,7 +3032,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                 <ColorsIcon />
               </span>
               <span className="modal-title">Change Color &mdash; {changeColorModal.col.name}</span>
-              <button className="modal-close-btn" onClick={() => setChangeColorModal(null)}>✕</button>
+              <button className="modal-close-btn" onClick={() => setChangeColorModal(null)}><span className="carbon-control-label">✕</span></button>
             </div>
             <form onSubmit={handleChangeColorSubmit}>
               <div className="modal-body color-picker-modal-body">
@@ -3060,10 +3073,10 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn subtle" onClick={() => setChangeColorModal(null)}>
-                  Cancel
+                  <span className="carbon-control-label">Cancel</span>
                 </button>
                 <button type="submit" className="btn primary">
-                  Save Color
+                  <span className="carbon-control-label">Save Color</span>
                 </button>
               </div>
             </form>
@@ -3078,7 +3091,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
             <div className="modal-header">
               <span className="modal-head-icon"><EditIcon /></span>
               <span className="modal-title">Rename Collection</span>
-              <button className="modal-close-btn" onClick={() => setRenameColModal(null)}>✕</button>
+              <button className="modal-close-btn" onClick={() => setRenameColModal(null)}><span className="carbon-control-label">✕</span></button>
             </div>
             <form onSubmit={handleRenameCollectionSubmit}>
               <div className="modal-body">
@@ -3093,10 +3106,10 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn subtle" onClick={() => setRenameColModal(null)}>
-                  Cancel
+                  <span className="carbon-control-label">Cancel</span>
                 </button>
                 <button type="submit" className="btn primary" disabled={!renameColModal.newName.trim()}>
-                  Save
+                  <span className="carbon-control-label">Save</span>
                 </button>
               </div>
             </form>
@@ -3121,7 +3134,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   setVerifyChangePinError('');
                 }}
               >
-                ✕
+                <span className="carbon-control-label">✕</span>
               </button>
             </div>
             <form onSubmit={handleVerifyChangePinSubmit}>
@@ -3155,10 +3168,10 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                     setVerifyChangePinError('');
                   }}
                 >
-                  Cancel
+                  <span className="carbon-control-label">Cancel</span>
                 </button>
                 <button type="submit" className="btn primary" disabled={!verifyChangePinInput}>
-                  Continue
+                  <span className="carbon-control-label">Continue</span>
                 </button>
               </div>
             </form>
@@ -3184,7 +3197,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   setPinModalError('');
                 }}
               >
-                ✕
+                <span className="carbon-control-label">✕</span>
               </button>
             </div>
             <form onSubmit={handleSetPinSubmit}>
@@ -3240,14 +3253,14 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                     setPinModalError('');
                   }}
                 >
-                  Cancel
+                  <span className="carbon-control-label">Cancel</span>
                 </button>
                 <button
                   type="submit"
                   className="btn primary"
                   disabled={!pinModalInput || !pinModalConfirm}
                 >
-                  {pinModal.mode === 'change' ? 'Update Passcode' : 'Set Lock'}
+                  <span className="carbon-control-label">{pinModal.mode === 'change' ? 'Update Passcode' : 'Set Lock'}</span>
                 </button>
               </div>
             </form>
@@ -3288,11 +3301,11 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                 >
                   {recoveryCopied ? (
                     <>
-                      <CheckIcon size={12} /> Copied to Clipboard
+                      <CheckIcon size={12} /> <span className="carbon-control-label">Copied to Clipboard</span>
                     </>
                   ) : (
                     <>
-                      <CopyIcon /> Copy Recovery Code
+                      <CopyIcon /> <span className="carbon-control-label">Copy Recovery Code</span>
                     </>
                   )}
                 </button>
@@ -3307,7 +3320,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   setRecoveryCopied(false);
                 }}
               >
-                I Have Saved My Code
+                <span className="carbon-control-label">I Have Saved My Code</span>
               </button>
             </div>
           </div>
@@ -3333,7 +3346,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   setResetPasscodeError('');
                 }}
               >
-                ✕
+                <span className="carbon-control-label">✕</span>
               </button>
             </div>
             <form onSubmit={handleResetPasscodeSubmit}>
@@ -3399,14 +3412,14 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                     setResetPasscodeError('');
                   }}
                 >
-                  Cancel
+                  <span className="carbon-control-label">Cancel</span>
                 </button>
                 <button
                   type="submit"
                   className="btn primary"
                   disabled={!resetRecoveryCodeInput.trim() || !resetNewPinInput || !resetConfirmPinInput}
                 >
-                  Reset &amp; Unlock
+                  <span className="carbon-control-label">Reset &amp; Unlock</span>
                 </button>
               </div>
             </form>
@@ -3428,7 +3441,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   setDeleteColClipsToo(false);
                 }}
               >
-                ✕
+                <span className="carbon-control-label">✕</span>
               </button>
             </div>
             <div className="modal-body">
@@ -3462,7 +3475,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   setDeleteColClipsToo(false);
                 }}
               >
-                Cancel
+                <span className="carbon-control-label">Cancel</span>
               </button>
               <button
                 type="button"
@@ -3478,9 +3491,9 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   fetchItems();
                 }}
               >
-                {(deleteColConfirm.item_count || 0) > 0 && deleteColClipsToo
+                <span className="carbon-control-label">{(deleteColConfirm.item_count || 0) > 0 && deleteColClipsToo
                   ? 'Delete Collection & Clips'
-                  : 'Delete Collection'}
+                  : 'Delete Collection'}</span>
               </button>
             </div>
           </div>
@@ -3502,7 +3515,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   setRemovePinError('');
                 }}
               >
-                ✕
+                <span className="carbon-control-label">✕</span>
               </button>
             </div>
             <form onSubmit={handleRemovePinSubmit}>
@@ -3537,10 +3550,10 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                     setRemovePinError('');
                   }}
                 >
-                  Cancel
+                  <span className="carbon-control-label">Cancel</span>
                 </button>
                 <button type="submit" className="btn primary" disabled={!removePinInput}>
-                  Remove Lock
+                  <span className="carbon-control-label">Remove Lock</span>
                 </button>
               </div>
             </form>
@@ -3557,7 +3570,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
               <span className="modal-title">
                 Add {selectedIds.size > 1 ? `${selectedIds.size} items` : 'clip'} to Collection
               </span>
-              <button className="modal-close-btn" onClick={() => setAddToColModalOpen(false)}>✕</button>
+              <button className="modal-close-btn" onClick={() => setAddToColModalOpen(false)}><span className="carbon-control-label">✕</span></button>
             </div>
             <div className="modal-body col-selection-list">
               {collections.length === 0 ? (
@@ -3630,7 +3643,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                 setColContextMenu(null);
               }}
             >
-              <span className="cm-ic"><EditIcon /></span> Rename
+              <span className="cm-ic"><EditIcon /></span> <span className="carbon-control-label">Rename</span>
             </button>
             <button
               className="context-menu-item"
@@ -3639,7 +3652,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                 setColContextMenu(null);
               }}
             >
-              <span className="cm-ic"><ColorsIcon /></span> Change Color
+              <span className="cm-ic"><ColorsIcon /></span> <span className="carbon-control-label">Change Color</span>
             </button>
             {colContextMenu.col.is_locked ? (
               <>
@@ -3652,7 +3665,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                     setColContextMenu(null);
                   }}
                 >
-                  <span className="cm-ic"><LockIcon /></span> Change Passcode
+                  <span className="cm-ic"><LockIcon /></span> <span className="carbon-control-label">Change Passcode</span>
                 </button>
                 <button
                   className="context-menu-item"
@@ -3665,7 +3678,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                     setColContextMenu(null);
                   }}
                 >
-                  <span className="cm-ic"><LockIcon /></span> Reset with Recovery Code
+                  <span className="cm-ic"><LockIcon /></span> <span className="carbon-control-label">Reset with Recovery Code</span>
                 </button>
                 <button
                   className="context-menu-item"
@@ -3676,7 +3689,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                     setColContextMenu(null);
                   }}
                 >
-                  <span className="cm-ic"><UnlockIcon /></span> Remove Passcode
+                  <span className="cm-ic"><UnlockIcon /></span> <span className="carbon-control-label">Remove Passcode</span>
                 </button>
                 {unlockedCollectionIds.has(colContextMenu.col.id) && (
                   <button
@@ -3690,7 +3703,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                       setColContextMenu(null);
                     }}
                   >
-                    <span className="cm-ic"><LockIcon /></span> Lock Now
+                    <span className="cm-ic"><LockIcon /></span> <span className="carbon-control-label">Lock Now</span>
                   </button>
                 )}
               </>
@@ -3702,7 +3715,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   setColContextMenu(null);
                 }}
               >
-                <span className="cm-ic"><LockIcon /></span> Lock with Passcode
+                <span className="cm-ic"><LockIcon /></span> <span className="carbon-control-label">Lock with Passcode</span>
               </button>
             )}
             <div className="context-menu-divider" />
@@ -3713,7 +3726,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                 setColContextMenu(null);
               }}
             >
-              <span className="cm-ic"><DeleteIcon /></span> Delete Collection
+              <span className="cm-ic"><DeleteIcon /></span> <span className="carbon-control-label">Delete Collection</span>
             </button>
           </div>
         </div>

@@ -315,3 +315,56 @@ input, textarea { caret-color: var(--accent); }
   backdrop-filter: blur(24px) saturate(110%);
   -webkit-backdrop-filter: blur(24px) saturate(110%);
 }
+
+/* One quiet scroll treatment for menus, lists, Settings, and previews.
+   Component rules that deliberately hide a scrollbar remain more specific. */
+:root { --scrollbar-thumb: rgb(255 255 255 / 24%); --scrollbar-hover: rgb(255 255 255 / 40%); }
+:root[data-theme="light"] { --scrollbar-thumb: rgb(0 0 0 / 24%); --scrollbar-hover: rgb(0 0 0 / 40%); }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb, :root[data-theme] .action-modal::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border: none;
+  border-radius: 999px;
+  min-height: 24px;
+}
+:root[data-theme="light"] ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); }
+::-webkit-scrollbar-thumb:hover, :root[data-theme="light"] ::-webkit-scrollbar-thumb:hover, :root[data-theme] .action-modal::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
+}
+/* Action sheets use the same glass recipe as collection dialogs. */
+:root[data-theme] :is(.action-modal-overlay, .modal-backdrop) { backdrop-filter: none; -webkit-backdrop-filter: none; }
+:root[data-theme="dark"] :is(.action-modal-overlay, .modal-backdrop) { background: rgb(0 0 0 / 10%); }
+:root[data-theme="light"] :is(.action-modal-overlay, .modal-backdrop) { background: rgb(255 255 255 / 10%); }
+:root[data-theme] :is(.action-modal, .context-menu-popover, .modal-card) {
+  backdrop-filter: blur(24px) saturate(110%);
+  -webkit-backdrop-filter: blur(24px) saturate(110%);
+}
+:root[data-theme] .recovery-display-box { background: var(--editor-field); border-color: var(--control-edge); }
+:root[data-theme] .recovery-code-badge { text-shadow: none; color: var(--text); }
+:root[data-theme="light"] .recovery-warning-banner { color: #854d0e; }
+:root[data-theme] .btn.danger-solid {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  color: var(--danger);
+  box-shadow: none;
+  font-weight: 500;
+}
+:root[data-theme] .btn.danger-solid:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 22%, transparent); }
+:root[data-theme="light"] .btn.danger-solid { color: color-mix(in srgb, var(--danger) 78%, black); }
+:root[data-theme] :is(.segmented-control .seg-btn, .hotkey-chip, .key) { line-height: 1; }
+:root[data-theme] .carbon-control-label { display: block; line-height: 1; }
+@supports (text-box-trim: trim-both) {
+  :root[data-theme] .carbon-control-label { text-box-trim: trim-both; text-box-edge: cap alphabetic; }
+}
+@media (forced-colors: active) {
+  ::-webkit-scrollbar-thumb { background: ButtonText; }
+  :root[data-theme] .btn.danger-solid { background: ButtonFace; color: ButtonText; border-color: ButtonText; }
+}
+
+:root[data-theme] :is(.passcode-input, .pin-input, .recovery-code-input) {
+  background: var(--editor-field);
+  border-color: var(--control-edge);
+  color: var(--text);
+}

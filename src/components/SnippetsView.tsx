@@ -419,7 +419,7 @@ export const SnippetsView: React.FC<{
                 onClick={() => setSearch('')}
                 title="Clear search query"
               >
-                ✕
+                <span className="carbon-control-label">✕</span>
               </button>
             )}
             <span className="filter-box" title="Filter by tag">
@@ -453,7 +453,7 @@ export const SnippetsView: React.FC<{
               <div className="sub">Author plain-text expansions, then copy or paste them anywhere.</div>
               <div className="empty-cta">
                 <button className="btn primary" onClick={openCreateDialog}>
-                  <PlusIcon size={12} /> Create your first snippet
+                  <PlusIcon size={12} /> <span className="carbon-control-label">Create your first snippet</span>
                 </button>
               </div>
             </div>
@@ -579,11 +579,11 @@ export const SnippetsView: React.FC<{
               </span>
               <div className="sn-foot-actions">
                 <button type="button" className="btn subtle sn-actions-btn" onClick={() => { setActionIndex(0); setActionOpen(true); }}>
-                  <span className="key">Ctrl+K</span>
+                  <span className="key"><span className="carbon-control-label">Ctrl+K</span></span>
                   <span>Actions</span>
                 </button>
                 <button className="btn primary" disabled={selected.content.length === 0} onClick={() => useSnippet(selected, 'copy')}>
-                  <CopyIcon /> Copy to Clipboard
+                  <CopyIcon /> <span className="carbon-control-label">Copy to Clipboard</span>
                 </button>
               </div>
             </div>
@@ -635,7 +635,7 @@ export const SnippetsView: React.FC<{
                 <span className="action-item-left">
                   {act.icon} {act.label}
                 </span>
-                <span className="key">{act.shortcut}</span>
+                <span className="key"><span className="carbon-control-label">{act.shortcut}</span></span>
               </div>
             ))}
           </div>

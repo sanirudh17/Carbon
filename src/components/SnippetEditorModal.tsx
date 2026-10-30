@@ -225,7 +225,7 @@ export const SnippetEditorModal: React.FC<{
         <div className="modal-header">
           <span className="modal-head-icon"><SnippetIcon /></span>
           <span className="modal-title">{snippet ? 'Edit Snippet' : 'New Snippet'}</span>
-          <button className="modal-close-btn" onClick={onClose}>✕</button>
+          <button className="modal-close-btn" onClick={onClose}><span className="carbon-control-label">✕</span></button>
         </div>
         <form
           onSubmit={(e) => {
@@ -400,10 +400,10 @@ export const SnippetEditorModal: React.FC<{
           </div>
           <div className="modal-footer">
             <button type="button" className="btn subtle" onClick={onClose}>
-              Cancel
+              <span className="carbon-control-label">Cancel</span>
             </button>
             <button type="submit" className="btn primary">
-              {snippet ? 'Save Changes' : 'Create Snippet'}
+              <span className="carbon-control-label">{snippet ? 'Save Changes' : 'Create Snippet'}</span>
             </button>
           </div>
         </form>

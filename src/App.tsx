@@ -394,8 +394,8 @@ export function App() {
         </div>
       ) : (
         <div className="update-banner-actions">
-          <button className="update-banner-btn primary" onClick={handleBannerUpdate}>Update</button>
-          <button className="update-banner-btn ghost" onClick={handleBannerLater} title="Hide until next release">Later</button>
+          <button className="update-banner-btn primary" onClick={handleBannerUpdate}><span className="carbon-control-label">Update</span></button>
+          <button className="update-banner-btn ghost" onClick={handleBannerLater} title="Hide until next release"><span className="carbon-control-label">Later</span></button>
         </div>
       )}
     </div>
@@ -460,21 +460,21 @@ export function App() {
               style={{ borderRadius: 999 }}
               onClick={() => setActiveTab('overlay')}
             >
-              Quick Overlay
+              <span className="carbon-control-label">Quick Overlay</span>
             </button>
             <button
               className={`btn subtle ${activeTab === 'enlarged' ? 'accent' : ''}`}
               style={{ borderRadius: 999 }}
               onClick={() => setActiveTab('enlarged')}
             >
-              Enlarged Window
+              <span className="carbon-control-label">Enlarged Window</span>
             </button>
             <button
               className={`btn subtle ${activeTab === 'settings' ? 'accent' : ''}`}
               style={{ borderRadius: 999 }}
               onClick={() => setActiveTab('settings')}
             >
-              Settings
+              <span className="carbon-control-label">Settings</span>
             </button>
           </div>
 

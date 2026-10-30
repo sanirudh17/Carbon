@@ -215,7 +215,11 @@ export function sanitizeRichHtml(html: string): string {
         }
         // Unwrap interactive/form shells (and <head>): keep the children
         // (text) in place so visible labels aren't dropped with the tag.
-        if (UNWRAP_TAGS.has(tag)) {
+        // Read-only task checkboxes are meaningful document content. Keep
+        // their checked state while preventing any interaction or handlers.
+        const readonlyCheckbox = tag === 'input' && child.getAttribute('type')?.toLowerCase() === 'checkbox';
+        if (readonlyCheckbox) child.setAttribute('disabled', '');
+        if (UNWRAP_TAGS.has(tag) && !readonlyCheckbox) {
           const parent = child.parentNode;
           if (parent) {
             while (child.firstChild) parent.insertBefore(child.firstChild, child);
@@ -284,7 +288,7 @@ export function sanitizeRichHtml(html: string): string {
           if (
             name.startsWith('on') ||
             ((name === 'href' || name === 'src') &&
-              BANNED_PROTOCOLS.some((p) => val.startsWith(p)))
+              BANNED_PROTOCOLS.some((p) => val.replace(/[\u0000-\u0020\u007f]/g, '').startsWith(p)))
           ) {
             // Keep the onerror we just set for img
             if (tag === 'img' && name === 'onerror') continue;

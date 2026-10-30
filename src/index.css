@@ -101,7 +101,7 @@
   /* ── Floating-surface Material Tokens (ADDENDUM v14) ── */
   /* Translucent frosted glass: floats intentionally sample the backdrop via
      blur + alpha so both windows keep the drop-transparency effect. */
-  --surface-float-glass: rgba(18, 18, 18, 0.84);
+  --surface-float-glass: rgba(18, 18, 18, 0.72);
   --surface-float-solid: #15161B;
   --surface-float: var(--surface-float-glass);
   --surface-float-bg: var(--surface-float-glass);
@@ -213,7 +213,7 @@ html.win-library #root {
 
   /* ── Floating-surface Material Tokens (Light) (ADDENDUM v14) ── */
   /* Parity with dark: same frosted-glass alpha contract. */
-  --surface-float-glass: rgba(255, 255, 255, 0.82);
+  --surface-float-glass: rgba(255, 255, 255, 0.76);
   --surface-float-solid: #FFFFFF;
   --surface-float: var(--surface-float-glass);
   --surface-float-bg: var(--surface-float-glass);
@@ -516,8 +516,8 @@ input, textarea, select, button {
 }
 
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
 
 ::-webkit-scrollbar-thumb {
@@ -2507,7 +2507,7 @@ section:last-child {
 }
 
 .action-modal::-webkit-scrollbar {
-  width: 5px;
+  width: 4px;
 }
 
 .action-modal::-webkit-scrollbar-thumb {

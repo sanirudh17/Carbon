@@ -704,7 +704,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                   setHotkeyError(null);
                 }}
               >
-                {recording === 'quick' ? draftCombo || 'Press keys…' : settings.quick_hotkey}
+                <span className="carbon-control-label">{recording === 'quick' ? draftCombo || 'Press keys…' : settings.quick_hotkey}</span>
               </button>
               {recording === 'quick' ? (
                 <button
@@ -716,7 +716,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                     setHotkeyError(null);
                   }}
                 >
-                  Cancel
+                  <span className="carbon-control-label">Cancel</span>
                 </button>
               ) : !isDefaultHotkey('quick_hotkey', settings.quick_hotkey) ? (
                 <button
@@ -725,7 +725,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                   title="Reset to default (Ctrl+Shift+Z)"
                   onClick={() => handleResetHotkey('quick_hotkey')}
                 >
-                  Reset
+                  <span className="carbon-control-label">Reset</span>
                 </button>
               ) : null}
             </div>
@@ -749,7 +749,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                   setHotkeyError(null);
                 }}
               >
-                {recording === 'enlarged' ? draftCombo || 'Press keys…' : settings.enlarged_hotkey}
+                <span className="carbon-control-label">{recording === 'enlarged' ? draftCombo || 'Press keys…' : settings.enlarged_hotkey}</span>
               </button>
               {recording === 'enlarged' ? (
                 <button
@@ -761,7 +761,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                     setHotkeyError(null);
                   }}
                 >
-                  Cancel
+                  <span className="carbon-control-label">Cancel</span>
                 </button>
               ) : !isDefaultHotkey('enlarged_hotkey', settings.enlarged_hotkey) ? (
                 <button
@@ -770,7 +770,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                   title="Reset to default (Ctrl+Alt+X)"
                   onClick={() => handleResetHotkey('enlarged_hotkey')}
                 >
-                  Reset
+                  <span className="carbon-control-label">Reset</span>
                 </button>
               ) : null}
             </div>
@@ -1036,7 +1036,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                   updateSetting('capture_rules', [...(settings.capture_rules || []), newRule]);
                 }}
               >
-                + Add Rule
+                <span className="carbon-control-label">+ Add Rule</span>
               </button>
             </div>
 
@@ -1102,7 +1102,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                             updateSetting('capture_rules', updated);
                           }}
                         >
-                          ✕
+                          <span className="carbon-control-label">✕</span>
                         </button>
                       </div>
                     </div>
@@ -1263,7 +1263,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
             </div>
             <div className="set-control">
               <button className="btn danger" onClick={() => setShowClearConfirm(true)}>
-                Clear
+                <span className="carbon-control-label">Clear</span>
               </button>
             </div>
           </div>
@@ -1486,7 +1486,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                   updateSetting('theme', nextTheme);
                 }}
               >
-                Switch to {currentTheme === 'light' ? 'Dark' : 'Light'}
+                <span className="carbon-control-label">Switch to</span> <span className="carbon-control-label">{currentTheme === 'light' ? 'Dark' : 'Light'}</span>
               </button>
             </div>
           </div>
@@ -1513,7 +1513,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                     className={`seg-btn ${(settings.window_material || 'acrylic') === option.value ? 'active' : ''}`}
                     onClick={() => updateSetting('window_material', option.value as any)}
                   >
-                    {option.label}
+                    <span className="carbon-control-label">{option.label}</span>
                   </button>
                 ))}
               </div>
@@ -1536,7 +1536,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420, width: '100%' }}>
             <div className="modal-header">
               <span className="modal-title">Enable Snippet Expansion</span>
-              <button className="modal-close-btn" onClick={() => setShowExpansionConsent(false)}>✕</button>
+              <button className="modal-close-btn" onClick={() => setShowExpansionConsent(false)}><span className="carbon-control-label">✕</span></button>
             </div>
             <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '16px 18px' }}>
               <p style={{ fontSize: 13, lineHeight: 1.5, margin: 0, color: 'var(--text-2)' }}>
@@ -1563,8 +1563,8 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               </div>
             </div>
             <div className="modal-footer" style={{ padding: '12px 18px' }}>
-              <button className="btn subtle" onClick={() => setShowExpansionConsent(false)}>Cancel</button>
-              <button className="btn primary" onClick={confirmEnableExpansion}>Enable Expansion</button>
+              <button className="btn subtle" onClick={() => setShowExpansionConsent(false)}><span className="carbon-control-label">Cancel</span></button>
+              <button className="btn primary" onClick={confirmEnableExpansion}><span className="carbon-control-label">Enable Expansion</span></button>
             </div>
           </div>
         </div>
@@ -1581,7 +1581,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
             <div className="modal-header">
               <span className="modal-head-icon modal-head-danger"><DeleteIcon /></span>
               <span className="modal-title" id="clear-history-title">Clear history?</span>
-              <button className="modal-close-btn" onClick={() => setShowClearConfirm(false)} aria-label="Cancel">✕</button>
+              <button className="modal-close-btn" onClick={() => setShowClearConfirm(false)} aria-label="Cancel"><span className="carbon-control-label">✕</span></button>
             </div>
             <div className="modal-body">
               <p className="modal-desc">
@@ -1593,10 +1593,10 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
             </div>
             <div className="modal-footer">
               <button type="button" className="btn subtle" onClick={() => setShowClearConfirm(false)} autoFocus>
-                Cancel
+                <span className="carbon-control-label">Cancel</span>
               </button>
               <button type="button" className="btn danger-solid" onClick={handleClearHistory}>
-                Delete history
+                <span className="carbon-control-label">Delete history</span>
               </button>
             </div>
           </div>

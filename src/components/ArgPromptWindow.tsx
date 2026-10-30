@@ -296,11 +296,11 @@ export const ArgPromptWindow: React.FC = () => {
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 'auto', paddingTop: 4 }}>
           <button className="btn subtle" type="button" onClick={() => handleSubmit(null)}>
-            Cancel
+            <span className="carbon-control-label">Cancel</span>
           </button>
           {!isSelect && (
             <button className="btn accent" type="button" onClick={() => handleSubmit(value)}>
-              Insert
+              <span className="carbon-control-label">Insert</span>
             </button>
           )}
         </div>

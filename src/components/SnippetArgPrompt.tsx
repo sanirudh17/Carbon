@@ -28,7 +28,7 @@ export const SnippetArgPrompt: React.FC<{
         <div className="modal-header">
           <span className="modal-head-icon"><BoltIcon /></span>
           <span className="modal-title">{spec.name}</span>
-          <button className="modal-close-btn" onClick={onCancel}>✕</button>
+          <button className="modal-close-btn" onClick={onCancel}><span className="carbon-control-label">✕</span></button>
         </div>
         <form
           onSubmit={(e) => {
@@ -102,14 +102,14 @@ export const SnippetArgPrompt: React.FC<{
           </div>
           <div className="modal-footer">
             <button type="button" className="btn subtle" onClick={onCancel}>
-              Cancel
+              <span className="carbon-control-label">Cancel</span>
             </button>
             <button
               type="submit"
               className="btn primary"
               disabled={hasOptions && !value}
             >
-              Insert
+              <span className="carbon-control-label">Insert</span>
             </button>
           </div>
         </form>

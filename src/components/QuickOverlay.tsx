@@ -118,6 +118,7 @@ const OverlayRow = memo(function OverlayRow({
   isDragging,
   queueIdx,
   onSelect,
+  onOpenActions,
   onDragStart,
   onDragEnd,
 }: {
@@ -127,6 +128,7 @@ const OverlayRow = memo(function OverlayRow({
   isDragging: boolean;
   queueIdx: number;
   onSelect: (idx: number) => void;
+  onOpenActions: (idx: number, e: React.MouseEvent) => void;
   onDragStart: (item: ClipItem, e: React.DragEvent) => void;
   onDragEnd: () => void;
 }) {
@@ -138,6 +140,7 @@ const OverlayRow = memo(function OverlayRow({
       onDragEnd={onDragEnd}
       className={`row ${isSelected ? 'selected' : ''} ${isDragging ? 'is-dragging' : ''} ${queueIdx >= 0 ? 'in-queue' : ''}`}
       onClick={() => onSelect(index)}
+      onContextMenu={(e) => onOpenActions(index, e)}
     >
       <div className={`type-icon ${item.content_type === 'image' && item.image_path && !item.is_sensitive ? 'has-thumb' : ''}`}>
         <ClipTileIcon item={item} />
@@ -666,7 +669,7 @@ export const QuickOverlay: React.FC = () => {
     setRenderMode(
       !!search.trim() || item.content_type === 'rich_text' ||
         Boolean(item.html_content) ||
-        (Boolean(item.text_content) && isMarkdownContent(item.text_content || ''))
+        (item.content_type === 'text' && Boolean(item.text_content) && isMarkdownContent(item.text_content || ''))
     );
   }, [selectedIndex, displayItems, search]);
 
@@ -714,6 +717,15 @@ export const QuickOverlay: React.FC = () => {
     setSelectedIndex(idx);
     focusSearchInput();
   }, [commitPendingEdit]);
+
+  const handleRowActions = useCallback((idx: number, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    handleSelectRow(idx);
+    setActionIndex(0);
+    setActionPanelOpen(true);
+  }, [handleSelectRow]);
+
 
   // Drag-out: exact mirror of the main window — same payload, same empty
   // drag image, same dragging highlight. Sensitive clips only expose their
@@ -1934,7 +1946,7 @@ export const QuickOverlay: React.FC = () => {
                 }}
                 title="Clear search query"
               >
-                ✕
+                <span className="carbon-control-label">✕</span>
               </button>
             )}
             <Dropdown
@@ -1978,7 +1990,7 @@ export const QuickOverlay: React.FC = () => {
                 }}
                 title="Clear search query"
               >
-                ✕
+                <span className="carbon-control-label">✕</span>
               </button>
             )}
             <span className="filter-box" title="Filter by tag">
@@ -2017,7 +2029,7 @@ export const QuickOverlay: React.FC = () => {
                   handleClearQueue();
                 }}
               >
-                Clear
+                <span className="carbon-control-label">Clear</span>
               </button>
             </div>
           </div>
@@ -2060,6 +2072,7 @@ export const QuickOverlay: React.FC = () => {
                           isDragging={draggingId === item.id}
                           queueIdx={queueIdx}
                           onSelect={handleSelectRow}
+                          onOpenActions={handleRowActions}
                           onDragStart={handleOverlayDragStart}
                           onDragEnd={handleOverlayDragEnd}
                         />
@@ -2069,7 +2082,7 @@ export const QuickOverlay: React.FC = () => {
               ));
             })()
           )}
-            {(hasMoreMatches || items.length > displayItems.length) && <button className="btn subtle search-load-more" onClick={() => setSearchLimit((n) => n + 200)}>{search.trim() ? 'Load more matches' : 'Load more entries'}</button>}
+            {(hasMoreMatches || items.length > displayItems.length) && <button className="btn subtle search-load-more" onClick={() => setSearchLimit((n) => n + 200)}><span className="carbon-control-label">{search.trim() ? 'Load more matches' : 'Load more entries'}</span></button>}
           </div>
           {/* Snippets list (always mounted; hidden when the Clips tab is active) */}
           <div className={`overlay-list sn-overlay-list ${tab === 'clips' ? 'inactive-tab' : ''}`}>
@@ -2164,7 +2177,7 @@ export const QuickOverlay: React.FC = () => {
               (() => {
                 const hasRenderedVersion =
                   !!search.trim() || selectedItem.content_type === 'rich_text' ||
-                  (Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!));
+                  (selectedItem.content_type === 'text' && Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!));
 
                 return (
                   <>
@@ -2186,13 +2199,13 @@ export const QuickOverlay: React.FC = () => {
                             className={`seg-btn ${renderMode ? 'active' : ''}`}
                             onClick={() => setRenderMode(true)}
                           >
-                            Render
+                            <span className="carbon-control-label">Render</span>
                           </button>
                           <button
                             className={`seg-btn ${!renderMode ? 'active' : ''}`}
                             onClick={() => setRenderMode(false)}
                           >
-                            Raw
+                            <span className="carbon-control-label">Raw</span>
                           </button>
                         </div>
                       )}
@@ -2267,7 +2280,7 @@ export const QuickOverlay: React.FC = () => {
                 }
               }}
             >
-              <span className="key">Enter</span>
+              <span className="key"><span className="carbon-control-label">Enter</span></span>
               <b>{targetApp ? `Paste to ${targetApp}` : 'Paste'}</b>
             </span>
             <span
@@ -2282,13 +2295,13 @@ export const QuickOverlay: React.FC = () => {
                 }
               }}
             >
-              <span className="key">Ctrl+K</span>
+              <span className="key"><span className="carbon-control-label">Ctrl+K</span></span>
               <b>Actions</b>
             </span>
           </div>
           <div className="bar-right">
             <span className="hint" onClick={() => requestHide()}>
-              <span className="key">Esc</span>
+              <span className="key"><span className="carbon-control-label">Esc</span></span>
               <b>Close</b>
             </span>
           </div>
@@ -2313,7 +2326,7 @@ export const QuickOverlay: React.FC = () => {
                   <span className="action-item-left">
                     {act.icon} {act.label}
                   </span>
-                  {act.shortcut ? <span className="key">{act.shortcut}</span> : null}
+                  {act.shortcut ? <span className="key"><span className="carbon-control-label">{act.shortcut}</span></span> : null}
                 </div>
               ))}
             </div>
@@ -2337,7 +2350,7 @@ export const QuickOverlay: React.FC = () => {
                     setNewColName('');
                   }}
                 >
-                  ✕
+                  <span className="carbon-control-label">✕</span>
                 </button>
               </div>
               <div className="modal-body col-selection-list">
@@ -2392,7 +2405,7 @@ export const QuickOverlay: React.FC = () => {
                         className="btn subtle"
                         onClick={() => setShowCreateInline(false)}
                       >
-                        Cancel
+                        <span className="carbon-control-label">Cancel</span>
                       </button>
                       <button
                         type="button"
@@ -2400,7 +2413,7 @@ export const QuickOverlay: React.FC = () => {
                         disabled={!newColName.trim()}
                         onClick={() => handleCreateAndAddToCollection(selectedItem.id)}
                       >
-                        Create &amp; Add
+                        <span className="carbon-control-label">Create &amp; Add</span>
                       </button>
                     </div>
                   </div>
@@ -2440,7 +2453,7 @@ export const QuickOverlay: React.FC = () => {
                   <span className="action-item-left">
                     {act.icon} {act.label}
                   </span>
-                  <span className="key">{act.shortcut}</span>
+                  <span className="key"><span className="carbon-control-label">{act.shortcut}</span></span>
                 </div>
               ))}
             </div>

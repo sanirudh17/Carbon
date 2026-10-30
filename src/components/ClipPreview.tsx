@@ -6,6 +6,7 @@ import { ClipItem, ContentType } from '../types';
 import { getTypeColor, LockIcon, EyeIcon, EyeOffIcon } from './Icons';
 import {
   prepareRichPreview,
+  sanitizeRichHtml,
 } from '../lib/richText';
 
 /* ═════════════════════════════════════════════════════════════════════
@@ -504,7 +505,7 @@ const ClipPreviewBody = memo(function ClipPreviewBody({ item, forceRaw = false }
           {item.expires_at ? 'Auto-expires shortly · Value masked for privacy' : 'Value masked for privacy'}
         </div>
         <button className="btn subtle sensitive-reveal-btn" onClick={() => setRevealed(true)}>
-          <EyeIcon /> Reveal sensitive content
+          <EyeIcon /> <span className="carbon-control-label">Reveal sensitive content</span>
         </button>
       </div>
     );
@@ -620,8 +621,8 @@ const ClipPreviewBody = memo(function ClipPreviewBody({ item, forceRaw = false }
       }
 
       // Markdown text — formatted Markdown HTML
-      if (isMarkdownContent(text)) {
-        const renderedMd = renderMarkdownToHtml(text);
+      if (item.content_type === 'text' && isMarkdownContent(text)) {
+        const renderedMd = sanitizeRichHtml(renderMarkdownToHtml(text));
         if (renderedMd) {
           return (
             <div className="rich-doc" dangerouslySetInnerHTML={{ __html: renderedMd }} />
@@ -662,7 +663,7 @@ const ClipPreviewBody = memo(function ClipPreviewBody({ item, forceRaw = false }
             <LockIcon /> Sensitive clip revealed {item.expires_at ? '(auto-expires soon)' : ''}
           </span>
           <button className="btn subtle small sensitive-remask-btn" onClick={() => setRevealed(false)}>
-            <EyeOffIcon /> Mask
+            <EyeOffIcon /> <span className="carbon-control-label">Mask</span>
           </button>
         </div>
       )}
