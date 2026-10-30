@@ -76,7 +76,7 @@
   color-scheme: dark;
 
   /* ── Raycast / Tinycast Frosted-Glass Material Tokens (Dark) ── */
-  --glass-base: rgba(0, 0, 0, 0.52);   /* library window base */
+  --glass-base: rgba(0, 0, 0, 0.72);   /* library window base */
   --glass-panel-bg: rgba(18, 18, 22, 0.70); /* overlay panel */
   --glass-sidebar: rgba(255, 255, 255, 0.035);  /* lifted navigation */
   --glass-list: transparent;     /* library list col */
@@ -124,7 +124,6 @@ html.win-overlay #root {
 
 body.win-overlay,
 html.win-overlay body {
-  --glass-base: rgba(0, 0, 0, 0.52);
   /* One tint per window, shared by list, sidebar and editing panes. */
   background: var(--glass-base);
 }
@@ -137,13 +136,6 @@ html.win-library #root {
   overflow: hidden;
   border: none !important;
   outline: none !important;
-}
-
-body.win-library,
-html.win-library body {
-  --glass-base: rgba(0, 0, 0, 0.52);
-  /* Same 8px DWM-arc match as the overlay: the library's top corners
-     showed the same mild intrusion with a 14px CSS arc. */
 }
 
 [data-theme="light"] {
@@ -197,7 +189,7 @@ html.win-library body {
   color-scheme: light;
 
   /* ── Raycast / Tinycast Frosted-Glass Material Tokens (Light) ── */
-  --glass-base: rgba(255, 255, 255, 0.54);
+  --glass-base: rgba(255, 255, 255, 0.60);
   --glass-panel-bg: rgba(248, 248, 250, 0.74);
   --glass-sidebar: rgba(255, 255, 255, 0.12);
   --glass-list: transparent;
@@ -236,12 +228,6 @@ html.win-library body {
 html[data-theme="light"].win-overlay body,
 body.win-overlay[data-theme="light"] {
   background: var(--glass-base);
-}
-
-[data-theme="light"] body.win-library,
-html[data-theme="light"].win-library body,
-body.win-library[data-theme="light"] {
-  --glass-base: rgba(255, 255, 255, 0.54);
 }
 
 /* Solid mode or reduced-transparency accessibility fallback */
