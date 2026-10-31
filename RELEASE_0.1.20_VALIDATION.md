@@ -22,3 +22,22 @@
 ## Release checks
 
 `node scripts/verify-release.mjs 0.1.20 .validation/release` passed, including signature verification, tamper rejection, manifest validation, versions, and checksums. Signing used the existing external key without printing credentials. Public artifact verification is recorded after publication.
+
+## Public verification
+
+Verified 2026-10-31T05:23:15+00:00.
+
+- Published release: https://github.com/sanirudh17/Carbon/releases/tag/v0.1.20
+- Release tag source commit: `23d9be9d1c305fd299ed6953b1091cab6118ac79`; main was fast-forwarded and pushed with the annotated tag.
+- All four assets were downloaded anonymously from the public release and matched local bytes and SHA-256 hashes.
+- The stable releases/latest/download/latest.json endpoint returned the identical v0.1.20 manifest.
+- The verifier passed again against the downloaded assets, including cryptographic signature verification, trusted-comment verification, tamper rejection, versions, manifest URL/BOM, and checksums.
+
+| Asset | Bytes | SHA-256 |
+|---|---:|---|
+| Carbon_0.1.20_x64-setup.exe | 39537518 | `c92e2c260869d9f296a8464abf0270259d3c14f6d190cb7df0933ccea71030bf` |
+| Carbon_0.1.20_x64-setup.exe.sig | 416 | `af378366b45df732c17cefa6ec26916eb539703a07a07ed54e49f819fd31a8ea` |
+| latest.json | 4707 | `9a3f44c94d3e6d4ba8180ceb0fceded20dda7f3cb1e716cf0bcba5e84f8bc8f8` |
+| SHA256SUMS | 273 | `b486d559a4a6e3dee74af037aa8c7fbd458b20c3adfaf383329a1ccdaba89dcc` |
+
+The isolated preview was left open with capture enabled, normal main-window stacking, and the original installed-app startup registration restored. Production history was not changed for validation.
