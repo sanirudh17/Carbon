@@ -22,8 +22,8 @@ The revised CSS uses Glint's theme-led glass: a 72% black / 52% white root tint,
 
 The user approved native implementation and testing on 2026-10-30. The user subsequently approved local main-branch integration after the caption regression fix; no release or public artifacts were published.
 
-- 176 frontend checks, TypeScript/production frontend compilation, and 57 Rust tests passed.
-- Built NSIS preview `0.1.20-preview.5`. SHA-256: `8ec744150b25058b85c5699b944ea365ce0ae6699f15ce7dc3eb29c6b468fed4` (39,536,740 bytes).
+- 210 frontend checks, TypeScript/production frontend compilation, and 57 native tests passed (native source unchanged in the menu follow-up).
+- Built NSIS preview `0.1.20-preview.6`. SHA-256: `1636dd209a8e7676b86f5dcc5aa010613e8d6be259f5b183d7bfa5a366b631a0` (39,548,061 bytes).
 - Extracted the actual installer and verified all seven pinned OCR runtime/model/dictionary/license files. The running preview loaded ONNX Runtime from that extracted `ocr` directory, not a development cache. Two synthetic screenshots took 760/731ms; cached reads took 4/5ms.
 - Four backend show/hide cycles per window and a theme roundtrip passed. Native screenshots then covered main, Quick Overlay, and collection dialogs in dark/light. Windows reported Desktop Acrylic=3, rounded corners=2, no cloak while visible, no layered flag while visible, and standard native frame rendering disabled.
 - Image-action labels measured centered to less than 0.5px in both themes. Collection dialogs use a 10% scrim, no full-window CSS blur, and a frosted dialog sheet; the underlying app and desktop remain visible.
@@ -85,3 +85,5 @@ Right-clicking a clip row in both windows selects that row and opens the existin
 The 34-case content matrix covers Office-like and Gmail-like HTML, dark sources, tables/lists, legacy colors, low contrast, malformed HTML, Unicode and CF_HTML byte offsets, missing-image context, Markdown, Raw/RTF fallbacks, literal code/link/email text, files, colors, empty content and sensitive masking. It found and fixed unintended Markdown rendering of code/address-like content, Markdown bypassing HTML sanitization, and obfuscated executable URL schemes. Disabled task checkboxes retain their state. All 210 frontend checks pass. This is a representative regression matrix, not a guarantee for every external application, authenticated image source or arbitrary clipboard payload.
 
 References: [Chrome scrollbar styling](https://developer.chrome.com/docs/css-ui/scrollbar-styling), [Chrome precise text alignment](https://developer.chrome.com/blog/css-text-box-trim).
+
+The final preview.6 installer was extracted and all seven pinned OCR assets verified. Packaged checks passed for mouse-opened actions in main and Quick Overlay, both themes, 4px scrollbar width, 24px menu blur, mild scrims, non-layered glass, native corners/caption suppression, key/segmented label alignment, and the opaque/no-blur Solid fallback. Installed Carbon was running during this review and retained its shortcuts; the isolated preview uses Ctrl+Shift+J/L to avoid that conflict. Production history and installed files were left unchanged. No public release was published.
