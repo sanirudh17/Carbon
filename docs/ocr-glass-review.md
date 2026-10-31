@@ -87,3 +87,25 @@ The 34-case content matrix covers Office-like and Gmail-like HTML, dark sources,
 References: [Chrome scrollbar styling](https://developer.chrome.com/docs/css-ui/scrollbar-styling), [Chrome precise text alignment](https://developer.chrome.com/blog/css-text-box-trim).
 
 The final preview.6 installer was extracted and all seven pinned OCR assets verified. Packaged checks passed for mouse-opened actions in main and Quick Overlay, both themes, 4px scrollbar width, 24px menu blur, mild scrims, non-layered glass, native corners/caption suppression, key/segmented label alignment, and the opaque/no-blur Solid fallback. Installed Carbon was running during this review and retained its shortcuts; the isolated preview uses Ctrl+Shift+J/L to avoid that conflict. Production history and installed files were left unchanged. No public release was published.
+
+### Final list, scrollbar, and snippet-startup refinements
+
+The approved reference now informs the dark list/sidebar: a slightly lifted charcoal wash and 12px rounded rows, preserving the existing layout, accents, and native glass. Shared scrollbars are 3px in both directions. Their explicit colors are charcoal `#30343a` in dark mode and pale `#d8dde3` in light mode, with theme-specific hover colors and a transparent track. The prior translucent white thumb was correctly custom-styled but appeared gray over dark surfaces. Hidden metadata scrollbars remain hidden; browser checks confirm standard scrollbar properties do not override the custom width.
+
+Snippet startup uses live events plus a bounded 200ms status refresh for up to seven seconds. Active stops the refresh; unmount/disable cancels late updates. A delayed enable reply cannot overwrite an already received Active status. If the hook remains unavailable, Settings reports Not active rather than Starting indefinitely. Tests cover missed events, transient IPC errors, the startup deadline, and cancellation. The Settings back arrow is centered on both axes.
+
+Quick Overlay file previews now expose Reveal in Explorer using the existing native command. Shared path parsing supports structured-only captures, CRLF text fallbacks, malformed/non-array JSON, and filters invalid array members. The main preview uses that parser as well. Browser checks validate the exact mocked Reveal command without launching Explorer or touching private files.
+
+All 216 frontend tests pass. The bounded browser review passed startup status recovery without navigation, back-arrow centering, 3px themed scrollbars, Quick Overlay Reveal, right-click/Ctrl+K parity, and existing menu/dialog glass in both themes. Native reveal/cloak, background-color, caption, and decode-before-render safeguards were not changed. Per-app paste defaults and clip revision history remain deferred; this pass adds no new paste policy or revision-storage behavior.
+
+The final preview.8 installer passed seven bundled OCR asset size/SHA-256 pins. Native checks passed for both themes/windows: 3px scrollbar width, exact theme/hover colors, menu glass and Solid fallback, button/key alignment, non-layered glass, caption suppression and native corners. Enabling snippets reached Active in the same Settings view in 112ms; the back-arrow center offset was zero on both axes. The first/repeated/stale opening exercise used 13 Quick Overlay openings and sampled 102 visible frames, detecting zero white capture-pane frames. Sampling can miss very brief artifacts; no claim is made that a rare sub-frame flash is impossible. No native presentation code was changed.
+
+Preview.8 installer: 39,530,422 bytes; SHA-256 `b6090c3cc59133c65f0837bd1dd77567e34753e1a973e4aac7e0a835c877bf11`. It is an isolated local preview, with Ctrl+Shift+J/L shortcuts.
+
+### Restore the published scrollbar reference
+
+The subsequent user review preferred the previous GitHub version over the 3px variant. A fresh origin/tag comparison confirmed v0.1.19 (`1136b2b5d515279ea5199904775bd014591256a2`) used a 6px track, 1px transparent inset, 4px visible thumb, 4px rounding, dark `#26282e` and light `#c9c9d1`. Those dimensions/colors now replace the 3px variant throughout Carbon, including action menus. Hover remains theme-correct: dark `#33363e`, light `#b7b7c3`. Explicit content-box clipping and selector specificity preserve the inset in normal/hover states and both themes. Deliberately hidden metadata scrollbars remain hidden. Browser checks confirm the released geometry, correct colors, and unchanged startup/Reveal/centering behavior.
+
+### Published release styling
+
+The final user request reduces the shared track to 5px with the same 1px transparent inset, making the visible thumb roughly 3px. This supersedes the earlier 6px reference geometry. Both panes and all shared scroll surfaces use it. Native checks passed with the final CSS applied to both isolated windows; the production v0.1.20 assets include that same rule. See RELEASE_0.1.20_VALIDATION.md for release evidence.

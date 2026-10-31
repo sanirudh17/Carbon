@@ -1,3 +1,4 @@
+import { refreshExpansionUntilActive, type ExpansionStatus } from '../lib/expansionStatus';
 import { applyAccentContrast } from '../lib/accentContrast';
 import React, { useEffect, useState, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
@@ -80,7 +81,8 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   const [draftCombo, setDraftCombo] = useState('');
   const [hotkeyError, setHotkeyError] = useState<{ field: 'quick' | 'enlarged'; message: string } | null>(null);
   const [hotkeyStatus, setHotkeyStatus] = useState<HotkeyStatusInfo | null>(null);
-  const [expansionStatus, setExpansionStatus] = useState<'off' | 'not_yet_active' | 'active'>('off');
+  const [expansionStatus, setExpansionStatus] = useState<ExpansionStatus>('off');
+  const [expansionStartupExpired, setExpansionStartupExpired] = useState(false);
   const [showExpansionConsent, setShowExpansionConsent] = useState(false);
 
   // Updates — mirrors Typr's General → Updates: version, button, status + progress
@@ -96,7 +98,8 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     fetchSettings();
     fetchStats();
     fetchExpansionStatus();
-    // No polling — status is checked on demand when Settings is opened.
+    // Startup polling below is bounded; live events remain the primary source.
+    // Initial status — status is checked on demand when Settings is opened.
     // Listen for live updates when the hook state changes.
     let unlisten: (() => void) | undefined;
     listen<string>('expansion-status-changed', (e) => {
@@ -109,6 +112,20 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       unlisten?.();
     };
   }, []);
+
+  useEffect(() => {
+    setExpansionStartupExpired(false);
+    if (!settings.snippet_expansion_enabled || expansionStatus === 'active') return;
+    const controller = new AbortController();
+    void refreshExpansionUntilActive(
+      () => invoke<ExpansionStatus>('get_expansion_status'),
+      (status) => setExpansionStatus((previous) => previous === 'active' ? previous : status),
+      { signal: controller.signal },
+    ).then((status) => {
+      if (!controller.signal.aborted && status !== 'active') setExpansionStartupExpired(true);
+    });
+    return () => controller.abort();
+  }, [settings.snippet_expansion_enabled, expansionStatus === 'active']);
 
   const committedRef = useRef(false);
   const clipMergeDebounceRef = useRef<number | null>(null);
@@ -370,7 +387,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     try {
       const st = await invoke<string>('get_expansion_status');
       if (st === 'active' || st === 'not_yet_active' || st === 'off') {
-        setExpansionStatus(st as 'off' | 'not_yet_active' | 'active');
+        setExpansionStatus((previous) => previous === 'active' ? previous : st as ExpansionStatus);
       }
     } catch (err) {
       console.error('Failed to fetch expansion status:', err);
@@ -401,7 +418,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
     setExpansionStatus('not_yet_active');
     try {
       const st = await invoke<string>('set_snippet_expansion_enabled', { enabled: true });
-      if (st) setExpansionStatus(st as 'off' | 'not_yet_active' | 'active');
+      if (st) setExpansionStatus((previous) => previous === 'active' ? previous : st as ExpansionStatus);
     } catch (err) {
       console.error('Failed to enable expansion:', err);
       setSettings((prev) => ({ ...prev, snippet_expansion_enabled: false }));
@@ -663,7 +680,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
   return (
     <div className="settings" data-carbon-layout-root>
       <div className="settings-head">
-        <button className="btn subtle icon-btn" title="Back" onClick={onBack}>
+        <button className="btn subtle icon-btn settings-back-btn" title="Back" aria-label="Back to clipboard" onClick={onBack}>
           <ChevronLeftIcon />
         </button>
         <h2>Settings</h2>
@@ -968,7 +985,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
             <div className="set-control" style={{ gap: 8, alignItems: 'center' }}>
               {settings.snippet_expansion_enabled && (
                 <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                  {expansionStatus === 'active' ? 'Active' : 'Starting…'}
+                  {expansionStatus === 'active' ? 'Active' : expansionStartupExpired ? 'Not active' : 'Starting…'}
                 </span>
               )}
               <button

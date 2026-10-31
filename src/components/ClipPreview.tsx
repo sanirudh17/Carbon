@@ -3,7 +3,7 @@ import { highlightPreview } from '../lib/searchHighlights';
 import React, { useMemo, useState, useEffect, useRef, memo } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { ClipItem, ContentType } from '../types';
-import { getTypeColor, LockIcon, EyeIcon, EyeOffIcon } from './Icons';
+import { getTypeColor, LockIcon, EyeIcon, EyeOffIcon, FolderIcon } from './Icons';
 import {
   prepareRichPreview,
   sanitizeRichHtml,
@@ -47,6 +47,19 @@ function detectCodeLanguage(text: string): string | null {
     return 'Markdown';
   }
   return null;
+}
+
+export function getClipFilePaths(item: Pick<ClipItem, 'file_paths' | 'text_content'>): string[] {
+  if (item.file_paths) {
+    try {
+      const parsed: unknown = JSON.parse(item.file_paths);
+      if (Array.isArray(parsed)) {
+        const paths = parsed.filter((path): path is string => typeof path === 'string' && path.trim().length > 0);
+        if (paths.length) return paths;
+      }
+    } catch { /* Older captures can have only the plain-text path twin. */ }
+  }
+  return (item.text_content || '').split(/\r?\n/).filter((path) => path.trim().length > 0);
 }
 
 export function getQrCopyLabel(qrContent: string): string {
@@ -520,16 +533,7 @@ const ClipPreviewBody = memo(function ClipPreviewBody({ item, forceRaw = false }
 
     // File / video
     if (item.content_type === 'file') {
-      let paths: string[] = [];
-      if (item.file_paths) {
-        try {
-          paths = JSON.parse(item.file_paths);
-        } catch {
-          paths = [];
-        }
-      } else if (item.text_content) {
-        paths = item.text_content.split('\n').filter(Boolean);
-      }
+      const paths = getClipFilePaths(item);
 
       return (
         <div className="preview-media">
@@ -548,6 +552,13 @@ const ClipPreviewBody = memo(function ClipPreviewBody({ item, forceRaw = false }
             ))}
             {paths.length > 1 && (
               <div className="preview-file-meta muted">{paths.length - 1} more file(s)</div>
+            )}
+            {paths[0] && (
+              <button className="btn subtle preview-reveal-file" onClick={() => {
+                void invoke('reveal_file_in_explorer', { filePath: paths[0] }).catch(console.error);
+              }}>
+                <FolderIcon /> <span className="carbon-control-label">Reveal in Explorer</span>
+              </button>
             )}
           </div>
         </div>
@@ -718,15 +729,7 @@ export const ClipMetaStrip: React.FC<{ item: ClipItem; onFilterByApp?: (app: str
     if (item.file_size > 0) {
       extra.push({ label: 'File size', value: formatBytes(item.file_size) });
     }
-    let paths: string[] = [];
-    if (item.file_paths) {
-      try {
-        paths = JSON.parse(item.file_paths);
-      } catch {
-        paths = [];
-      }
-    }
-    const firstPath = paths[0] || item.text_content?.split('\n')[0];
+    const firstPath = getClipFilePaths(item)[0];
     if (firstPath) {
       extra.push({ label: item.is_video ? 'Video path' : 'Path', value: firstPath, mono: true });
     }

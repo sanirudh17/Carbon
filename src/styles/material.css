@@ -318,17 +318,18 @@ input, textarea { caret-color: var(--accent); }
 
 /* One quiet scroll treatment for menus, lists, Settings, and previews.
    Component rules that deliberately hide a scrollbar remain more specific. */
-:root { --scrollbar-thumb: rgb(255 255 255 / 24%); --scrollbar-hover: rgb(255 255 255 / 40%); }
-:root[data-theme="light"] { --scrollbar-thumb: rgb(0 0 0 / 24%); --scrollbar-hover: rgb(0 0 0 / 40%); }
+:root { --scrollbar-thumb: #26282e; --scrollbar-hover: #33363e; }
+:root[data-theme="light"] { --scrollbar-thumb: #c9c9d1; --scrollbar-hover: #b7b7c3; }
 ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
-::-webkit-scrollbar-thumb, :root[data-theme] .action-modal::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  border: none;
-  border-radius: 999px;
+::-webkit-scrollbar-thumb, :root[data-theme] ::-webkit-scrollbar-thumb, :root[data-theme] .action-modal::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border: 1px solid transparent;
+  background-clip: content-box;
+  border-radius: 4px;
   min-height: 24px;
 }
-:root[data-theme="light"] ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); }
-::-webkit-scrollbar-thumb:hover, :root[data-theme="light"] ::-webkit-scrollbar-thumb:hover, :root[data-theme] .action-modal::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
+:root[data-theme="light"] ::-webkit-scrollbar-thumb { background-color: var(--scrollbar-thumb); }
+::-webkit-scrollbar-thumb:hover, :root[data-theme] ::-webkit-scrollbar-thumb:hover, :root[data-theme="light"] ::-webkit-scrollbar-thumb:hover, :root[data-theme] .action-modal::-webkit-scrollbar-thumb:hover { background-color: var(--scrollbar-hover); }
 ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
 @supports not selector(::-webkit-scrollbar) {
   * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
@@ -368,3 +369,19 @@ input, textarea { caret-color: var(--accent); }
   border-color: var(--control-edge);
   color: var(--text);
 }
+
+/* The approved charcoal reference lifts navigation and captures together. */
+:root[data-theme="dark"]:not([data-material="solid"]) {
+  --glass-sidebar: rgb(255 255 255 / 4%);
+  --glass-list: rgb(255 255 255 / 4%);
+  --glass-overlay-scrim: rgb(255 255 255 / 4%);
+}
+:root[data-theme="dark"] :is(.row, .sidebar .side-item) { border-radius: 12px; }
+:root[data-theme] .settings-head .settings-back-btn {
+  display: grid; place-items: center; padding: 0; gap: 0; line-height: 0;
+}
+:root[data-theme] .settings-head .settings-back-btn > svg {
+  display: block; width: 16px; height: 16px; margin: 0;
+  justify-self: center; align-self: center;
+}
+.preview-reveal-file { margin-top: 8px; }

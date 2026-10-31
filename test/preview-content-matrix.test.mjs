@@ -12,11 +12,11 @@ const win = new Window({ settings: { disableJavaScriptFileLoading: true, disable
 for (const key of ['window', 'document', 'DOMParser', 'NodeFilter', 'Node', 'Element', 'HTMLElement', 'DocumentFragment'])
     globalThis[key] = win[key] ?? win.document;
 win.__TAURI_INTERNALS__ = { convertFileSrc: p => `https://asset.localhost/${encodeURIComponent(p)}` };
-const output = esbuild.buildSync({ stdin: { contents: "export {ClipPreview} from './src/components/ClipPreview';export {prepareRichPreview,extractFragment} from './src/lib/richText';", resolveDir: root, loader: 'tsx' }, bundle: true, platform: 'node', format: 'cjs', external: ['react', 'react-dom', 'react-dom/server'], write: false, jsx: 'automatic', loader: { '.png': 'dataurl' } });
+const output = esbuild.buildSync({ stdin: { contents: "export {ClipPreview,getClipFilePaths} from './src/components/ClipPreview';export {prepareRichPreview,extractFragment} from './src/lib/richText';", resolveDir: root, loader: 'tsx' }, bundle: true, platform: 'node', format: 'cjs', external: ['react', 'react-dom', 'react-dom/server'], write: false, jsx: 'automatic', loader: { '.png': 'dataurl' } });
 fs.mkdirSync(path.join(root, '.validation'), { recursive: true });
 const bundle = path.join(root, '.validation', `preview-matrix-${process.pid}.cjs`);
 fs.writeFileSync(bundle, output.outputFiles[0].text);
-const { ClipPreview, prepareRichPreview, extractFragment } = require(bundle);
+const { ClipPreview, getClipFilePaths, prepareRichPreview, extractFragment } = require(bundle);
 process.on('exit', () => { try {
     fs.unlinkSync(bundle);
 }
@@ -51,3 +51,14 @@ test('rich preview strips executable attributes and shells', () => { const out =
 test('Markdown preview strips executable link protocols', () => { const out = render(clip('text', '# Heading\n\n[Link](javascript:alert(1))')); assert(!out.querySelector('[href^="javascript:"]')); });
 test('Markdown task states survive sanitization as disabled checkboxes', () => { const out = render(clip('text', '- [x] Completed\n- [ ] Pending')); const boxes = [...out.querySelectorAll('input[type="checkbox"]')]; assert.equal(boxes.length, 2); assert(boxes.every(e => e.disabled)); assert.equal(boxes[0].checked, true); assert.equal(boxes[1].checked, false); });
 test('rich URL checks reject control-character-obfuscated executable schemes', () => { const html = prepareRichPreview('<a href="java&#x09;script:alert(1)">Link</a><input type="checkbox" checked onclick="window.evil=1">'); const node = win.document.createElement('div'); node.innerHTML = html.html; assert.equal(node.querySelector('a').hasAttribute('href'), false); const box = node.querySelector('input'); assert(box.disabled); assert(box.checked); assert(!box.hasAttribute('onclick')); });
+
+test('file paths accept structured-only captures and preserve exact path bytes', () => {
+ const paths = ['C:\\Notes\\one.txt', 'C:\\Notes\\two.txt'];
+ assert.deepEqual(getClipFilePaths({file_paths:JSON.stringify([...paths, null, 3, ' ']),text_content:null}), paths);
+ assert.deepEqual(getClipFilePaths({file_paths:'{}',text_content:paths.join('\r\n')}),paths);
+ assert.deepEqual(getClipFilePaths({file_paths:'broken',text_content:paths[0]}),[paths[0]]);
+ assert.deepEqual(getClipFilePaths({file_paths:null,text_content:null}),[]);
+ const file = render(clip('file', null, {file_paths:JSON.stringify(paths)}));
+ assert.equal(file.querySelector('button').textContent.trim(),'Reveal in Explorer');
+ assert.equal(render(clip('file',null)).querySelector('button'),null);
+});

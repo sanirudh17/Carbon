@@ -5,7 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ClipItem, Collection, DbStats, AppSettings, Snippet } from '../types';
 import { collectionColorFor, normalizeCollectionColor } from '../utils/collections';
-import { ClipPreview, ClipMetaStrip, getQrCopyLabel, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
+import { ClipPreview, ClipMetaStrip, getClipFilePaths, getQrCopyLabel, getSpecificTypeLabel, isMarkdownContent, appDisplayName } from './ClipPreview';
 import { getActionsForClip, getPasteActionsForClip, handleClipKeyDown, ClipActionHandlers } from '../utils/clipActions';
 import { matchesHotkeyCombo } from '../utils/hotkeys';
 import { setClipDragData, shouldNativeDrag, beginNativeDrag } from '../utils/clipDrag';
@@ -2862,9 +2862,9 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
               ) : selectedItem.content_type === 'file' ? (
                 /* File / Video Preview */
                 <div className="preview-media">
-                  {selectedItem.is_video && selectedItem.text_content ? (
+                  {selectedItem.is_video && getClipFilePaths(selectedItem)[0] ? (
                     <div className="preview-video-wrapper">
-                      <video controls src={convertFileSrc(selectedItem.text_content.split('\n')[0])} />
+                      <video controls src={convertFileSrc(getClipFilePaths(selectedItem)[0])} />
                     </div>
                   ) : null}
 
@@ -2878,11 +2878,11 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                         {selectedItem.text_content}
                       </div>
                     )}
-                    {selectedItem.text_content && (
+                    {getClipFilePaths(selectedItem)[0] && (
                       <button
                         className="btn subtle"
                         style={{ marginTop: 8 }}
-                        onClick={() => handleRevealFile(selectedItem.text_content!.split('\n')[0])}
+                        onClick={() => handleRevealFile(getClipFilePaths(selectedItem)[0])}
                       >
                         <FolderIcon /> <span className="carbon-control-label">Reveal in Explorer</span>
                       </button>

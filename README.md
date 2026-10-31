@@ -24,7 +24,7 @@ Carbon is a local-first clipboard manager for Windows. Press a hotkey to summon 
 
 Everything lives in a local SQLite database (`carbon_history.db`) with image files on disk in `%APPDATA%\com.carbon.clipboard\`. History, snippets, and settings never leave your computer.
 
-> **New here?** Install the single `Carbon_0.1.5_x64-setup.exe` from [Releases](https://github.com/sanirudh17/Carbon/releases/latest) — no extra dependencies, Tesseract is already bundled.
+> **New here?** Install the single `Carbon_0.1.20_x64-setup.exe` from [Releases](https://github.com/sanirudh17/Carbon/releases/latest) — no extra dependencies, PP-OCRv6 Small is already bundled.
 
 ## Contents
 
@@ -142,7 +142,7 @@ Download the latest installer from the [**Releases**](https://github.com/sanirud
 
 | Installer | Notes |
 |---|---|
-| **`Carbon_0.1.5_x64-setup.exe`** | NSIS installer — single executable, bundles Tesseract OCR. Recommended. |
+| **`Carbon_0.1.20_x64-setup.exe`** | NSIS installer — single executable, bundles Tesseract OCR. Recommended. |
 
 Everything Carbon needs is bundled — no extra dependencies. The installer is currently unsigned, so Windows SmartScreen may show *“Windows protected your PC”* → **More info → Run anyway**.
 
@@ -185,7 +185,7 @@ npm run tauri dev
 
 ```bash
 npm run tauri build
-# → src-tauri/target/release/bundle/nsis/Carbon_0.1.5_x64-setup.exe
+# → src-tauri/target/release/bundle/nsis/Carbon_0.1.20_x64-setup.exe
 ```
 
 ### 5. Run the test suite
@@ -233,7 +233,7 @@ Clipboard watcher and `HistoryManager` trim history hourly and on save according
 
 ## Privacy
 
-Carbon is **local-first**. No network code, no cloud sync, no accounts, no telemetry. Clipboard history, images, snippets, and settings live in `%APPDATA%\com.carbon.clipboard\` and never leave your disk. Snippet expansion uses a private 256-char in-memory buffer never written to disk; it is opt-in and `snippet_expansion_enabled` is excluded from backup/restore by design. Window titles are never logged for context detection.
+Carbon is **local-first**. Clipboard capture, OCR, and snippets run locally. Update checks contact GitHub; clipboard content is not sent. No cloud sync, accounts, or telemetry. Clipboard history, images, snippets, and settings live in `%APPDATA%\com.carbon.clipboard\` and never leave your disk. Snippet expansion uses a private 256-char in-memory buffer never written to disk; it is opt-in and `snippet_expansion_enabled` is excluded from backup/restore by design. Window titles are never logged for context detection.
 
 ## Troubleshooting
 
