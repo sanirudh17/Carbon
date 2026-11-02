@@ -42,3 +42,19 @@ Installer: `Carbon_0.1.21_x64-setup.exe`
 - SHA-256: `c88330c1f6ff947d1be084d398fed1d383b99d7255d63c1dbe964377847e5a97`
 
 Public verification is recorded after publication.
+
+## Public verification
+
+Verified 2026-11-02T11:05:22+00:00.
+
+- Published: https://github.com/sanirudh17/Carbon/releases/tag/v0.1.21
+- Release source commit: `dce7fbacf46f363df6df11c3c2918426ebf0c45c`; main and the annotated tag were pushed.
+- All four assets were downloaded anonymously and matched local bytes and SHA-256 hashes. The stable updater endpoint served the identical v0.1.21 manifest.
+- Signature/trusted-comment verification, tamper rejection, version/manifest checks, and checksums passed again against the public downloads.
+
+| Asset | Bytes | SHA-256 |
+|---|---:|---|
+| Carbon_0.1.21_x64-setup.exe | 39540537 | `c88330c1f6ff947d1be084d398fed1d383b99d7255d63c1dbe964377847e5a97` |
+| Carbon_0.1.21_x64-setup.exe.sig | 416 | `fb086c4ec0c558473e09f91a993622bb30402a081abac83875ba884f8a194a90` |
+| latest.json | 3594 | `b71ca499c5390d374a67f90119cef80e3da25528becb369841352f7e52679c4a` |
+| SHA256SUMS | 273 | `771b1453e3bd29e76c9810f8985a0c4c87887b3a3af48aede1380642d07ce021` |
