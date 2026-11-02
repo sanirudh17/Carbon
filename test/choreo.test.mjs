@@ -113,22 +113,11 @@ test('Cold-open content hold: stuck-gate bound stretches while data-coldhold is 
   );
 });
 
-test('ADDENDUM v15 - Invariant I4: Fade target per mode (Glass -> html, Solid -> #root)', () => {
-  const cssPath = path.join(SRC_DIR, 'index.css');
-  const cssContent = fs.readFileSync(cssPath, 'utf-8');
-
-  assert.ok(
-    cssContent.includes('html:not([data-material="solid"]).wm-hiding'),
-    'CSS must fade html in glass mode'
-  );
-  assert.ok(
-    cssContent.includes('html:not([data-material="solid"]) #root.wm-fade-target'),
-    'CSS must keep #root opacity: 1 in glass mode'
-  );
-  assert.ok(
-    cssContent.includes('html[data-material="solid"].wm-hiding #root.wm-fade-target'),
-    'CSS must fade #root in solid mode'
-  );
+test('document backing stays painted; only content fades in either material', () => {
+  const css = fs.readFileSync(path.join(SRC_DIR, 'index.css'), 'utf8');
+  assert.match(css, /html\.wm-hiding,\s*html\.wm-hidden\s*\{\s*opacity: 1 !important/);
+  assert.match(css, /html\.wm-hidden #root\.wm-fade-target\s*\{\s*opacity: 0 !important/);
+  assert.doesNotMatch(css, /@keyframes ovFadeIn/);
 });
 
 test('ADDENDUM v15 - Invariant I6: Footer hints, keys and labels swap instantly with zero opacity/transform transition', () => {

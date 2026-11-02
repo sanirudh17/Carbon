@@ -17,7 +17,7 @@ async function harness() {
   globalThis.requestAnimationFrame = cb => { callbacks.set(++next, cb); return next; };
   globalThis.cancelAnimationFrame = id => callbacks.delete(id);
   const calls = [];
-  globalThis.__paintInvoke = async (command, args) => { calls.push({ command, args }); };
+  globalThis.__paintInvoke = async (command, args) => { calls.push({ command, args }); return command === 'prepare_window_present' || command === 'overlay_painted' || command === 'enlarged_painted' ? true : undefined; };
   const source = fs.readFileSync(new URL('../src/lib/choreo.ts', import.meta.url), 'utf8')
     .replace("import { invoke } from '@tauri-apps/api/core';", 'const invoke = globalThis.__paintInvoke;')
     .replace("import { listen } from '@tauri-apps/api/event';", 'const listen = async () => () => {};')
@@ -81,13 +81,13 @@ test('cancel during compositor submission cannot reveal a stale show', async () 
   } finally { h.close(); }
 });
 
-test('subsequent overlay opens keep the original single submission-frame timing', async () => {
+test('subsequent overlay opens also submit a full post-preparation frame', async () => {
   const h = await harness();
   try {
     h.choreo.executeWindowShow('overlay', undefined, 0, 1);
     for (let i = 0; i < 4; i++) await h.frame();
     h.choreo.executeWindowShow('overlay', undefined, 0, 2);
-    for (let i = 0; i < 3; i++) await h.frame();
+    for (let i = 0; i < 4; i++) await h.frame();
     assert.deepEqual(h.calls.filter(c => c.command === 'overlay_painted').map(c => c.args.token), [1, 2]);
   } finally { h.close(); }
 });

@@ -385,3 +385,12 @@ input, textarea { caret-color: var(--accent); }
   justify-self: center; align-self: center;
 }
 .preview-reveal-file { margin-top: 8px; }
+
+/* Match Typr's lighter dark canvas and let a little more desktop through
+   light glass. Controls, pane washes, layout and opaque fallbacks stay intact. */
+:root[data-theme="dark"]:not([data-material="solid"]):not([data-reduced-transparency="true"]) {
+  --glass-base: rgb(0 0 0 / 68%);
+}
+:root[data-theme="light"]:not([data-material="solid"]):not([data-reduced-transparency="true"]) {
+  --glass-base: rgb(255 255 255 / 48%);
+}

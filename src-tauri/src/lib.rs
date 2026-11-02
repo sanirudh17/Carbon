@@ -734,24 +734,32 @@ async fn hide_overlay(app_handle: AppHandle) -> Result<(), String> {
 /// settle sleep and cold-COM round-trips; none of that may sit on an IPC
 /// worker that other invokes are queued behind.
 #[tauri::command]
-async fn overlay_painted(app_handle: AppHandle, token: Option<u64>) {
+async fn prepare_window_present(window: WebviewWindow, token: Option<u64>) -> bool {
+    tauri::async_runtime::spawn_blocking(move || hotkey::prepare_window_present(&window, token))
+        .await.unwrap_or(false)
+}
+
+#[tauri::command]
+async fn overlay_painted(app_handle: AppHandle, token: Option<u64>) -> bool {
     tauri::async_runtime::spawn_blocking(move || {
         choreo::note_window_painted(&app_handle, "overlay", token);
+        hotkey::is_overlay_visible() && token.is_none_or(|token| token == hotkey::overlay_show_gen())
     })
     .await
-    .ok();
+    .unwrap_or(false)
 }
 
 /// Renderer confirms the main window presented its first painted frame
 /// after show → lift the DWM cloak gate (white-flash fix).
 /// STEP-4: same async + spawn_blocking treatment as overlay_painted.
 #[tauri::command]
-async fn enlarged_painted(app_handle: AppHandle, token: Option<u64>) {
+async fn enlarged_painted(app_handle: AppHandle, token: Option<u64>) -> bool {
     tauri::async_runtime::spawn_blocking(move || {
         choreo::note_window_painted(&app_handle, "main", token);
+        hotkey::is_main_visible() && token.is_none_or(|token| token == hotkey::enlarged_show_gen())
     })
     .await
-    .ok();
+    .unwrap_or(false)
 }
 
 /// Argprompt frontend confirms its first spec painted — lift cloak + focus.
@@ -1550,6 +1558,7 @@ pub fn run() {
             hide_overlay,
             overlay_hide_ack,
             overlay_phase_ack,
+            prepare_window_present,
             overlay_painted,
             enlarged_hide_ack,
             enlarged_painted,

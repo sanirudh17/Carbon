@@ -95,7 +95,15 @@ pub async fn choreo_notify_painted(app_handle: AppHandle, window_label: String, 
 /// frontend calls this to force a flash-safe reset instead of leaving a
 /// cloaked-visible window stuck forever (the "main never appears" state).
 #[tauri::command]
-pub async fn choreo_show_recovery(app_handle: AppHandle, window_label: String) -> Result<(), String> {
+pub async fn choreo_show_recovery(app_handle: AppHandle, window_label: String, token: Option<u64>) -> Result<(), String> {
+    let current = match window_label.as_str() {
+        "overlay" => hotkey::overlay_show_gen(),
+        "main" | "enlarged" => hotkey::enlarged_show_gen(),
+        _ => return Ok(()),
+    };
+    // A new native show can start before its event reaches the renderer.
+    // An older failed handoff must never reset that newer generation.
+    if !recovery_is_current(token, current) { return Ok(()); }
     match window_label.as_str() {
         "main" | "enlarged" => {
             crate::paste::log_diag(
@@ -124,8 +132,21 @@ pub async fn choreo_show_recovery(app_handle: AppHandle, window_label: String) -
     Ok(())
 }
 
+fn recovery_is_current(token: Option<u64>, current: u64) -> bool {
+    token.is_none_or(|token| token > 0 && token == current)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stale_recovery_cannot_cancel_a_newer_show() {
+        assert!(super::recovery_is_current(Some(7), 7));
+        assert!(super::recovery_is_current(None, 7));
+        assert!(!super::recovery_is_current(Some(6), 7));
+        assert!(!super::recovery_is_current(Some(8), 7));
+        assert!(!super::recovery_is_current(Some(0), 7));
+    }
+
     // Unified split frame: the overlay owns a FIXED 750x475 frame. There is
     // no compact/expanded toggle anymore — content must never resize the
     // window (a resize reallocates the WebView2 surface and the first present

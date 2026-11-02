@@ -43,6 +43,11 @@ static OVERLAY_HIDE_ACK: AtomicU64 = AtomicU64::new(0);
 /// before reveal, after the renderer has submitted its content frames.
 #[cfg(target_os = "windows")]
 pub fn set_window_cloaked(window: &tauri::WebviewWindow, cloaked: bool) {
+    if cloaked {
+        if let Some(prepared) = prepared_present_token(window.label()) {
+            prepared.store(0, Ordering::SeqCst);
+        }
+    }
     use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
     // A failed Solid cloak can still use the persistent alpha mask. Glass
     // normally has no layered style; recover a rare emergency mask only
@@ -212,6 +217,89 @@ static ENLARGED_UNCLOAK_MTX: Mutex<()> = Mutex::new(());
 static OVERLAY_FIRST_REVEAL: AtomicBool = AtomicBool::new(true);
 static MAIN_FIRST_REVEAL: AtomicBool = AtomicBool::new(true);
 
+static OVERLAY_PRESENT_PREPARED: AtomicU64 = AtomicU64::new(0);
+static MAIN_PRESENT_PREPARED: AtomicU64 = AtomicU64::new(0);
+
+fn prepared_present_token(label: &str) -> Option<&'static AtomicU64> {
+    match label {
+        "overlay" => Some(&OVERLAY_PRESENT_PREPARED),
+        "main" | "enlarged" => Some(&MAIN_PRESENT_PREPARED),
+        _ => None,
+    }
+}
+
+fn current_present_token(label: &str) -> u64 {
+    match label {
+        "overlay" => OVERLAY_SHOW_GEN.load(Ordering::SeqCst),
+        "main" | "enlarged" => ENLARGED_SHOW_GEN.load(Ordering::SeqCst),
+        _ => 0,
+    }
+}
+
+fn prepared_generation_matches(prepared: u64, current: u64, requested: u64) -> bool {
+    requested > 0 && prepared == requested && current == requested
+}
+
+fn present_prepared(window: &tauri::WebviewWindow, requested: u64) -> bool {
+    prepared_present_token(window.label()).is_some_and(|prepared|
+        prepared_generation_matches(prepared.load(Ordering::SeqCst),
+            current_present_token(window.label()), requested))
+}
+
+/// Complete all composition-surface changes before the renderer paints the
+/// frame it acknowledges. A DwmFlush alone cannot repaint WebView2 pixels.
+pub fn prepare_window_present(window: &tauri::WebviewWindow, token: Option<u64>) -> bool {
+    let Some(token) = token.filter(|token| *token > 0) else {
+        // A dev hot reload can remount an already-visible window; it is not
+        // a new native reveal and must not replace its composition surface.
+        return match window.label() {
+            "overlay" => is_overlay_visible(),
+            "main" => is_main_visible(),
+            _ => false,
+        };
+    };
+    let Some(prepared) = prepared_present_token(window.label()) else { return false; };
+    let mutex = if window.label() == "overlay" { &OVERLAY_UNCLOAK_MTX } else { &ENLARGED_UNCLOAK_MTX };
+    let _guard = lock_uncloak_mtx(mutex);
+    if current_present_token(window.label()) != token { return false; }
+    if crate::vibrancy::uses_compositor_glass(window) {
+        if physical_cloak_state(window) != Some(true) { set_window_cloaked(window, true); }
+        if physical_cloak_state(window) != Some(true) { return false; }
+        let Some(state) = window.app_handle().try_state::<crate::AppState>() else { return false; };
+        let settings = state.settings.get();
+        let material = crate::vibrancy::WindowMaterial::from_str(&settings.window_material);
+        let background_ready = if window.label() == "main" {
+            ensure_main_surface_transparent_before_reveal(window.app_handle(), window)
+        } else {
+            crate::vibrancy::set_window_default_background(window, material, &settings.theme)
+                && crate::webview_bg::set_webview_transparent_background(window.as_ref())
+        };
+        if !background_ready || !crate::vibrancy::release_layered_mask(window) { return false; }
+        crate::vibrancy::set_window_border_suppressed(window);
+        flush_dwm_ordering();
+        if physical_cloak_state(window) != Some(true) { return false; }
+    }
+    if current_present_token(window.label()) != token { return false; }
+    prepared.store(token, Ordering::SeqCst);
+    crate::paste::log_diag(&format!("[PRESENT_PREPARED] window='{}' token={}", window.label(), token));
+    true
+}
+
+fn uncloak_prepared(window: &tauri::WebviewWindow, token: u64) -> bool {
+    if crate::vibrancy::uses_compositor_glass(window)
+        && (!present_prepared(window, token) || crate::vibrancy::has_layered_mask(window)
+            || physical_cloak_state(window) != Some(true)) {
+        crate::paste::log_diag("[PRESENT_PREPARED] rejected stale or changed surface; keeping cloak");
+        return false;
+    }
+    set_window_cloaked(window, false);
+    match window.label() {
+        "overlay" => !OVERLAY_CLOAKED.load(Ordering::SeqCst),
+        _ => !MAIN_CLOAKED.load(Ordering::SeqCst),
+    }
+}
+
+
 fn settle_first_reveal(win: &tauri::WebviewWindow, first: &AtomicBool) -> bool {
     if first.load(Ordering::SeqCst) {
         crate::paste::log_diag(&format!("[FIRST_REVEAL] window='{}' waiting for content while cloaked", win.label()));
@@ -304,7 +392,7 @@ pub fn set_window_alpha(window: &tauri::WebviewWindow, alpha: u8) {
         };
         // Keep the cold-frame safety belt, but never retain a layered HWND
         // for visible glass. set_window_cloaked(false) releases it under cloak.
-        if alpha == 0 && stale { set_native_window_alpha(window, 0); }
+        if alpha == 0 && stale && !present_prepared(window, current_present_token(window.label())) { set_native_window_alpha(window, 0); }
         return;
     }
     set_native_window_alpha(window, alpha);
@@ -542,7 +630,7 @@ fn uncloak_overlay_if_current(app: &AppHandle, token: Option<u64>) {
         if settle_first_reveal(&win, &OVERLAY_FIRST_REVEAL) {
             if OVERLAY_SHOW_GEN.load(Ordering::SeqCst) != expected_token { return; }
             set_window_alpha(&win, 255);
-            set_window_cloaked(&win, false);
+            if !uncloak_prepared(&win, expected_token) { return; }
             if OVERLAY_CLOAKED.load(Ordering::SeqCst) {
                 set_window_alpha(&win, 0);
                 return;
@@ -553,7 +641,7 @@ fn uncloak_overlay_if_current(app: &AppHandle, token: Option<u64>) {
             return;
         }
         set_window_alpha(&win, 0);
-        set_window_cloaked(&win, false);
+        if !uncloak_prepared(&win, expected_token) { return; }
         crate::vibrancy::set_window_border_suppressed(&win);
         note_overlay_revealed();
         ramp_window_alpha(win.clone(), 0, 255, 30, expected_token, true);
@@ -633,7 +721,7 @@ fn uncloak_enlarged_if_current(app: &AppHandle, token: Option<u64>) {
         // controller race, re-apply the transparent surface now — still
         // cloaked (invisible) — so the reveal can never composite Chromium's
         // white default behind the glass slab.
-        ensure_main_surface_transparent_before_reveal(app, &win);
+        // Surface preparation already completed before the acknowledged renderer frame.
         let hwnd_raw = win.hwnd().map(|h| h.0).unwrap_or(std::ptr::null_mut());
         let mut api_vis = win.is_visible().unwrap_or(false);
         let cloaked = MAIN_CLOAKED.load(Ordering::SeqCst);
@@ -699,7 +787,7 @@ fn uncloak_enlarged_if_current(app: &AppHandle, token: Option<u64>) {
         if settle_first_reveal(&win, &MAIN_FIRST_REVEAL) {
             if ENLARGED_SHOW_GEN.load(Ordering::SeqCst) != expected_token { return; }
             set_window_alpha(&win, 255);
-            set_window_cloaked(&win, false);
+            if !uncloak_prepared(&win, expected_token) { return; }
             if MAIN_CLOAKED.load(Ordering::SeqCst) {
                 set_window_alpha(&win, 0);
                 return;
@@ -711,7 +799,7 @@ fn uncloak_enlarged_if_current(app: &AppHandle, token: Option<u64>) {
             return;
         }
         set_window_alpha(&win, 0);
-        set_window_cloaked(&win, false);
+        if !uncloak_prepared(&win, expected_token) { return; }
         crate::vibrancy::set_window_border_suppressed(&win);
         MAIN_HAS_PAINTED.store(true, Ordering::SeqCst);
         // Fresh pixels just composited: the next show-path rewarm may skip
@@ -2038,9 +2126,9 @@ pub(crate) fn prepare_main_surface(app_handle: &AppHandle, main_win: &tauri::Web
 /// are ~free when healthy; only a failure pays the bounded retry loop, so a
 /// warm open never waits and a stale white default can't survive to first
 /// present.
-fn ensure_main_surface_transparent_before_reveal(app: &AppHandle, win: &tauri::WebviewWindow) {
+fn ensure_main_surface_transparent_before_reveal(app: &AppHandle, win: &tauri::WebviewWindow) -> bool {
     let Some(state) = app.try_state::<crate::AppState>() else {
-        return;
+        return false;
     };
     let settings = state.settings.get();
     let mat = crate::vibrancy::WindowMaterial::from_str(&settings.window_material);
@@ -2053,13 +2141,14 @@ fn ensure_main_surface_transparent_before_reveal(app: &AppHandle, win: &tauri::W
                 "[SHOW_MAIN] transparent surface applied at reveal (attempt {})",
                 attempt + 1
             ));
-            return;
+            return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     crate::paste::log_diag(
         "[SHOW_MAIN] transparent surface STILL not applied at reveal — white-default risk remains",
     );
+    false
 }
 
 pub fn handle_enlarged_hotkey(app_handle: &AppHandle) {
@@ -2573,5 +2662,19 @@ pub fn calculate_overlay_position(cx: i32, cy: i32, logical_w: i32, logical_h: i
         } else {
             (100, 100)
         }
+    }
+}
+
+#[cfg(test)]
+mod present_generation_tests {
+    use super::prepared_generation_matches;
+    #[test]
+    fn only_the_current_prepared_generation_can_reveal() {
+        assert!(prepared_generation_matches(7, 7, 7));
+        assert!(!prepared_generation_matches(0, 0, 0));
+        assert!(!prepared_generation_matches(6, 7, 7));
+        assert!(!prepared_generation_matches(7, 8, 7));
+        assert!(!prepared_generation_matches(7, 7, 8));
+        assert!(!prepared_generation_matches(0, 7, 7));
     }
 }

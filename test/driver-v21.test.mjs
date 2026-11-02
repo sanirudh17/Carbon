@@ -55,7 +55,7 @@ test('ADDENDUM v21 - Static Check: Fresh cycle token gating in Rust and TS', () 
     'executeWindowShow must accept token'
   );
   assert.ok(
-    choreoTs.includes('invoke(paintedCmd, { token })'),
+    choreoTs.includes('invoke<boolean>(paintedCmd, { token })'),
     'executeWindowShow must pass token to uncloak painted command'
   );
   assert.ok(
@@ -68,7 +68,7 @@ test('ADDENDUM v21 - Static Check: Compositor frame commit before DWM uncloak', 
   const choreoTs = fs.readFileSync(path.join(SRC_DIR, 'lib', 'choreo.ts'), 'utf-8');
   const unhideIdx = choreoTs.indexOf("classList.remove('wm-hiding', 'wm-hidden')");
   const rafIdx = choreoTs.indexOf('requestAnimationFrame(() => {', unhideIdx);
-  const invokeIdx = choreoTs.indexOf('invoke(paintedCmd, { token })', rafIdx);
+  const invokeIdx = choreoTs.indexOf('invoke<boolean>(paintedCmd, { token })', rafIdx);
   assert.ok(unhideIdx !== -1, 'unhide must remove wm-hidden');
   assert.ok(rafIdx > unhideIdx, 'frame commit rAF must follow unhide');
   assert.ok(invokeIdx > rafIdx, 'uncloak invoke must execute after frame commit rAFs');
@@ -100,7 +100,7 @@ test('ADDENDUM v21 - Static Check: Zero show-time transform animation and Solid 
   const css = fs.readFileSync(path.join(SRC_DIR, 'index.css'), 'utf-8');
 
   // Verify Solid mode does NOT have linear opacity transition on wm-hidden
-  const solidHiddenIdx = css.indexOf('html[data-material="solid"].wm-hidden #root.wm-fade-target');
+  const solidHiddenIdx = css.indexOf('html.wm-hidden #root.wm-fade-target');
   assert.ok(solidHiddenIdx !== -1, 'solid wm-hidden rule exists');
   const solidHiddenBlock = css.slice(solidHiddenIdx, css.indexOf('}', solidHiddenIdx));
   assert.ok(

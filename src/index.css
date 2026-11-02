@@ -404,7 +404,7 @@ html {
 }
 
 /* ── I4 FADE TARGET PER MODE ──
-   Glass -> html element; Solid -> #root. */
+   Both materials keep the canvas painted and hide only #root. */
 html.wm-hidden {
   pointer-events: none !important;
 }
@@ -413,55 +413,25 @@ html #root.wm-fade-target {
   opacity: 1;
 }
 
-/* Glass mode (default): fade html element only (#root stays opacity: 1) */
-html:not([data-material="solid"]).wm-hiding {
+/* Keep the document/native backing painted in every mode. Only content
+   changes opacity, behind the native cloak; the glass canvas never fades. */
+html.wm-hiding,
+html.wm-hidden { opacity: 1 !important; }
+html.wm-hiding #root.wm-fade-target {
   opacity: 0 !important;
   transition: opacity 90ms linear !important;
 }
-html:not([data-material="solid"]).wm-hidden {
-  opacity: 0 !important;
-}
-html:not([data-material="solid"]) #root.wm-fade-target {
-  opacity: 1 !important;
-  transition: none !important;
-}
-
-/* Solid mode: fade #root (html element stays opacity: 1) */
-html[data-material="solid"].wm-hiding #root.wm-fade-target {
-  opacity: 0 !important;
-  transition: opacity 90ms cubic-bezier(0.16, 1, 0.3, 1) !important;
-}
-html[data-material="solid"].wm-hidden #root.wm-fade-target {
+html.wm-hidden #root.wm-fade-target {
   opacity: 0 !important;
   pointer-events: none !important;
   transition: none !important;
 }
-html[data-material="solid"]:not(.wm-hiding):not(.wm-hidden) #root.wm-fade-target {
+html:not(.wm-hiding):not(.wm-hidden) #root.wm-fade-target {
   opacity: 1 !important;
   transition: none !important;
 }
-html[data-material="solid"].wm-hiding,
-html[data-material="solid"].wm-hidden {
-  opacity: 1 !important;
-}
-
-/* Quick overlay: fast 35ms animation on show and hide */
-html.win-overlay:not(.wm-hidden):not(.wm-hiding) {
-  animation: ovFadeIn 35ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes ovFadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-html.win-overlay.wm-hiding {
-  opacity: 0 !important;
-  transition: opacity 35ms cubic-bezier(0.16, 1, 0.3, 1) !important;
-}
-
-html.win-overlay.wm-hidden {
-  opacity: 0 !important;
+html.win-overlay.wm-hiding #root.wm-fade-target {
+  transition-duration: 35ms !important;
 }
 
 html.win-overlay.no-anim,

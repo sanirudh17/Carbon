@@ -9,7 +9,7 @@ import { listen } from '@tauri-apps/api/event';
  *   I1: Window becomes visible ONLY after (load complete AND data-painted="1" AND two rAFs).
  *       No time-based show fallback, ever (timeouts only warn in DEV).
  *   I3: Exactly one layout root mounted at all times (no snapshot/ghost layers).
- *   I4: Fade target per mode: Glass -> html element; Solid -> #root.
+ *   I4: Fade target per mode: Both materials keep the document backing painted and fade #root only.
  *   I6: Text/label changes swap INSTANTLY: no opacity/transform transitions on text nodes.
  * Retired with the unified split frame (no Tab preview toggle, fixed 750x475
  * window, permanent preview pane): I2 (toggle-resize discipline), I5 (expand
@@ -140,9 +140,7 @@ export function getWindowMaterial(): 'glass' | 'solid' {
 
 export function getFadeTarget(): HTMLElement {
   const html = document.documentElement;
-  return html.dataset.material === 'solid'
-    ? (document.getElementById('root') ?? html)
-    : html;
+  return document.getElementById('root') ?? html;
 }
 
 // ── Invariant I1: Window Show & Paint Gate ──
@@ -160,7 +158,6 @@ export function initPaintGate(): () => void {
 }
 
 let showEpoch = 0;
-let firstShowSubmitted = false;
 
 export function executeWindowShow(
   windowName: 'overlay' | 'main' | 'settings',
@@ -187,6 +184,19 @@ export function executeWindowShow(
   }
 
   let rafId: number | null = null;
+  let nativeAttempts = 0;
+  const retryOrRecover = () => {
+    if (cancelled || epoch !== showEpoch) return;
+    if (nativeAttempts < 2) {
+      html.classList.add('wm-hidden', 'no-anim');
+      void html.offsetWidth;
+      html.classList.remove('no-anim');
+      wait();
+    } else {
+      cancelled = true;
+      invoke('choreo_show_recovery', { windowLabel: windowName, token }).catch(() => {});
+    }
+  };
 
   const wait = () => {
     rafId = requestAnimationFrame(async () => {
@@ -208,6 +218,18 @@ export function executeWindowShow(
           if (cancelled || epoch !== showEpoch) return;
         }
 
+        // Removing a cold native alpha mask can recreate the composition
+        // surface. Do it while cloaked, BEFORE this new renderer paint.
+        nativeAttempts += 1;
+        let surfaceReady = false;
+        try { surfaceReady = await invoke<boolean>('prepare_window_present', { token }); }
+        catch { /* Fail closed; never expose an unprepared native surface. */ }
+        if (cancelled || epoch !== showEpoch) return;
+        if (!surfaceReady) {
+          retryOrRecover();
+          return;
+        }
+
         // Snap unhidden with NO transition while still cloaked (invisible),
         // BEFORE asking Rust to uncloak: the first composited frame is final
         // content, and no fade ever plays over bare acrylic (open flash).
@@ -220,17 +242,19 @@ export function executeWindowShow(
         // Allow Chromium's compositor to submit the unhidden DirectComposition frame
         // to DWM before requesting Rust to lift the cloak gate.
         requestAnimationFrame(() => {
-          const proceed = () => {
+          const proceed = async () => {
             if (cancelled || epoch !== showEpoch) return;
 
             const tAckReq = performance.now();
-            firstShowSubmitted = true;
             // Release native DWM cloak gate (forced present lands first, Rust-side)
             const paintedCmd = windowName === 'overlay' ? 'overlay_painted' : 'enlarged_painted';
             traceChoreo(`${windowName} invoking ${paintedCmd} (uncloak) at ${(tAckReq - tHotkey).toFixed(1)}ms`);
 
             // invoke(paintedCmd) token-guarded uncloak
-            invoke(paintedCmd, { token }).catch(() => {});
+            let revealed = false;
+            try { revealed = await invoke<boolean>(paintedCmd, { token }); } catch {}
+            if (cancelled || epoch !== showEpoch) return;
+            if (!revealed) { retryOrRecover(); return; }
             invoke('choreo_notify_painted', { windowLabel: windowName, token }).catch(() => {});
 
             if (windowName === 'overlay') {
@@ -243,10 +267,9 @@ export function executeWindowShow(
             if (onRevealed) onRevealed();
           };
 
-          // rAF runs BEFORE paint. The first overlay reveal needs the next
-          // frame too; subsequent overlay opens keep their existing timing.
-          if (windowName === 'overlay' && firstShowSubmitted) proceed();
-          else requestAnimationFrame(proceed);
+          // Every open, including an idle reopen, must submit a complete
+          // post-preparation frame. rAF itself runs before paint.
+          requestAnimationFrame(proceed);
         });
         return;
       }
@@ -267,7 +290,7 @@ export function executeWindowShow(
         html.removeAttribute('data-coldhold');
         if (rafId) cancelAnimationFrame(rafId);
         if (windowName === 'overlay' || windowName === 'main') {
-          invoke('choreo_show_recovery', { windowLabel: windowName }).catch(() => {});
+          invoke('choreo_show_recovery', { windowLabel: windowName, token }).catch(() => {});
         }
         return;
       }
@@ -324,9 +347,11 @@ export function executeWindowHide(
 
   // For overlay: fast 35ms hide animation
   if (windowName === 'overlay') {
-    invoke('cloak_window', { windowLabel: windowName }).catch(() => {});
-    html.classList.add('wm-hiding');
-    timer = window.setTimeout(finish, 35);
+    invoke('cloak_window', { windowLabel: windowName }).then(() => {
+      if (cancelled) return;
+      html.classList.add('wm-hiding');
+      timer = window.setTimeout(finish, 35);
+    }).catch(() => { if (!cancelled) finish(); });
     return { cancel };
   }
 
@@ -345,26 +370,28 @@ export function executeWindowHide(
   return { cancel };
 }
 
-// ── Invariant I1/I2: Persistent Heartbeat while Hidden ──
-// Keeps Chromium's compositor awake and warm even while cloaked/hidden,
-// ensuring zero animation suspension or render freeze on show.
+// Wake-driven compositor pulses. The per-open native/renderer handshake
+// supplies fresh frames; native warmth loops remain as a safety net. Idle
+// windows need neither an endless rAF loop nor a 100ms DOM-write timer.
 let heartbeatActive = false;
 
 export function initCompositorHeartbeat(): void {
   if (typeof window === 'undefined' || heartbeatActive) return;
   heartbeatActive = true;
-
-  const tick = () => {
-    requestAnimationFrame(tick);
+  const currentWindow = window;
+  const currentDocument = document;
+  let pending = false;
+  const pulse = () => {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => { pending = false; }));
   };
-  requestAnimationFrame(tick);
-
-  // Background timer pulse to ensure wakefulness if Chromium throttles rAF while occluded
-  setInterval(() => {
-    if (document.hidden || document.documentElement.classList.contains('wm-hidden')) {
-      document.documentElement.dataset.heartbeat = Date.now().toString();
-    }
-  }, 100);
+  currentWindow.addEventListener('pageshow', pulse);
+  currentWindow.addEventListener('focus', pulse);
+  currentDocument.addEventListener('visibilitychange', () => {
+    if (!currentDocument.hidden) pulse();
+  });
+  pulse();
 }
 
 export function isHeartbeatActive(): boolean {

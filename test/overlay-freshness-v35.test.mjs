@@ -505,7 +505,7 @@ test('v43 main uncloak settles before ramping, adaptively (no residual flash)', 
   const uncloakIdx = hotkey.indexOf('fn uncloak_enlarged_if_current');
   assert.ok(uncloakIdx !== -1, 'main uncloak path found');
   const body = hotkey.slice(uncloakIdx, uncloakIdx + 12000);
-  const uncloakedAt = body.indexOf('set_window_cloaked(&win, false)');
+  const uncloakedAt = body.indexOf('uncloak_prepared(&win, expected_token)');
   const settledAt = body.indexOf('from_millis(settle_ms)');
   const rampAt = body.indexOf('ramp_window_alpha(win.clone(), 0, 255, ramp_ms');
   assert.ok(uncloakedAt !== -1 && settledAt !== -1 && rampAt !== -1, 'adaptive settle step must exist');
