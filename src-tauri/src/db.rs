@@ -541,6 +541,7 @@ impl DbState {
         conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_is_pinned ON entries(is_pinned)", []).ok();
         conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_expires_at ON entries(expires_at)", []).ok();
         conn.execute("CREATE INDEX IF NOT EXISTS idx_clip_collections_col ON clip_collections(collection_id)", []).ok();
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_clip_collections_clip ON clip_collections(clip_id)", []).ok();
 
         Ok(())
     }

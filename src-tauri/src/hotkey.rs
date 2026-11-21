@@ -1816,10 +1816,9 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
         if PARK_INSTEAD_OF_HIDE {
             set_parked_toolwindow(&overlay_win, false);
             if is_window_parked(&overlay_win) {
-                let (cx, cy) = get_cursor_position();
                 let scale = overlay_win.scale_factor().unwrap_or(1.0);
                 let (px, py) =
-                    calculate_overlay_position(cx, cy, OVERLAY_WIDTH, OVERLAY_HEIGHT, scale);
+                    resolve_overlay_position(app_handle, OVERLAY_WIDTH, OVERLAY_HEIGHT, scale);
                 move_window_nosize(&overlay_win, px, py);
             }
         }
@@ -1908,7 +1907,6 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     crate::paste::capture_selection_snapshot();
     CURRENT_CYCLE_INDEX.store(0, Ordering::Relaxed);
 
-    let (cx, cy) = get_cursor_position();
     // Unified split frame: fixed 750x475 geometry owned by the window (set
     // once at prewarm). This show path never resizes — content can never
     // resize the window, so no fresh WebView2 composition surface (and no
@@ -1922,7 +1920,7 @@ pub fn handle_overlay_hotkey(app_handle: &AppHandle) {
     // doesn't re-assert it either. Keeping this off the hotkey thread saves a
     // DWM round-trip on every picker open.
 
-    let (pos_x, pos_y) = calculate_overlay_position(cx, cy, win_w, win_h, scale_factor);
+    let (pos_x, pos_y) = resolve_overlay_position(app_handle, win_w, win_h, scale_factor);
     crate::paste::log_diag(&format!(
         "[HOTKEY] Calculated pos: ({}, {}), size: {}x{}, scale: {}",
         pos_x, pos_y, phys_w, phys_h, scale_factor
@@ -2366,6 +2364,11 @@ fn request_webview_overlay_hide(app: &AppHandle) {
 /// a Focused(false) event which would call hide_overlay_window again. This
 /// flag prevents the second call from interfering.
 static HIDING_OVERLAY: AtomicBool = AtomicBool::new(false);
+/// When the overlay hides because another window/shell took focus (e.g.
+/// Win+Shift+S Snipping Tool, Glint, Alt+Tab, or clicking another app), skip
+/// `restore_target_window()` so we never rip focus away from the new foreground
+/// window or cancel a screenshot overlay.
+static SKIP_RESTORE_ON_NEXT_HIDE: AtomicBool = AtomicBool::new(false);
 
 pub fn hide_overlay_window(app: &AppHandle) {
     if get_overlay_phase() == OverlayPhase::Showing {
@@ -2400,9 +2403,16 @@ pub fn hide_overlay_window(app: &AppHandle) {
     }
     LAST_HIDE_MS.store(epoch_ms(), Ordering::SeqCst);
 
-    // Now restore the previously-active window
-    crate::paste::log_diag("[HIDE_OVERLAY] Calling restore_target_window()...");
-    restore_target_window();
+    // Restore the previously-active window on explicit dismiss (Esc, hotkey
+    // toggle, paste), but NOT when hiding due to focus loss (blur) — otherwise
+    // Windows shell overlays like Win+Shift+S (ScreenClippingHost) or another
+    // clicked window lose focus immediately.
+    if SKIP_RESTORE_ON_NEXT_HIDE.swap(false, Ordering::SeqCst) {
+        crate::paste::log_diag("[HIDE_OVERLAY] Blur hide: skipping restore_target_window() to preserve new foreground window.");
+    } else {
+        crate::paste::log_diag("[HIDE_OVERLAY] Calling restore_target_window()...");
+        restore_target_window();
+    }
 
     set_overlay_phase(OverlayPhase::Hidden);
     OVERLAY_SHOW_ACTIVE.store(false, Ordering::SeqCst);
@@ -2435,6 +2445,14 @@ pub fn hide_overlay_window(app: &AppHandle) {
 /// Used by the Focused(false) handler in lib.rs to avoid re-entrancy.
 pub fn is_overlay_hiding() -> bool {
     HIDING_OVERLAY.load(Ordering::SeqCst)
+}
+
+/// Hides the overlay after a focus-loss (blur) event without restoring focus to
+/// the previously-captured app, so Windows shell overlays (Win+Shift+S Snipping
+/// Tool, Glint, Start Menu) or clicked apps keep foreground focus reliably.
+pub fn hide_overlay_window_on_blur(app: &AppHandle) {
+    SKIP_RESTORE_ON_NEXT_HIDE.store(true, Ordering::SeqCst);
+    hide_overlay_window(app);
 }
 
 fn dismiss_overlay(app: &AppHandle) {
@@ -2635,6 +2653,150 @@ impl HotkeyManager {
     }
 }
 
+/// Resolves the Quick Overlay screen position according to `settings.overlay_position`:
+/// - `"center"` (default): centered on the monitor containing the cursor.
+/// - `"caret"`: anchored cleanly beneath (or flipped above) the active text caret,
+///   falling back gracefully to the cursor position when the foreground app does
+///   not expose a native Win32 caret.
+/// - `"cursor"`: anchored cleanly near the current mouse pointer.
+pub(crate) fn resolve_overlay_position(
+    app_handle: &AppHandle,
+    logical_w: i32,
+    logical_h: i32,
+    scale_factor: f64,
+) -> (i32, i32) {
+    let mode = app_handle
+        .try_state::<crate::AppState>()
+        .map(|s| s.settings.get().overlay_position)
+        .unwrap_or_else(|| "center".to_string());
+
+    let (pos, source, anchor) = match mode.as_str() {
+        "caret" => {
+            let ((ax, ay), src) = crate::expansion::probe_active_caret_with_source()
+                .unwrap_or_else(|| (get_cursor_position(), "cursor-fallback"));
+            let p = calculate_anchored_overlay_position(ax, ay, logical_w, logical_h, scale_factor);
+            (p, src, (ax, ay))
+        }
+        "cursor" => {
+            let (cx, cy) = get_cursor_position();
+            let p = calculate_anchored_overlay_position(cx, cy, logical_w, logical_h, scale_factor);
+            (p, "cursor", (cx, cy))
+        }
+        _ => {
+            let (cx, cy) = get_cursor_position();
+            let p = calculate_overlay_position(cx, cy, logical_w, logical_h, scale_factor);
+            (p, "monitor-center", (cx, cy))
+        }
+    };
+    crate::paste::log_diag(&format!(
+        "[HOTKEY] Overlay pos mode='{}' source='{}' anchor=({}, {}) -> pos=({}, {})",
+        mode, source, anchor.0, anchor.1, pos.0, pos.1
+    ));
+    pos
+}
+
+/// Pure work-area clamping for caret/cursor-anchored placement:
+/// prefers opening `gap` pixels below `(ax, ay)`, flips cleanly above `(ax, ay)`
+/// when there isn't room below, and on tighter/high-DPI screens smoothly tracks
+/// the anchor's vertical position (never slamming every middle-band anchor to
+/// the exact same bottom coordinate). Always strictly clamped inside the
+/// monitor's work area with `margin`.
+pub(crate) fn clamp_anchored_rect(
+    ax: i32,
+    ay: i32,
+    phys_w: i32,
+    phys_h: i32,
+    work_left: i32,
+    work_top: i32,
+    work_right: i32,
+    work_bottom: i32,
+    scale_factor: f64,
+) -> (i32, i32) {
+    let avail_w = work_right - work_left;
+    let avail_h = work_bottom - work_top;
+    if avail_w <= phys_w || avail_h <= phys_h {
+        return (work_left, work_top);
+    }
+
+    let margin = (12.0 * scale_factor).round() as i32;
+    let gap = (10.0 * scale_factor).round() as i32;
+    let caret_line_h = (28.0 * scale_factor).round() as i32;
+
+    let min_x = work_left + margin;
+    let max_x = (work_right - margin - phys_w).max(min_x);
+    let min_y = work_top + margin;
+    let max_y = (work_bottom - margin - phys_h).max(min_y);
+
+    // Vertical: open directly below anchor if it fits; otherwise flip above;
+    // if neither strictly fits (middle band of a compact/high-DPI screen),
+    // smoothly track the anchor proportionally so moving higher/lower moves
+    // the overlay visibly instead of pinning to the bottom edge.
+    let below_y = ay + gap;
+    let above_y = ay - caret_line_h - gap - phys_h;
+    let fits_below = below_y + phys_h <= work_bottom - margin;
+    let fits_above = above_y >= min_y;
+
+    let (x, y) = if fits_below {
+        let ideal_x = ax - (16.0 * scale_factor).round() as i32;
+        (ideal_x.clamp(min_x, max_x), below_y.clamp(min_y, max_y))
+    } else if fits_above {
+        let ideal_x = ax - (16.0 * scale_factor).round() as i32;
+        (ideal_x.clamp(min_x, max_x), above_y.clamp(min_y, max_y))
+    } else {
+        // Prefer opening to the right or left of the anchor when vertical space
+        // is tight, falling back to anchor-aligned horizontal clamping.
+        let right_x = ax + gap;
+        let left_x = ax - gap - phys_w;
+        let x = if right_x + phys_w <= work_right - margin {
+            right_x.clamp(min_x, max_x)
+        } else if left_x >= min_x {
+            left_x.clamp(min_x, max_x)
+        } else {
+            (ax - (16.0 * scale_factor).round() as i32).clamp(min_x, max_x)
+        };
+        let y = (ay - phys_h / 2).clamp(min_y, max_y);
+        (x, y)
+    };
+
+    (x, y)
+}
+
+pub fn calculate_anchored_overlay_position(
+    ax: i32,
+    ay: i32,
+    logical_w: i32,
+    logical_h: i32,
+    scale_factor: f64,
+) -> (i32, i32) {
+    unsafe {
+        let pt = windows::Win32::Foundation::POINT { x: ax, y: ay };
+        let hmon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+
+        if GetMonitorInfoW(hmon, &mut info).as_bool() {
+            let work = info.rcWork;
+            let phys_w = (logical_w as f64 * scale_factor).round() as i32;
+            let phys_h = (logical_h as f64 * scale_factor).round() as i32;
+            clamp_anchored_rect(
+                ax,
+                ay,
+                phys_w,
+                phys_h,
+                work.left,
+                work.top,
+                work.right,
+                work.bottom,
+                scale_factor,
+            )
+        } else {
+            calculate_overlay_position(ax, ay, logical_w, logical_h, scale_factor)
+        }
+    }
+}
+
 pub fn calculate_overlay_position(cx: i32, cy: i32, logical_w: i32, logical_h: i32, scale_factor: f64) -> (i32, i32) {
     unsafe {
         let pt = windows::Win32::Foundation::POINT { x: cx, y: cy };
@@ -2667,7 +2829,7 @@ pub fn calculate_overlay_position(cx: i32, cy: i32, logical_w: i32, logical_h: i
 
 #[cfg(test)]
 mod present_generation_tests {
-    use super::prepared_generation_matches;
+    use super::{clamp_anchored_rect, prepared_generation_matches};
     #[test]
     fn only_the_current_prepared_generation_can_reveal() {
         assert!(prepared_generation_matches(7, 7, 7));
@@ -2676,5 +2838,26 @@ mod present_generation_tests {
         assert!(!prepared_generation_matches(7, 8, 7));
         assert!(!prepared_generation_matches(7, 7, 8));
         assert!(!prepared_generation_matches(0, 7, 7));
+    }
+
+    #[test]
+    fn anchored_overlay_opens_below_caret_and_flips_above_near_bottom() {
+        // 1920x1040 work area, 750x475 overlay at 1.0 scale
+        let (x1, y1) = clamp_anchored_rect(500, 200, 750, 475, 0, 0, 1920, 1040, 1.0);
+        assert_eq!(x1, 484); // 500 - 16
+        assert_eq!(y1, 210); // 200 + 10 (fits cleanly below)
+
+        // Near bottom edge (y=900): flips above caret instead of overflowing
+        let (x2, y2) = clamp_anchored_rect(1800, 900, 750, 475, 0, 0, 1920, 1040, 1.0);
+        assert_eq!(x2, 1920 - 12 - 750); // clamped to right margin
+        assert!(y2 < 900 - 475, "expected flip above caret, got y={y2}");
+        assert!(y2 >= 12);
+
+        // Compact high-DPI screen (1920x1040 @ 1.5x -> 1125x713 overlay):
+        // middle-band anchors track smoothly instead of all collapsing to one point.
+        let (xh, yh) = clamp_anchored_rect(200, 380, 1125, 713, 0, 0, 1920, 1040, 1.5);
+        let (xl, yl) = clamp_anchored_rect(1600, 670, 1125, 713, 0, 0, 1920, 1040, 1.5);
+        assert!(xl > xh, "right anchor should open further right than left anchor ({xl} vs {xh})");
+        assert!(yl > yh, "lower anchor should open lower than upper anchor ({yl} vs {yh})");
     }
 }

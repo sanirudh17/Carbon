@@ -84,6 +84,9 @@ pub struct AppSettings {
     /// Quick Overlay: which tab opens by default ("clips" | "snippets").
     #[serde(default = "default_overlay_tab")]
     pub overlay_default_tab: String,
+    /// Quick Overlay placement: "center" | "caret" | "cursor".
+    #[serde(default = "default_overlay_position")]
+    pub overlay_position: String,
     /// Whether sensitive data detection and auto-expiry is enabled.
     #[serde(default = "default_false")]
     pub detect_sensitive_data: bool,
@@ -142,11 +145,19 @@ fn default_overlay_tab() -> String {
     "clips".to_string()
 }
 
+fn default_overlay_position() -> String {
+    "center".to_string()
+}
+
 fn sanitize_settings(s: &mut AppSettings) {
     s.overlay_default_tab = s.overlay_default_tab.trim().to_lowercase();
     if s.overlay_default_tab != "snippets" {
         s.overlay_default_tab = "clips".to_string();
     }
+    s.overlay_position = match s.overlay_position.trim().to_lowercase().as_str() {
+        "caret" | "cursor" => "caret".to_string(),
+        _ => "center".to_string(),
+    };
     s.clip_merge_window_ms = s.clip_merge_window_ms.clamp(500, 10000);
     s.quick_hotkey = s.quick_hotkey.trim().to_string();
     s.enlarged_hotkey = s.enlarged_hotkey.trim().to_string();
@@ -234,6 +245,7 @@ impl Default for AppSettings {
                 "LastPass.exe".to_string(),
             ],
             overlay_default_tab: "clips".to_string(),
+            overlay_position: "center".to_string(),
             detect_sensitive_data: false,
             clip_merge_enabled: false,
             clip_merge_window_ms: 2500,
@@ -464,5 +476,40 @@ mod tests {
         assert_eq!(resolve_effective_theme("dark"), "dark");
         let sys = resolve_effective_theme("system");
         assert!(sys == "dark" || sys == "light");
+    }
+
+    #[test]
+    fn test_overlay_position_sanitization_and_default() {
+        let json = r##"{
+            "quick_hotkey": "Ctrl+Shift+Z",
+            "enlarged_hotkey": "Ctrl+Alt+X",
+            "paste_plain_text": false,
+            "move_to_top_on_paste": true,
+            "start_with_windows": true,
+            "retention_days": 30,
+            "max_entries": 5000,
+            "image_size_limit_mb": 20,
+            "accent_color": "#5B7CFA",
+            "theme": "dark",
+            "ignore_apps": []
+        }"##;
+        let mut migrated: AppSettings = serde_json::from_str(json).expect("older settings JSON must deserialize");
+        sanitize_settings(&mut migrated);
+        assert_eq!(migrated.overlay_position, "center");
+
+        for (input, expected) in [
+            ("center", "center"),
+            ("CARET", "caret"),
+            (" Caret ", "caret"),
+            ("cursor", "caret"),
+            ("CURSOR", "caret"),
+            ("floating", "center"),
+            ("", "center"),
+        ] {
+            let mut s = AppSettings::default();
+            s.overlay_position = input.to_string();
+            sanitize_settings(&mut s);
+            assert_eq!(s.overlay_position, expected, "input '{}'", input);
+        }
     }
 }

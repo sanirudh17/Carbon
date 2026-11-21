@@ -52,6 +52,7 @@ import {
   PauseIcon as HugePauseIcon,
   PlayIcon as HugePlayIcon,
   Shield01Icon,
+  SparklesIcon as HugeSparklesIcon,
 } from '@hugeicons/core-free-icons';
 import { invoke } from '@tauri-apps/api/core';
 import { ClipItem, ContentType } from '../types';
@@ -201,6 +202,7 @@ export const CloseIcon = makeHugeIcon(Cancel01Icon, { size: 13, strokeWidth: 1.7
 export const PauseIcon = makeHugeIcon(HugePauseIcon, { size: 13, strokeWidth: 1.65 });
 export const PlayIcon = makeHugeIcon(HugePlayIcon, { size: 13, strokeWidth: 1.65 });
 export const ShieldIcon = makeHugeIcon(Shield01Icon, { size: 14, strokeWidth: 1.55 });
+export const SparklesIcon = makeHugeIcon(HugeSparklesIcon, { size: 14, strokeWidth: 1.55 });
 
 export function getTypeIcon(kind: ContentType) {
   switch (kind) {

@@ -183,13 +183,105 @@ fn queue_remove_clip(
     Ok(len)
 }
 
+fn sync_queue_head_to_clipboard(state: &AppState, first_id: Option<&str>) {
+    if let Some(first_id) = first_id {
+        if let Ok(Some(first_item)) = state.db.get_entry_by_id(first_id) {
+            paste::write_item_to_clipboard(&first_item, false).ok();
+            crate::clipboard_watcher::mark_paste(&first_item);
+        }
+    }
+}
+
+pub(crate) fn reorder_queue_deque(
+    queue: &mut VecDeque<String>,
+    from_index: usize,
+    to_index: usize,
+) -> bool {
+    let len = queue.len();
+    if from_index >= len || to_index >= len || from_index == to_index {
+        return false;
+    }
+    if let Some(id) = queue.remove(from_index) {
+        queue.insert(to_index, id);
+        return true;
+    }
+    false
+}
+
+#[tauri::command]
+fn queue_reorder(
+    state: State<'_, AppState>,
+    from_index: usize,
+    to_index: usize,
+    app_handle: AppHandle,
+) -> Result<usize, String> {
+    let (changed, len, head_id) = {
+        let mut queue = state.paste_queue.lock().map_err(|e| e.to_string())?;
+        let changed = reorder_queue_deque(&mut queue, from_index, to_index);
+        (changed, queue.len(), queue.front().cloned())
+    };
+    if changed {
+        sync_queue_head_to_clipboard(&state, head_id.as_deref());
+        let _ = app_handle.emit("paste-queue-updated", ());
+    }
+    Ok(len)
+}
+
+#[tauri::command]
+fn queue_remove_at(
+    state: State<'_, AppState>,
+    index: usize,
+    app_handle: AppHandle,
+) -> Result<usize, String> {
+    let (changed, len, head_id) = {
+        let mut queue = state.paste_queue.lock().map_err(|e| e.to_string())?;
+        let changed = if index < queue.len() {
+            queue.remove(index);
+            true
+        } else {
+            false
+        };
+        (changed, queue.len(), queue.front().cloned())
+    };
+    if changed {
+        sync_queue_head_to_clipboard(&state, head_id.as_deref());
+        let _ = app_handle.emit("paste-queue-updated", ());
+    }
+    Ok(len)
+}
+
+#[tauri::command]
+fn queue_reverse(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+) -> Result<usize, String> {
+    let (changed, len, head_id) = {
+        let mut queue = state.paste_queue.lock().map_err(|e| e.to_string())?;
+        let changed = if queue.len() > 1 {
+            let reversed: VecDeque<String> = queue.drain(..).rev().collect();
+            *queue = reversed;
+            true
+        } else {
+            false
+        };
+        (changed, queue.len(), queue.front().cloned())
+    };
+    if changed {
+        sync_queue_head_to_clipboard(&state, head_id.as_deref());
+        let _ = app_handle.emit("paste-queue-updated", ());
+    }
+    Ok(len)
+}
+
 #[tauri::command]
 fn queue_clear(
     state: State<'_, AppState>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
-    let mut queue = state.paste_queue.lock().map_err(|e| e.to_string())?;
-    queue.clear();
+    {
+        let mut queue = state.paste_queue.lock().map_err(|e| e.to_string())?;
+        queue.clear();
+    }
     let _ = app_handle.emit("paste-queue-updated", ());
     Ok(())
 }
@@ -1608,8 +1700,8 @@ pub fn run() {
                             // surface from under the modal loop.
                             paste::log_diag("[WINDOW_EVENT] Overlay lost focus during native drag — suppressing hide.");
                         } else {
-                            paste::log_diag("[WINDOW_EVENT] Overlay lost focus while visible. Calling hide_overlay_window...");
-                            hotkey::hide_overlay_window(&window.app_handle());
+                            paste::log_diag("[WINDOW_EVENT] Overlay lost focus while visible. Calling hide_overlay_window_on_blur...");
+                            hotkey::hide_overlay_window_on_blur(&window.app_handle());
                         }
                     }
                 } else if *focused && window.label() == "overlay" {
@@ -1650,6 +1742,9 @@ pub fn run() {
             copy_clip,
             queue_add_clips,
             queue_remove_clip,
+            queue_remove_at,
+            queue_reorder,
+            queue_reverse,
             queue_clear,
             queue_get_clips,
             update_clip_text,
@@ -1733,4 +1828,23 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::reorder_queue_deque;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn reorder_queue_deque_moves_items_accurately() {
+        let mut q: VecDeque<String> = ["a", "b", "c", "d"].into_iter().map(String::from).collect();
+        assert!(reorder_queue_deque(&mut q, 0, 2));
+        assert_eq!(q.iter().map(String::as_str).collect::<Vec<_>>(), vec!["b", "c", "a", "d"]);
+
+        assert!(reorder_queue_deque(&mut q, 3, 0));
+        assert_eq!(q.iter().map(String::as_str).collect::<Vec<_>>(), vec!["d", "b", "c", "a"]);
+
+        assert!(!reorder_queue_deque(&mut q, 1, 1));
+        assert!(!reorder_queue_deque(&mut q, 0, 99));
+    }
 }

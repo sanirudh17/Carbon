@@ -77,6 +77,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, onThe
     snippet_expansion_enabled: false,
     show_snippets: true,
     overlay_animation: 'soft' as 'full' | 'soft',
+    overlay_position: 'center' as 'center' | 'caret',
     dismissedUpdateVersion: '',
   });
 
@@ -1410,6 +1411,28 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, onThe
         {/* Appearance */}
         <section>
           <div className="sec-title">Appearance</div>
+          <div className="set-row">
+            <div className="set-label">
+              Quick Overlay position
+              <div className="set-hint">
+                {(settings.overlay_position ?? 'center') === 'caret'
+                  ? 'Caret: opens near your typing cursor, falling back to mouse pointer outside text fields'
+                  : 'Center: always opens centered on your active display'}
+              </div>
+            </div>
+            <div className="set-control">
+              <SlidingSegmentedControl
+                ariaLabel="Quick Overlay position"
+                value={((settings.overlay_position || 'center') === 'caret' ? 'caret' : 'center')}
+                options={[
+                  { value: 'center', label: 'Center' },
+                  { value: 'caret', label: 'Caret' },
+                ]}
+                onChange={(next) => updateSetting('overlay_position', next as any)}
+              />
+            </div>
+          </div>
+
           <div className="set-row">
             <div className="set-label">
               Reduced picker animation

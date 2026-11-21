@@ -2048,6 +2048,162 @@ fn is_password_field(hwnd: HWND) -> bool {
     }
 }
 
+/// Extracts the bottom-left screen coordinate `(left, top + height)` from the
+/// first bounding rectangle in a UIA `SAFEARRAY` of `f64` quads `[l, t, w, h]`.
+unsafe fn extract_first_uia_rect_bottom(sa: *mut windows::Win32::System::Com::SAFEARRAY) -> Option<(i32, i32)> {
+    use windows::Win32::System::Ole::{
+        SafeArrayAccessData, SafeArrayDestroy, SafeArrayGetLBound, SafeArrayGetUBound,
+        SafeArrayUnaccessData,
+    };
+    if sa.is_null() {
+        return None;
+    }
+    let result = (|| -> Option<(i32, i32)> {
+        let lbound = SafeArrayGetLBound(sa, 1).ok()?;
+        let ubound = SafeArrayGetUBound(sa, 1).ok()?;
+        let count = (ubound - lbound + 1) as usize;
+        if count < 4 {
+            return None;
+        }
+        let mut raw_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+        SafeArrayAccessData(sa, &mut raw_ptr).ok()?;
+        let slice = std::slice::from_raw_parts(raw_ptr as *const f64, count);
+        let left = slice[0];
+        let top = slice[1];
+        let width = slice[2];
+        let height = slice[3];
+        let _ = SafeArrayUnaccessData(sa);
+
+        if !left.is_finite() || !top.is_finite() || !width.is_finite() || !height.is_finite() {
+            return None;
+        }
+        if height <= 0.0 || height > 240.0 {
+            return None;
+        }
+        let x = left.round() as i32;
+        let y = (top + height).round() as i32;
+        if x == 0 && y == 0 {
+            return None;
+        }
+        Some((x, y))
+    })();
+    let _ = SafeArrayDestroy(sa);
+    result
+}
+
+/// Probes the active text caret position across both classic Win32 controls and
+/// modern Chromium/Electron/VS Code/Office/WinUI apps via Windows UI Automation.
+/// Returns `Some(((screen_x, screen_y), source_tag))` at the bottom edge of the
+/// caret (or focused text input box), or `None` when no text caret is active.
+pub(crate) fn probe_active_caret_with_source() -> Option<((i32, i32), &'static str)> {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.0.is_null() {
+            return None;
+        }
+        let mut fg_rect = windows::Win32::Foundation::RECT::default();
+        let has_fg_rect = GetWindowRect(fg, &mut fg_rect).is_ok();
+        let within_fg = |x: i32, y: i32| -> bool {
+            !has_fg_rect
+                || (x >= fg_rect.left - 8
+                    && x <= fg_rect.right + 8
+                    && y >= fg_rect.top - 8
+                    && y <= fg_rect.bottom + 8)
+        };
+
+        // Tier 1: Classic Win32 caret (instant, <0.1ms)
+        let mut pid = 0u32;
+        let tid = GetWindowThreadProcessId(fg, Some(&mut pid));
+        let mut info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        if GetGUIThreadInfo(tid, &mut info).is_ok() && !info.hwndCaret.0.is_null() {
+            let rc = info.rcCaret;
+            if rc.bottom > rc.top || rc.left > 0 || rc.top > 0 || rc.right > 0 {
+                let mut pt = POINT {
+                    x: rc.left,
+                    y: rc.bottom,
+                };
+                if ClientToScreen(info.hwndCaret, &mut pt).as_bool()
+                    && within_fg(pt.x, pt.y)
+                    && (pt.x != 0 || pt.y != 0)
+                {
+                    return Some(((pt.x, pt.y), "win32-caret"));
+                }
+            }
+        }
+
+        // Tier 2: Windows UI Automation (Chrome, Edge, Electron, VS Code, GOAT,
+        // modern Notepad, Office, WinUI).
+        use windows::Win32::Foundation::BOOL;
+        use windows::Win32::UI::Accessibility::{
+            IUIAutomationTextPattern, IUIAutomationTextPattern2, UIA_ComboBoxControlTypeId,
+            UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_TextPattern2Id,
+            UIA_TextPatternId,
+        };
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let automation: Result<IUIAutomation, _> =
+            CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER);
+        if let Ok(automation) = automation {
+            if let Ok(element) = automation.GetFocusedElement() {
+                // 2a. Exact blinking caret via IUIAutomationTextPattern2::GetCaretRange
+                if let Ok(tp2) =
+                    element.GetCurrentPatternAs::<IUIAutomationTextPattern2>(UIA_TextPattern2Id)
+                {
+                    let mut is_active = BOOL(0);
+                    if let Ok(range) = tp2.GetCaretRange(&mut is_active) {
+                        if let Ok(sa) = range.GetBoundingRectangles() {
+                            if let Some((x, y)) = extract_first_uia_rect_bottom(sa) {
+                                if within_fg(x, y) {
+                                    return Some(((x, y), "uia-caret"));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 2b. Active text selection/caret range via IUIAutomationTextPattern::GetSelection
+                if let Ok(tp) =
+                    element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+                {
+                    if let Ok(selection) = tp.GetSelection() {
+                        if selection.Length().unwrap_or(0) > 0 {
+                            if let Ok(range) = selection.GetElement(0) {
+                                if let Ok(sa) = range.GetBoundingRectangles() {
+                                    if let Some((x, y)) = extract_first_uia_rect_bottom(sa) {
+                                        if within_fg(x, y) {
+                                            return Some(((x, y), "uia-selection"));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 2c. Focused text input / edit box bounding rectangle (when control
+                // doesn't publish TextPattern, e.g. search bars & single-line inputs).
+                if let Ok(ctrl_type) = element.CurrentControlType() {
+                    let is_text_input = ctrl_type == UIA_EditControlTypeId
+                        || ctrl_type == UIA_DocumentControlTypeId
+                        || ctrl_type == UIA_ComboBoxControlTypeId;
+                    if is_text_input {
+                        if let Ok(rect) = element.CurrentBoundingRectangle() {
+                            let w = rect.right - rect.left;
+                            let h = rect.bottom - rect.top;
+                            if w > 0 && h > 0 && h <= 360 && within_fg(rect.left, rect.bottom) {
+                                return Some(((rect.left + 12, rect.bottom), "uia-focus-input"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
 fn get_caret_screen_position() -> (i32, i32) {
     unsafe {
         let fg = GetForegroundWindow();

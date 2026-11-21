@@ -62,6 +62,39 @@ test('typing coalesces searches, and Enter cannot paste the previous query selec
     });
     assert.deepEqual(calls, ['quasar', ''], 'clearing search must commit immediately');
     await React.act(async () => root.render(React.createElement(ContentSearchInput, { value: '', onSearch, inputRef: null })));
+
+    // Regression: when delayed parent `value` props catch up to earlier
+    // `onSearch` emissions (even across multiple debounce ticks) while the
+    // user keeps typing ahead, draft text and the newer pending timer must
+    // NEVER be clobbered.
+    calls.length = 0;
+    await React.act(async () => {
+      setValue.call(input, 'car');
+      input.dispatchEvent(new win.Event('input', { bubbles: true }));
+    });
+    await new Promise(resolve => setTimeout(resolve, 140));
+    assert.deepEqual(calls, ['car'], 'debounced prefix fires');
+    // User keeps typing across a second debounce tick before parent commits `value="car"`
+    await React.act(async () => {
+      setValue.call(input, 'carb');
+      input.dispatchEvent(new win.Event('input', { bubbles: true }));
+    });
+    await new Promise(resolve => setTimeout(resolve, 140));
+    assert.deepEqual(calls, ['car', 'carb'], 'second debounced prefix fires');
+    await React.act(async () => {
+      setValue.call(input, 'carbon');
+      input.dispatchEvent(new win.Event('input', { bubbles: true }));
+    });
+    // Parent now catches up to the older `value="car"` and then `value="carb"`
+    await React.act(async () => root.render(React.createElement(ContentSearchInput, { value: 'car', onSearch, inputRef: null })));
+    assert.equal(input.value, 'carbon', 'catching up to older emission must never wipe user keystrokes');
+    await React.act(async () => root.render(React.createElement(ContentSearchInput, { value: 'carb', onSearch, inputRef: null })));
+    assert.equal(input.value, 'carbon', 'catching up to second emission must never wipe user keystrokes');
+    await new Promise(resolve => setTimeout(resolve, 140));
+    assert.deepEqual(calls, ['car', 'carb', 'carbon'], 'newer typing timer must still fire');
+    // External reset (e.g. Clear button / overlay reopen) still syncs immediately
+    await React.act(async () => root.render(React.createElement(ContentSearchInput, { value: '', onSearch, inputRef: null })));
+    assert.equal(input.value, '', 'external reset must still clear the input');
   } finally {
     await React.act(async () => root.unmount());
     await win.happyDOM.abort();

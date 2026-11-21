@@ -1,5 +1,5 @@
 import { ContentSearchInput } from './ContentSearchInput';
-import React, { useEffect, useState, useRef, memo, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useRef, memo, useCallback, useMemo, startTransition } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -18,6 +18,9 @@ import {
 import { SnippetsView } from './SnippetsView';
 import { SnippetEditorModal, snippetDraftFromClip, type SnippetDraft } from './SnippetEditorModal';
 import { SlidingSegmentedControl } from './SlidingSegmentedControl';
+import { PasteStackDrawer } from './PasteStackDrawer';
+import { SmartContentInspector } from './SmartContentInspector';
+import { inspectClipContent } from '../lib/smartInspector';
 import { useSlidingIndicator } from '../hooks/useSlidingIndicator';
 import { groupItemsByDate, formatTimeAgo } from '../utils/dateGroups';
 import {
@@ -33,6 +36,7 @@ import {
   EmailIcon,
   ColorsIcon,
   StarIcon,
+  SparklesIcon,
   CopyIcon,
   HollowClipboardIcon,
   DeleteIcon,
@@ -142,7 +146,7 @@ const EnlargedRow = memo(function EnlargedRow({
           {item.is_sensitive
             ? '••••••••••••••••••••••••••••'
             : item.text_content
-            ? item.text_content.replace(/\s+/g, ' ').slice(0, 90)
+            ? item.text_content.slice(0, 200).replace(/\s+/g, ' ').slice(0, 90)
             : item.source_app || item.content_type}
         </div>
       </div>
@@ -181,17 +185,19 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
   const [resultSearch, setResultSearch] = useState('');
   const [hasMoreMatches, setHasMoreMatches] = useState(false);
   const handleSearch = useCallback((value: string) => {
-    setSearch(value);
-    setSearchLimit(200);
-    setSelectedIndex(0);
-    setRenderMode(true);
-    if (!value.trim() && selectedFilterRef.current === 'all' && !sourceAppFilterRef.current && allCachedItemsRef.current.length) {
-      const cached = allCachedItemsRef.current;
-      setItems(cached);
-      setSelectedItem(cached[0]);
-      setEditingContent(cached[0].text_content || '');
-      setResultSearch('');
-    }
+    startTransition(() => {
+      setSearch(value);
+      setSearchLimit(200);
+      setSelectedIndex(0);
+      setRenderMode(true);
+      if (!value.trim() && selectedFilterRef.current === 'all' && !sourceAppFilterRef.current && allCachedItemsRef.current.length) {
+        const cached = allCachedItemsRef.current;
+        setItems(cached);
+        setSelectedItem(cached[0]);
+        setEditingContent(cached[0].text_content || '');
+        setResultSearch('');
+      }
+    });
   }, []);
   const [imageDataUrl, setImageDataUrl] = useState<string>('');
   const [selectedFilter, setSelectedFilter] = useState<string>('all');
@@ -208,6 +214,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
     sidebarRef.current?.classList.toggle('collapsed');
   }, []);
   const [editingContent, setEditingContent] = useState('');
+  const [inspectorOpen, setInspectorOpen] = useState(false);
 
   // ADDENDUM v35 W1: single shared edit-buffer commit path (parity with overlay).
   // onChange only stages into the buffer; blur / selection-change flushes.
@@ -226,6 +233,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
   // never shows empty content when a valid text item is selected.
   // W1.3: never clobber an uncommitted buffer — the buffer wins until flush.
   useEffect(() => {
+    setInspectorOpen(false);
     if (editDirtyRef.current && selectedItem && editDirtyRef.current.id === selectedItem.id) return;
     setEditingContent(selectedItem?.text_content || '');
   }, [selectedItem?.id, selectedItem?.text_content]);
@@ -422,6 +430,13 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
   const lastClickedIndexRef = useRef<number>(-1);
   const [bulkConfirmDelete, setBulkConfirmDelete] = useState<boolean>(false);
   const [pasteQueue, setPasteQueue] = useState<ClipItem[]>([]);
+  const pasteQueueIndexMap = useMemo(() => {
+    const map = new Map<string, number>();
+    pasteQueue.forEach((q, idx) => {
+      if (!map.has(q.id)) map.set(q.id, idx);
+    });
+    return map;
+  }, [pasteQueue]);
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
   const mainListRef = useRef<HTMLDivElement>(null);
@@ -619,10 +634,9 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
         limit: !sourceAppFilter ? searchLimit + 1 : null,
       });
       if (readSeq !== readSeqRef.current) return;
-      setResultSearch(search);
 
       const paged = !sourceAppFilter;
-      setHasMoreMatches(paged && res.length > searchLimit);
+      const moreMatches = paged && res.length > searchLimit;
       let list = paged ? res.slice(0, searchLimit) : res || [];
       if (!search.trim() && !sourceAppFilter) {
         const cache = filterCacheRef.current;
@@ -650,32 +664,41 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
       // Identical refetch: keep the previous array (and selection objects)
       // so memo rows AND the preview pane bail out — a post-open refetch
       // with no changes must be render-free, never a visible step.
-      setItems((prev) => (sameClipList(prev, list) ? prev : list));
-      setInitialLoaded(true);
+      const commitResults = () => {
+        setResultSearch(search);
+        setHasMoreMatches(moreMatches);
+        setItems((prev) => (sameClipList(prev, list) ? prev : list));
+        setInitialLoaded(true);
 
-      if (list.length > 0) {
-        setSelectedIndex((prev) => {
-          const nextIdx = prev < list.length ? prev : 0;
-          const next = list[nextIdx];
-          setSelectedItem((cur) =>
-            cur &&
-            cur.id === next.id &&
-            cur.updated_at === next.updated_at &&
-            cur.text_content === next.text_content &&
-            cur.title === next.title &&
-            cur.is_pinned === next.is_pinned
-              ? cur
-              : next
-          );
-          setEditingContent((cur) => {
-            const v = next.text_content || '';
-            return cur === v ? cur : v;
+        if (list.length > 0) {
+          setSelectedIndex((prev) => {
+            const nextIdx = prev < list.length ? prev : 0;
+            const next = list[nextIdx];
+            setSelectedItem((cur) =>
+              cur &&
+              cur.id === next.id &&
+              cur.updated_at === next.updated_at &&
+              cur.text_content === next.text_content &&
+              cur.title === next.title &&
+              cur.is_pinned === next.is_pinned
+                ? cur
+                : next
+            );
+            setEditingContent((cur) => {
+              const v = next.text_content || '';
+              return cur === v ? cur : v;
+            });
+            return nextIdx;
           });
-          return nextIdx;
-        });
+        } else {
+          setSelectedItem(null);
+          setEditingContent('');
+        }
+      };
+      if (search.trim()) {
+        startTransition(commitResults);
       } else {
-        setSelectedItem(null);
-        setEditingContent('');
+        commitResults();
       }
     } catch (err) {
       console.error('Failed to fetch enlarged clips:', err);
@@ -956,7 +979,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
       }
     });
 
-    const unlistenQueue = listen('queue-updated', () => {
+    const unlistenQueue = listen('paste-queue-updated', () => {
       fetchQueue();
     });
 
@@ -2604,29 +2627,12 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
             </div>
 
             {pasteQueue.length > 0 && (
-              <div className="queue-banner" style={{ margin: '0 16px 14px 16px' }}>
-                <div className="queue-banner-left">
-                  <span className="queue-tag">Queue ({pasteQueue.length})</span>
-                  <span className="queue-dot">·</span>
-                  <div className="queue-next-meta" title={pasteQueue[0]?.title}>
-                    <span>Next:</span>
-                    <span className="queue-next-title">{constrainTitle(pasteQueue[0]?.title || '', 42)}</span>
-                  </div>
-                </div>
-                <div className="queue-banner-right">
-                  <span className="queue-auto-hint">Ctrl+V pastes in order</span>
-                  <button
-                    className="queue-clear-btn"
-                    title="Clear paste queue (Esc)"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleClearQueue();
-                    }}
-                  >
-                    <span className="carbon-control-label">Clear</span>
-                  </button>
-                </div>
-              </div>
+              <PasteStackDrawer
+                items={pasteQueue}
+                onClear={handleClearQueue}
+                onQueueChange={fetchQueue}
+                style={{ margin: '0 16px 14px 16px' }}
+              />
             )}
 
             {/* Items List */}
@@ -2656,7 +2662,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
                         const currentIdx = globalIdx++;
                         const isMultiSelected = selectedIds.has(item.id);
                         const isSelected = selectedIds.size > 1 ? isMultiSelected : (selectedIndex === currentIdx || selectedItem?.id === item.id);
-                        const queueIdx = pasteQueue.findIndex((q) => q.id === item.id);
+                        const queueIdx = pasteQueueIndexMap.get(item.id) ?? -1;
 
                         return (
                           <EnlargedRow
@@ -2812,37 +2818,67 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
               {selectedIds.size} items selected · Press Del to delete batch, Esc to deselect
             </div>
           </div>
-        ) : selectedItem ? (
-          <div className="preview-inner">
+        ) : selectedItem ? (() => {
+          const hasMainRenderedVersion =
+            !!search.trim() ||
+            selectedItem.content_type === 'rich_text' ||
+            (selectedItem.content_type === 'code' && Boolean(selectedItem.text_content)) ||
+            (selectedItem.content_type === 'text' && Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!));
+          const mainInspectText =
+            selectedItem.is_sensitive ||
+            selectedItem.content_type === 'image' ||
+            selectedItem.content_type === 'file'
+              ? null
+              : hasMainRenderedVersion && renderMode
+                ? selectedItem.text_content
+                : editingContent || selectedItem.text_content;
+          const mainSmartInspection = mainInspectText ? inspectClipContent(mainInspectText) : null;
+          const showMainInspector = Boolean(inspectorOpen && mainSmartInspection);
+
+          return (
+          <div className={`preview-inner ${showMainInspector ? 'has-smart-inspector' : ''}`}>
             {/* Media types skip the kind/seg heading so the image uses the
                 freed space — but the action buttons stay. Text keeps the
                 full header. */}
             <div className="preview-head">
               {!['image', 'file'].includes(selectedItem.content_type) && (
-              <>
-              <span className="preview-kind" style={{ color: activeTint }}>
-                {getTypeIcon(selectedItem.content_type)}
-                {getSpecificTypeLabel(selectedItem)}
-              </span>
-              {selectedItem &&
-                (!!search.trim() || selectedItem.content_type === 'rich_text' ||
-                  (selectedItem.content_type === 'code' && Boolean(selectedItem.text_content)) ||
-                  (selectedItem.content_type === 'text' && Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!))) && (
-                <SlidingSegmentedControl
-                  variant="preview"
-                  ariaLabel="Preview mode"
-                  value={renderMode ? 'render' : 'raw'}
-                  options={[
-                    { value: 'render', label: 'Render' },
-                    { value: 'raw', label: 'Raw' },
-                  ]}
-                  onChange={(mode) => setRenderMode(mode === 'render')}
-                  style={{ marginRight: 4 }}
-                />
+                <span className="preview-kind" style={{ color: activeTint }}>
+                  {getTypeIcon(selectedItem.content_type)}
+                  {getSpecificTypeLabel(selectedItem)}
+                </span>
               )}
-              </>
-              )}
-              <div className="preview-actions" style={['image', 'file'].includes(selectedItem.content_type) ? { marginLeft: 'auto' } : undefined}>
+              <div className="preview-head-right">
+                {!['image', 'file'].includes(selectedItem.content_type) && (hasMainRenderedVersion || mainSmartInspection) && (
+                  <>
+                    {hasMainRenderedVersion && (
+                      <SlidingSegmentedControl
+                        variant="preview"
+                        ariaLabel="Preview mode"
+                        value={renderMode ? 'render' : 'raw'}
+                        options={[
+                          { value: 'render', label: 'Render' },
+                          { value: 'raw', label: 'Raw' },
+                        ]}
+                        onChange={(mode) => setRenderMode(mode === 'render')}
+                      />
+                    )}
+                    {mainSmartInspection && (
+                      <button
+                        type="button"
+                        className={`smart-inspect-trigger ${showMainInspector ? 'active' : ''}`}
+                        aria-pressed={showMainInspector}
+                        aria-label={showMainInspector ? `Hide ${mainSmartInspection.title}` : `Show ${mainSmartInspection.title}`}
+                        title={showMainInspector ? `Hide ${mainSmartInspection.title}` : `Smart inspect · ${mainSmartInspection.title}`}
+                        onClick={() => setInspectorOpen((prev) => !prev)}
+                      >
+                        <SparklesIcon size={14} />
+                        {!showMainInspector && <span className="smart-inspect-dot" aria-hidden="true" />}
+                      </button>
+                    )}
+                    <span className="preview-head-sep" aria-hidden="true" />
+                  </>
+                )}
+                <div className="preview-actions">
                 <div className="paste-dropdown-wrapper">
                   <button
                     className="act"
@@ -2898,6 +2934,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
                 <button className="act danger" title="Delete" onClick={() => handleDelete(selectedItem)}>
                   <DeleteIcon />
                 </button>
+              </div>
               </div>
             </div>
 
@@ -2993,7 +3030,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
                   title={previewFocused ? 'Focused — arrow keys scroll the document (Esc to release)' : 'Click to focus, then arrow keys scroll'}
                   onClick={() => setPreviewFocused(true)}
                 >
-                  <ClipPreview searchQuery={search} item={selectedItem} forceRaw={false} />
+                  <ClipPreview searchQuery={resultSearch} item={selectedItem} forceRaw={false} />
                 </div>
               ) : (
                 /* Editable Text / Code / Link / Email / Color Preview */
@@ -3015,7 +3052,8 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
                     onBlur={handleContentBlurCommit}
                     onKeyDown={(e) => {
                       // v36 A1: save-key commits in place (stays in edit mode).
-                      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                      // Guard !shiftKey && !altKey so Win+Shift+S (Snipping Tool / Glint) is never swallowed.
+                      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 's') {
                         e.preventDefault();
                         e.stopPropagation();
                         void commitPendingEdit('save-key');
@@ -3031,6 +3069,10 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
               )}
             </div>
 
+            {showMainInspector && (
+              <SmartContentInspector inspection={mainSmartInspection} />
+            )}
+
             <ClipMetaStrip item={selectedItem} onFilterByApp={(app) => setSourceAppFilter(app)} />
 
             <div className="preview-foot">
@@ -3042,7 +3084,8 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
                   : 'Edits save to history — Enter pastes this content'}
             </div>
           </div>
-        ) : null)}
+          );
+        })() : null)}
       </div>
 
       {/* Action Panel Modal Overlay (Ctrl+K) */}

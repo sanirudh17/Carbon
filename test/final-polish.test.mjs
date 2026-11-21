@@ -244,3 +244,110 @@ test('dateGroups keeps Today, Yesterday, and older calendar headings aligned wit
   assert.equal(formatTimeAgo('2026-11-20 14:00:00', now), '1d ago');
   assert.equal(formatTimeAgo('2026-11-19 23:30:00', now), '2d ago');
 });
+
+test('smartInspector decodes JWTs, Unix timestamps, URL query params, percent strings, and UTF-8 Base64 without false positives', () => {
+  const { inspectClipContent } = loadModule('src/lib/smartInspector.ts');
+  const nowMs = Date.UTC(2026, 10, 21, 18, 0, 0);
+
+  // 1. Active JWT with Bearer prefix
+  const b64url = (obj) =>
+    Buffer.from(JSON.stringify(obj), 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const activeJwt = `Bearer ${b64url({ alg: 'HS256', typ: 'JWT' })}.${b64url({ sub: 'user_42', iss: 'carbon.local', exp: Math.floor(nowMs / 1000) + 3600 })}.sig1234567890`;
+  const jwtActive = inspectClipContent(activeJwt, nowMs);
+  assert.equal(jwtActive?.kind, 'jwt');
+  assert.ok(jwtActive?.badge?.text.startsWith('Active'), `expected Active badge, got ${jwtActive?.badge?.text}`);
+  assert.equal(jwtActive?.badge?.tone, 'ok');
+  assert.ok(jwtActive?.codeBlock?.includes('"sub": "user_42"'));
+
+  // 2. Expired JWT
+  const expiredJwt = `${b64url({ alg: 'RS256', typ: 'JWT' })}.${b64url({ sub: 'user_99', exp: Math.floor(nowMs / 1000) - 600 })}.sig9876543210`;
+  const jwtExpired = inspectClipContent(expiredJwt, nowMs);
+  assert.equal(jwtExpired?.kind, 'jwt');
+  assert.ok(jwtExpired?.badge?.text.startsWith('Expired'), `expected Expired badge, got ${jwtExpired?.badge?.text}`);
+  assert.equal(jwtExpired?.badge?.tone, 'warn');
+
+  // 3. Unix timestamp (10-digit seconds & 13-digit ms)
+  const tsSec = inspectClipContent('1700000000', nowMs);
+  assert.equal(tsSec?.kind, 'timestamp');
+  assert.equal(tsSec?.title, 'Unix Timestamp (s)');
+  assert.ok(tsSec?.badge?.text.endsWith('ago'));
+  assert.ok(tsSec?.copyValue.startsWith('2023-11-14T22:13:20'));
+
+  const tsMs = inspectClipContent('1700000000123', nowMs);
+  assert.equal(tsMs?.kind, 'timestamp');
+  assert.equal(tsMs?.title, 'Unix Timestamp (ms)');
+  assert.equal(tsMs?.copyValue, '2023-11-14T22:13:20.123Z');
+
+  // 4. URL with query parameters
+  const urlRes = inspectClipContent('https://api.example.com/v1/search?q=hello%20world&page=2&sort=desc', nowMs);
+  assert.equal(urlRes?.kind, 'url_params');
+  assert.equal(urlRes?.rows?.length, 3);
+  assert.equal(urlRes?.rows?.[0]?.value, 'hello world');
+
+  // 5. Percent-encoded text
+  const pctRes = inspectClipContent('hello%20world%2Fpath%3Fok%3D1', nowMs);
+  assert.equal(pctRes?.kind, 'url_encoded');
+  assert.equal(pctRes?.copyValue, 'hello world/path?ok=1');
+
+  // 6. Readable UTF-8 Base64 (JSON auto-formatted)
+  const b64Res = inspectClipContent(Buffer.from('{"hello":"carbon","ok":true}', 'utf8').toString('base64'), nowMs);
+  assert.equal(b64Res?.kind, 'base64');
+  assert.deepEqual(JSON.parse(b64Res?.copyValue || '{}'), { hello: 'carbon', ok: true });
+
+  // 7. ISO-8601 date, Color formats, UUIDv7, Cron, JSON, and plain URL breakdown
+  const isoRes = inspectClipContent('2026-11-21T18:00:00Z', nowMs);
+  assert.equal(isoRes?.kind, 'iso_date');
+  assert.equal(isoRes?.copyValue, String(Math.floor(nowMs / 1000)));
+
+  const colorRes = inspectClipContent('#5B7CFA', nowMs);
+  assert.equal(colorRes?.kind, 'color');
+  assert.equal(colorRes?.copyValue, 'rgb(91, 124, 250)');
+
+  const uuidRes = inspectClipContent('01934f5e-8a10-7abc-9123-456789abcdef', nowMs);
+  assert.equal(uuidRes?.kind, 'uuid');
+  assert.equal(uuidRes?.badge?.text, 'v7');
+
+  const cronRes = inspectClipContent('*/5 * * * *', nowMs);
+  assert.equal(cronRes?.kind, 'cron');
+  assert.equal(cronRes?.copyValue, 'Every 5 minutes');
+
+  const jsonRes = inspectClipContent('{"name":"carbon","items":[1,2,3]}', nowMs);
+  assert.equal(jsonRes?.kind, 'json');
+  assert.equal(jsonRes?.copyLabel, 'Copy Pretty');
+
+  const plainUrlRes = inspectClipContent('https://github.com/berkaygkc/yabbistir', nowMs);
+  assert.equal(plainUrlRes?.kind, 'url_info');
+  assert.equal(plainUrlRes?.copyValue, 'github.com');
+
+  // 8. Reject ordinary prose, hex hashes, and short numbers
+  assert.equal(inspectClipContent('Please do so', nowMs), null);
+  assert.equal(inspectClipContent('deadbeefcafe0123456789abcdef0123', nowMs), null);
+  assert.equal(inspectClipContent('42', nowMs), null);
+});
+
+test('Commit 2 features: caret overlay placement, reorderable paste stack drawer, and smart inspector are wired', () => {
+  const settingsSrc = fs.readFileSync(path.join(SRC, 'components', 'Settings.tsx'), 'utf8');
+  const overlaySrc = fs.readFileSync(path.join(SRC, 'components', 'QuickOverlay.tsx'), 'utf8');
+  const enlargedSrc = fs.readFileSync(path.join(SRC, 'components', 'EnlargedWindow.tsx'), 'utf8');
+  const drawerSrc = fs.readFileSync(path.join(SRC, 'components', 'PasteStackDrawer.tsx'), 'utf8');
+  const css = fs.readFileSync(path.join(SRC, 'index.css'), 'utf8');
+  const hotkeyRs = fs.readFileSync(path.join(SRC_TAURI, 'hotkey.rs'), 'utf8');
+  const expansionRs = fs.readFileSync(path.join(SRC_TAURI, 'expansion.rs'), 'utf8');
+  const libRs = fs.readFileSync(path.join(SRC_TAURI, 'lib.rs'), 'utf8');
+
+  assert.ok(settingsSrc.includes("updateSetting('overlay_position'") && !settingsSrc.includes("{ value: 'cursor'"), 'Settings must expose clean 2-option Center | Caret selector');
+  assert.ok(hotkeyRs.includes('resolve_overlay_position') && hotkeyRs.includes('probe_active_caret_with_source'), 'hotkey.rs must anchor overlay using UIA+Win32 caret probe with cursor fallback');
+  assert.ok(expansionRs.includes('IUIAutomationTextPattern2') && expansionRs.includes('GetCaretRange'), 'expansion.rs must probe modern Chromium/Electron/WinUI carets via UIA TextPattern2');
+  assert.ok(overlaySrc.includes('<PasteStackDrawer') && enlargedSrc.includes('<PasteStackDrawer'), 'Both windows must render interactive PasteStackDrawer');
+  assert.ok(enlargedSrc.includes("listen('paste-queue-updated'") && enlargedSrc.includes('onQueueChange={fetchQueue}') && overlaySrc.includes('onQueueChange={fetchQueue}'), 'Both windows must stay in sync with paste-queue-updated and pass onQueueChange');
+  assert.ok(drawerSrc.includes('onPointerDown') && !drawerSrc.includes('draggable'), 'PasteStackDrawer must use pointer-event drag-to-reorder instead of HTML5 draggable (prevents red no-drop cursor in WebView2)');
+  assert.ok(css.includes('.paste-stack-ic .clip-thumb-img') && css.includes('position: absolute;'), 'Paste stack thumbnails must be contained and drawer must float without squishing preview');
+  assert.ok(libRs.includes('queue_reorder') && libRs.includes('queue_remove_at') && libRs.includes('queue_reverse'), 'lib.rs must register queue reorder/remove/reverse commands');
+  assert.ok(overlaySrc.includes('<SmartContentInspector') && enlargedSrc.includes('<SmartContentInspector'), 'SmartContentInspector must be wired across QuickOverlay and EnlargedWindow');
+  assert.ok(overlaySrc.includes('useState<boolean>(false)') && overlaySrc.includes('smart-inspect-trigger') && enlargedSrc.includes('smart-inspect-trigger'), 'SmartContentInspector must be OFF by default and toggled via the Sparkles button beside Render/Raw');
+  assert.ok(enlargedSrc.includes('className="preview-head-right"') && css.includes('.preview-head-sep'), 'Main app Sparkles button must group flush-right beside preview actions');
+  assert.ok(hotkeyRs.includes('pub fn hide_overlay_window_on_blur') && libRs.includes('hotkey::hide_overlay_window_on_blur'), 'Blur-hide must skip restore_target_window so Win+Shift+S screenshot overlay is never stolen');
+  assert.ok(overlaySrc.includes('!e.shiftKey && !e.altKey') && enlargedSrc.includes('!e.shiftKey && !e.altKey'), 'Ctrl+S save-key must never swallow Win+Shift+S');
+  assert.ok(css.includes('::highlight(carbon-search)') && !css.includes('#f5cf62'), 'Search highlight must use refined champagne-amber glass tint instead of harsh plain yellow');
+  assert.ok(css.includes('.overlay-preview-content .color-swatch-box') && css.includes('flex-shrink: 0;'), 'Quick Overlay color swatch must never squish when enhancements are hidden');
+});

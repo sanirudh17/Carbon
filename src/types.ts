@@ -66,6 +66,8 @@ export interface AppSettings {
   show_snippets: boolean;
   /** Overlay cover-layer animation: "full" (original) | "soft" (reduced). Optional: older payloads omit it. */
   overlay_animation?: 'full' | 'soft';
+  /** Quick Overlay placement: "center" | "caret" (anchors to typing caret, falling back to mouse pointer). */
+  overlay_position?: 'center' | 'caret';
   window_material?: 'acrylic' | 'solid';
   dismissedUpdateVersion?: string;
 }

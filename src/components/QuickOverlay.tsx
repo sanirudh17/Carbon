@@ -1,5 +1,5 @@
 import { ContentSearchInput } from './ContentSearchInput';
-import React, { useEffect, useLayoutEffect, useState, useRef, memo, useCallback, useMemo } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useRef, memo, useCallback, useMemo, startTransition } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -20,6 +20,9 @@ import {
 import { useSnippetFlow } from '../utils/useSnippetFlow';
 import { SnippetArgPrompt } from './SnippetArgPrompt';
 import { SlidingSegmentedControl } from './SlidingSegmentedControl';
+import { PasteStackDrawer } from './PasteStackDrawer';
+import { SmartContentInspector } from './SmartContentInspector';
+import { inspectClipContent } from '../lib/smartInspector';
 import { useSlidingIndicator } from '../hooks/useSlidingIndicator';
 import { groupItemsByDate, formatTimeAgo } from '../utils/dateGroups';
 import {
@@ -43,6 +46,7 @@ import {
   DeleteIcon,
   FilterIcon,
   StarIcon,
+  SparklesIcon,
   DragHandleIcon,
   snippetIconFor,
   getTypeIcon,
@@ -128,7 +132,7 @@ const OverlayRow = memo(function OverlayRow({
           {item.is_sensitive
             ? '••••••••••••••••••••••••••••'
             : item.text_content
-            ? item.text_content.replace(/\s+/g, ' ').slice(0, 75)
+            ? item.text_content.slice(0, 180).replace(/\s+/g, ' ').slice(0, 75)
             : item.source_app || item.content_type}
         </div>
       </div>
@@ -161,6 +165,13 @@ export const QuickOverlay: React.FC = () => {
 
   const [items, setItems] = useState<ClipItem[]>(() => (typeof window !== 'undefined' && window.__carbonInitialData) || []);
   const [pasteQueue, setPasteQueue] = useState<ClipItem[]>([]);
+  const pasteQueueIndexMap = useMemo(() => {
+    const map = new Map<string, number>();
+    pasteQueue.forEach((q, idx) => {
+      if (!map.has(q.id)) map.set(q.id, idx);
+    });
+    return map;
+  }, [pasteQueue]);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [addToColModalOpen, setAddToColModalOpen] = useState(false);
@@ -172,14 +183,16 @@ export const QuickOverlay: React.FC = () => {
   const unfilteredItemsRef = useRef<ClipItem[]>(items);
   const [hasMoreMatches, setHasMoreMatches] = useState(false);
   const handleSearch = useCallback((value: string) => {
-    setSearch(value);
-    setSearchLimit(200);
-    setSelectedIndex(0);
-    setRenderMode(true);
-    if (!value.trim() && unfilteredItemsRef.current.length) {
-      setItems(unfilteredItemsRef.current);
-      setResultSearch('');
-    }
+    startTransition(() => {
+      setSearch(value);
+      setSearchLimit(200);
+      setSelectedIndex(0);
+      setRenderMode(true);
+      if (!value.trim() && unfilteredItemsRef.current.length) {
+        setItems(unfilteredItemsRef.current);
+        setResultSearch('');
+      }
+    });
   }, []);
   // Application filter chip in the searchbar (same behavior as the main app:
   // click the APPLICATION value in the preview to filter, ✕ to clear).
@@ -188,6 +201,7 @@ export const QuickOverlay: React.FC = () => {
   const [typeFilter, setTypeFilter] = useState<string>('__all__');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [renderMode, setRenderMode] = useState<boolean>(true);
+  const [inspectorOpen, setInspectorOpen] = useState<boolean>(false);
   const [editingContent, setEditingContent] = useState<string>('');
   const [actionPanelOpen, setActionPanelOpen] = useState(false);
   const [actionIndex, setActionIndex] = useState(0);
@@ -321,12 +335,16 @@ export const QuickOverlay: React.FC = () => {
         limit: !sourceAppFilter && typeFilter === '__all__' ? searchLimit + 1 : null,
       });
       if (readSeq !== readSeqRef.current) return;
-      setResultSearch(search);
       const paged = !sourceAppFilter && typeFilter === '__all__';
       if (!search.trim()) unfilteredItemsRef.current = res;
-      setHasMoreMatches(paged && res.length > searchLimit);
-      setItems(paged ? res.slice(0, searchLimit) : res || []);
-      if (searchLimit === 200 || !search.trim()) setSelectedIndex(0);
+      const nextItems = paged ? res.slice(0, searchLimit) : res || [];
+      const shouldResetSel = searchLimit === 200 || !search.trim();
+      startTransition(() => {
+        setResultSearch(search);
+        setHasMoreMatches(paged && res.length > searchLimit);
+        setItems(nextItems);
+        if (shouldResetSel) setSelectedIndex(0);
+      });
       // v36 A2: a full re-read absorbs every mutation to date. Sync (not +1)
       // to the last observed store version — a blind +1 invented a lead that
       // absorbed exactly one missed clipboard-updated push (false-fresh open).
@@ -1422,6 +1440,7 @@ export const QuickOverlay: React.FC = () => {
   // Keep editingContent synchronized with selectedItem so raw/edit mode never renders empty text.
   // W1.3: never clobber an uncommitted buffer — the buffer wins until blur/selection flush.
   useEffect(() => {
+    setInspectorOpen(false);
     if (editDirtyRef.current && selectedItem && editDirtyRef.current.id === selectedItem.id) return;
     setEditingContent(selectedItem?.text_content || '');
   }, [selectedItem?.id, selectedItem?.text_content]);
@@ -2063,29 +2082,13 @@ export const QuickOverlay: React.FC = () => {
           </div>
 
         {tab === 'clips' && pasteQueue.length > 0 && (
-          <div className="queue-banner" style={{ margin: '0 10px 8px 10px' }}>
-            <div className="queue-banner-left">
-              <span className="queue-tag">Queue ({pasteQueue.length})</span>
-              <span className="queue-dot">·</span>
-              <div className="queue-next-meta" title={pasteQueue[0]?.title}>
-                <span>Next:</span>
-                <span className="queue-next-title">{constrainTitle(pasteQueue[0]?.title || '', 30)}</span>
-              </div>
-            </div>
-            <div className="queue-banner-right">
-              <span className="queue-auto-hint">Ctrl+V pastes in order</span>
-              <button
-                className="queue-clear-btn"
-                title="Clear paste queue"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleClearQueue();
-                }}
-              >
-                <span className="carbon-control-label">Clear</span>
-              </button>
-            </div>
-          </div>
+          <PasteStackDrawer
+            items={pasteQueue}
+            onClear={handleClearQueue}
+            onQueueChange={fetchQueue}
+            compact
+            style={{ margin: '0 10px 8px 10px' }}
+          />
         )}
 
         {/* Unified split frame: list (left) + permanent preview (right) */}
@@ -2122,7 +2125,7 @@ export const QuickOverlay: React.FC = () => {
                     {group.items.map((item) => {
                       const currentIdx = globalIdx++;
                       const isSelected = selectedIndex === currentIdx;
-                      const queueIdx = pasteQueue.findIndex((q) => q.id === item.id);
+                      const queueIdx = pasteQueueIndexMap.get(item.id) ?? -1;
 
                       return (
                         <OverlayRow
@@ -2261,11 +2264,22 @@ export const QuickOverlay: React.FC = () => {
                   (selectedItem.content_type === 'code' && Boolean(selectedItem.text_content)) ||
                   (selectedItem.content_type === 'text' && Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!));
 
+                const inspectText =
+                  selectedItem.is_sensitive ||
+                  selectedItem.content_type === 'image' ||
+                  selectedItem.content_type === 'file'
+                    ? null
+                    : hasRenderedVersion && renderMode
+                      ? selectedItem.text_content
+                      : editingContent || selectedItem.text_content;
+                const smartInspection = inspectText ? inspectClipContent(inspectText) : null;
+                const showInspector = Boolean(inspectorOpen && smartInspection);
+
                 return (
                   <>
                     {/* Media types get the full pane: no kind/seg header, so
                         the image uses the freed space. Text keeps the head
-                        (Render/Raw toggle lives there). */}
+                        (Render/Raw toggle + opt-in Smart Inspector button live there). */}
                     {(selectedItem.content_type !== 'image' && selectedItem.content_type !== 'file') && (
                     <div className="overlay-preview-head">
                       <span
@@ -2275,22 +2289,38 @@ export const QuickOverlay: React.FC = () => {
                         {getTypeIcon(selectedItem.content_type)}
                         {getSpecificTypeLabel(selectedItem)}
                       </span>
-                      {hasRenderedVersion && (
-                        <SlidingSegmentedControl
-                          variant="preview"
-                          ariaLabel="Preview mode"
-                          value={renderMode ? 'render' : 'raw'}
-                          options={[
-                            { value: 'render', label: 'Render' },
-                            { value: 'raw', label: 'Raw' },
-                          ]}
-                          onChange={(mode) => setRenderMode(mode === 'render')}
-                          style={{ marginLeft: 'auto' }}
-                        />
+                      {(hasRenderedVersion || smartInspection) && (
+                        <div className="overlay-preview-head-tools">
+                          {hasRenderedVersion && (
+                            <SlidingSegmentedControl
+                              variant="preview"
+                              ariaLabel="Preview mode"
+                              value={renderMode ? 'render' : 'raw'}
+                              options={[
+                                { value: 'render', label: 'Render' },
+                                { value: 'raw', label: 'Raw' },
+                              ]}
+                              onChange={(mode) => setRenderMode(mode === 'render')}
+                            />
+                          )}
+                          {smartInspection && (
+                            <button
+                              type="button"
+                              className={`smart-inspect-trigger ${showInspector ? 'active' : ''}`}
+                              aria-pressed={showInspector}
+                              aria-label={showInspector ? `Hide ${smartInspection.title}` : `Show ${smartInspection.title}`}
+                              title={showInspector ? `Hide ${smartInspection.title}` : `Smart inspect · ${smartInspection.title}`}
+                              onClick={() => setInspectorOpen((prev) => !prev)}
+                            >
+                              <SparklesIcon size={14} />
+                              {!showInspector && <span className="smart-inspect-dot" aria-hidden="true" />}
+                            </button>
+                          )}
+                        </div>
                       )}
                     </div>
                     )}
-                    <div className="overlay-preview-content ov-preview-media">
+                    <div className={`overlay-preview-content ov-preview-media ${showInspector ? 'has-smart-inspector' : ''}`}>
                       {selectedItem.content_type === 'image' || selectedItem.content_type === 'file' ? (
                         <div
                           draggable
@@ -2299,14 +2329,14 @@ export const QuickOverlay: React.FC = () => {
                           onDragStart={(e) => handleOverlayDragStart(selectedItem, e)}
                           onDragEnd={handleOverlayDragEnd}
                         >
-                          <ClipPreview searchQuery={search} item={selectedItem} />
+                          <ClipPreview searchQuery={resultSearch} item={selectedItem} />
                         </div>
                       ) : hasRenderedVersion && renderMode ? (
                         <div className="preview-render">
-                          <ClipPreview searchQuery={search} item={selectedItem} forceRaw={false} />
+                          <ClipPreview searchQuery={resultSearch} item={selectedItem} forceRaw={false} />
                         </div>
                       ) : (
-                        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                        <div className={`preview-edit-wrap ${selectedItem.content_type === 'color' ? 'is-color' : ''}`}>
                           {selectedItem.content_type === 'color' && (
                             <div className="color-swatch-box" style={{ background: selectedItem.title }}>
                               {selectedItem.title}
@@ -2320,7 +2350,8 @@ export const QuickOverlay: React.FC = () => {
                             onBlur={handleContentBlurCommit}
                             onKeyDown={(e) => {
                               // v36 A1: save-key commits in place (stays in edit mode).
-                              if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                              // Guard !shiftKey && !altKey so Win+Shift+S (Snipping Tool / Glint) is never swallowed.
+                              if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 's') {
                                 e.preventDefault();
                                 e.stopPropagation();
                                 void commitPendingEdit('save-key');
@@ -2330,6 +2361,9 @@ export const QuickOverlay: React.FC = () => {
                             placeholder="Edit clip text..."
                           />
                         </div>
+                      )}
+                      {showInspector && (
+                        <SmartContentInspector inspection={smartInspection} compact />
                       )}
                     </div>
                     <div className="ov-preview-info">

@@ -671,16 +671,27 @@ export const ClipPreview = memo(function ClipPreview({ item, forceRaw, searchQue
 }) {
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!root.current || item.content_type === 'image') return;
+    const trimmed = searchQuery.trim();
+    if (!root.current || item.content_type === 'image' || !trimmed) return;
     let cleanup = () => {};
-    const update = () => {
+    let rafId: number | null = null;
+    const run = () => {
+      rafId = null;
       cleanup();
-      if (root.current) cleanup = highlightPreview(root.current, searchQuery);
+      if (root.current) cleanup = highlightPreview(root.current, trimmed);
     };
-    update();
-    const observer = new MutationObserver(update);
+    const schedule = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(run);
+    };
+    run();
+    const observer = new MutationObserver(schedule);
     observer.observe(root.current, { childList: true, subtree: true });
-    return () => { observer.disconnect(); cleanup(); };
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      observer.disconnect();
+      cleanup();
+    };
   }, [item, forceRaw, searchQuery]);
   return <div ref={root}><ClipPreviewBody item={item} forceRaw={forceRaw} /></div>;
 });
