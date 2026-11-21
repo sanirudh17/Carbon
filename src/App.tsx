@@ -1,13 +1,16 @@
 import { applyAccentContrast } from './lib/accentContrast';
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { QuickOverlay } from './components/QuickOverlay';
 import { EnlargedWindow } from './components/EnlargedWindow';
 import { Settings } from './components/Settings';
 import { ExpansionPill } from './components/ExpansionPill';
 import { ArgPromptWindow } from './components/ArgPromptWindow';
-import { SunMoonIcon } from './components/Icons';
-import { IconLab } from './components/IconLab';
+import { SunMoonIcon, PauseIcon } from './components/Icons';
+
+const DevIconLab = import.meta.env.DEV
+  ? lazy(() => import('./components/IconLab').then((m) => ({ default: m.IconLab })))
+  : null;
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -28,10 +31,27 @@ declare global {
 // Once-flag for carbon-ui-ready (module scope: survives StrictMode remounts).
 let uiReadySent = false;
 
+type ThemePreference = 'dark' | 'light' | 'system';
+
+interface PauseStatus {
+  paused: boolean;
+  resume_at_ms: number | null;
+}
+
+function resolveEffectiveTheme(pref: ThemePreference): 'dark' | 'light' {
+  if (pref === 'light') return 'light';
+  if (pref === 'dark') return 'dark';
+  if (typeof window !== 'undefined' && window.matchMedia) {
+    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  }
+  return 'dark';
+}
+
 export function App() {
   const [updaterBanner, setUpdaterBanner] = useState<{ version: string; update: Update } | null>(null);
   const [updaterDownloading, setUpdaterDownloading] = useState(false);
   const [updaterProgress, setUpdaterProgress] = useState(0);
+  const [pauseStatus, setPauseStatus] = useState<PauseStatus>({ paused: false, resume_at_ms: null });
   const [windowLabel, setWindowLabel] = useState<string>(() => {
     try {
       const internals = (window as unknown as { __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } } })?.__TAURI_INTERNALS__;
@@ -45,13 +65,16 @@ export function App() {
     }
   });
   const [activeTab, setActiveTab] = useState<'overlay' | 'enlarged' | 'settings'>('enlarged');
-  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+  const [themePref, setThemePref] = useState<ThemePreference>(() => {
     try {
-      return localStorage.getItem('carbon_theme') === 'light' ? 'light' : 'dark';
-    } catch {
-      return 'dark';
-    }
+      const saved = localStorage.getItem('carbon_theme');
+      if (saved === 'light' || saved === 'dark' || saved === 'system') return saved;
+    } catch {}
+    return 'dark';
   });
+  const themePrefRef = useRef<ThemePreference>(themePref);
+  themePrefRef.current = themePref;
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => resolveEffectiveTheme(themePref));
 
   const [showIconLab, setShowIconLab] = useState(() => {
     return import.meta.env.DEV && typeof window !== 'undefined' && window.location.hash === '#/icon-lab';
@@ -115,16 +138,20 @@ export function App() {
       document.documentElement.style.setProperty('--accent-base', settings.accent_color);
       try { localStorage.setItem('carbon_accent_color', settings.accent_color); } catch {}
     }
-    if (settings.theme === 'light') {
-      setTheme('light');
-      document.documentElement.setAttribute('data-theme', 'light');
-      try { localStorage.setItem('carbon_theme', 'light'); } catch {}
-    } else if (settings.theme === 'dark') {
-      setTheme('dark');
-      document.documentElement.setAttribute('data-theme', 'dark');
-      try { localStorage.setItem('carbon_theme', 'dark'); } catch {}
+    let resolvedTheme: 'dark' | 'light' = (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
+    if (settings.theme === 'light' || settings.theme === 'dark' || settings.theme === 'system') {
+      const pref = settings.theme as ThemePreference;
+      themePrefRef.current = pref;
+      setThemePref(pref);
+      resolvedTheme = resolveEffectiveTheme(pref);
+      setTheme(resolvedTheme);
+      document.documentElement.setAttribute('data-theme', resolvedTheme);
+      try { localStorage.setItem('carbon_theme', pref); } catch {}
     }
-    applyAccentContrast(settings.accent_color || getComputedStyle(document.documentElement).getPropertyValue('--accent-base').trim() || '#5B7CFA', settings.theme || document.documentElement.dataset.theme || 'dark');
+    applyAccentContrast(
+      settings.accent_color || getComputedStyle(document.documentElement).getPropertyValue('--accent-base').trim() || '#5B7CFA',
+      resolvedTheme
+    );
     if (settings.window_material) {
       const mat = settings.window_material === 'acrylic' ? 'glass' : settings.window_material;
       document.documentElement.setAttribute('data-material', mat);
@@ -249,10 +276,36 @@ export function App() {
     handleReducedTransparency(mediaQuery);
     mediaQuery.addEventListener('change', handleReducedTransparency);
 
+    // Live Follow System Theme watcher
+    const schemeQuery = window.matchMedia('(prefers-color-scheme: light)');
+    const handleSchemeChange = () => {
+      if (themePrefRef.current !== 'system') return;
+      const effective = schemeQuery.matches ? 'light' : 'dark';
+      setTheme(effective);
+      document.documentElement.setAttribute('data-theme', effective);
+      applyAccentContrast(
+        getComputedStyle(document.documentElement).getPropertyValue('--accent-base').trim() || '#5B7CFA',
+        effective
+      );
+      invoke('sync_native_theme', { effectiveTheme: effective }).catch(() => {});
+    };
+    schemeQuery.addEventListener('change', handleSchemeChange);
+
+    // Live capture pause status sync (tray or Settings)
+    invoke<PauseStatus>('get_pause_status')
+      .then((st) => { if (st) setPauseStatus(st); })
+      .catch(() => {});
+    const unlistenPausePromise = listen<PauseStatus>('capture-pause-changed', (event) => {
+      if (event.payload) setPauseStatus(event.payload);
+    });
+
     const onFocus = () => {
       invoke<AppSettings>('get_settings')
         .then(applySettingsData)
         .catch(console.error);
+      invoke<PauseStatus>('get_pause_status')
+        .then((st) => { if (st) setPauseStatus(st); })
+        .catch(() => {});
     };
 
     // Prevent browser default actions (Print on Ctrl+P) while allowing
@@ -269,7 +322,9 @@ export function App() {
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
       unlistenMaterialPromise.then((unlisten) => unlisten());
+      unlistenPausePromise.then((unlisten) => unlisten());
       mediaQuery.removeEventListener('change', handleReducedTransparency);
+      schemeQuery.removeEventListener('change', handleSchemeChange);
       window.removeEventListener('keydown', blockBrowserDefaultHotkeys, true);
       window.removeEventListener('focus', onFocus);
     };
@@ -337,33 +392,42 @@ export function App() {
     };
   }, [windowLabel]);
 
-  const toggleTheme = async () => {
-    const nextTheme = theme === 'dark' ? 'light' : 'dark';
-    applyAccentContrast(getComputedStyle(document.documentElement).getPropertyValue('--accent-base').trim() || '#5B7CFA', nextTheme);
-    setTheme(nextTheme);
-    if (nextTheme === 'light') {
-      document.documentElement.setAttribute('data-theme', 'light');
-    } else {
-      document.documentElement.setAttribute('data-theme', 'dark');
-    }
+  const setThemeMode = async (nextPref: ThemePreference) => {
+    themePrefRef.current = nextPref;
+    setThemePref(nextPref);
+    const effective = resolveEffectiveTheme(nextPref);
+    applyAccentContrast(
+      getComputedStyle(document.documentElement).getPropertyValue('--accent-base').trim() || '#5B7CFA',
+      effective
+    );
+    setTheme(effective);
+    document.documentElement.setAttribute('data-theme', effective);
+    try { localStorage.setItem('carbon_theme', nextPref); } catch {}
     try {
       const current = await invoke<Record<string, unknown>>('get_settings');
-      await invoke('save_settings', { newSettings: { ...current, theme: nextTheme } });
+      await invoke('save_settings', { newSettings: { ...current, theme: nextPref } });
     } catch (e) {
       console.error(e);
     }
   };
 
-  if (showIconLab) {
+  const toggleTheme = async () => {
+    const nextTheme: ThemePreference = theme === 'dark' ? 'light' : 'dark';
+    await setThemeMode(nextTheme);
+  };
+
+  if (showIconLab && DevIconLab) {
     return (
-      <IconLab
-        onClose={() => {
-          setShowIconLab(false);
-          if (window.location.hash === '#/icon-lab') {
-            history.replaceState(null, '', window.location.pathname);
-          }
-        }}
-      />
+      <Suspense fallback={null}>
+        <DevIconLab
+          onClose={() => {
+            setShowIconLab(false);
+            if (window.location.hash === '#/icon-lab') {
+              history.replaceState(null, '', window.location.pathname);
+            }
+          }}
+        />
+      </Suspense>
     );
   }
 
@@ -401,30 +465,49 @@ export function App() {
     </div>
   ) : null;
 
+  const pausedBannerEl = pauseStatus.paused ? (
+    <div className="pause-banner" role="status" aria-live="polite">
+      <span className="pause-banner-icon" aria-hidden="true"><PauseIcon /></span>
+      <span className="pause-banner-text">
+        {pauseStatus.resume_at_ms
+          ? (() => {
+              const rem = Math.max(1, Math.ceil((pauseStatus.resume_at_ms - Date.now()) / 60_000));
+              return `Clipboard capture paused · resumes in ${rem}m`;
+            })()
+          : 'Clipboard capture paused'}
+      </span>
+      <button
+        className="update-banner-btn primary"
+        onClick={() => { invoke('resume_capture').catch(console.error); }}
+      >
+        <span className="carbon-control-label">Resume</span>
+      </button>
+    </div>
+  ) : null;
+
   // 2. Enlarged Main Window View
+  // Keep EnlargedWindow mounted while Settings is open so returning via the
+  // Back button is 0ms instantaneous without remounting 200+ rows or re-firing IPCs.
   if (windowLabel === 'main') {
-    if (activeTab === 'settings') {
-      // Manual update check lives in Settings — banner (auto-check popup)
-      // is intentionally hidden here so "Check for latest updates" only
-      // updates the Settings row, never the top popup.
-      return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--app-window-bg, transparent)', border: 'none', outline: 'none' }}>
+    const isSettingsOpen = activeTab === 'settings';
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--app-window-bg, transparent)', border: 'none', outline: 'none' }}>
+        {pausedBannerEl}
+        {!isSettingsOpen && bannerEl}
+        <div style={{ flex: 1, overflow: 'hidden', border: 'none', outline: 'none', display: isSettingsOpen ? 'none' : 'block' }}>
+          <EnlargedWindow onOpenSettings={() => setActiveTab('settings')} isHidden={isSettingsOpen} />
+        </div>
+        {isSettingsOpen && (
           <div style={{ flex: 1, overflow: 'hidden', border: 'none', outline: 'none' }}>
             <Settings
               onBack={() => setActiveTab('enlarged')}
               onThemeToggle={toggleTheme}
+              onThemeChange={setThemeMode}
               currentTheme={theme}
+              themePreference={themePref}
             />
           </div>
-        </div>
-      );
-    }
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--app-window-bg, transparent)', border: 'none', outline: 'none' }}>
-        {bannerEl}
-        <div style={{ flex: 1, overflow: 'hidden', border: 'none', outline: 'none' }}>
-          <EnlargedWindow onOpenSettings={() => setActiveTab('settings')} />
-        </div>
+        )}
       </div>
     );
   }
@@ -492,7 +575,9 @@ export function App() {
           <Settings
             onBack={() => setActiveTab('enlarged')}
             onThemeToggle={toggleTheme}
+            onThemeChange={setThemeMode}
             currentTheme={theme}
+            themePreference={themePref}
           />
         )}
       </div>

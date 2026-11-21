@@ -1,52 +1,58 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { HugeiconsIcon, type IconSvgElement } from '@hugeicons/react';
 import {
-  Search,
-  Clock,
-  Type,
-  ScanText,
-  Code,
-  ChevronDown,
-  Filter,
-  CircleHelp,
-  FileText,
-  Image as LucideImage,
-  File as LucideFile,
-  Link as LucideLink,
-  Mail,
-  Palette,
-  Star,
-  Pin,
-  Copy,
-  Clipboard,
-  ClipboardPaste,
-  Trash2,
-  Settings,
-  ChevronRight,
-  ChevronLeft,
-  Check,
-  SunMoon,
-  Video,
-  Folder,
-  Lock,
-  Unlock,
-  Eye,
-  EyeOff,
-  Loader2,
-  ListOrdered,
-  GripVertical,
-  Plus,
-  Pencil,
-  MoreHorizontal,
-  Scissors,
-  Calendar,
-  AtSign,
-  Hash,
-  Zap,
-  Quote,
-  Key,
-  Sliders,
-  AlertTriangle,
-} from 'lucide-react';
+  Search01Icon,
+  Clock01Icon,
+  TextIcon as HugeTextIcon,
+  ScanTextIcon,
+  CodeIcon as HugeCodeIcon,
+  ArrowDown01Icon,
+  FilterHorizontalIcon,
+  HelpCircleIcon,
+  File02Icon,
+  Image02Icon,
+  FileEmpty02Icon,
+  Link04Icon,
+  Mail01Icon,
+  DropletIcon,
+  StarIcon as HugeStarIcon,
+  PinIcon as HugePinIcon,
+  Copy01Icon,
+  ClipboardIcon,
+  Delete02Icon,
+  Settings02Icon,
+  ArrowRight01Icon,
+  ArrowLeft01Icon,
+  Tick02Icon,
+  Sun03Icon,
+  Moon02Icon,
+  ComputerIcon,
+  Video01Icon,
+  Folder01Icon,
+  LockIcon as HugeLockIcon,
+  LockOpenIcon,
+  ViewIcon,
+  ViewOffIcon,
+  Loading03Icon,
+  LeftToRightListDashIcon,
+  DragDropVerticalIcon,
+  PlusSignIcon,
+  PencilEdit02Icon,
+  MoreHorizontalIcon,
+  ScissorIcon,
+  Calendar01Icon,
+  AtIcon as HugeAtIcon,
+  Tag01Icon,
+  FlashIcon,
+  QuoteUpIcon,
+  Key01Icon,
+  SlidersHorizontalIcon,
+  Alert02Icon,
+  Cancel01Icon,
+  PauseIcon as HugePauseIcon,
+  PlayIcon as HugePlayIcon,
+  Shield01Icon,
+} from '@hugeicons/core-free-icons';
 import { invoke } from '@tauri-apps/api/core';
 import { ClipItem, ContentType } from '../types';
 import carbonBadgeDarkPng from '../assets/carbon-badge-dark.png';
@@ -74,75 +80,67 @@ function resolveIconStyle(props: IconProps): React.CSSProperties | undefined {
   return undefined;
 }
 
-export const SearchIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Search className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
+function makeHugeIcon(
+  icon: IconSvgElement,
+  defaults: { className?: string; size?: number; strokeWidth?: number; prefixIconClass?: boolean } = {}
+): React.FC<IconProps> {
+  const {
+    className: defaultClassName = 'icon',
+    size: defaultSize,
+    strokeWidth: defaultStroke = 1.5,
+    prefixIconClass = false,
+  } = defaults;
 
-export const AllIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Clock className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
+  return ({ className, size, width, height, strokeWidth = defaultStroke, style, ...rest }) => {
+    const resolvedClass = prefixIconClass
+      ? `icon ${className ?? ''}`.trim()
+      : (className ?? defaultClassName);
+    const numericSize = Number(width ?? height ?? size ?? defaultSize ?? 24);
+    const resolvedStyle = resolveIconStyle({ size: size ?? defaultSize, width, height, style });
+    return (
+      <HugeiconsIcon
+        icon={icon}
+        className={resolvedClass}
+        size={Number.isFinite(numericSize) ? numericSize : 24}
+        strokeWidth={Number(strokeWidth)}
+        style={resolvedStyle}
+        {...rest}
+      />
+    );
+  };
+}
 
-export const TextIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Type className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const OcrIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <ScanText className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const CodeIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Code className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const ChevronDownIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 2.0, ...props }) => (
-  <ChevronDown className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const FilterIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Filter className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const HelpIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <CircleHelp className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const RichTextIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <FileText className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const ImageIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <LucideImage className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const FilesIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <LucideFile className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const LinksIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <LucideLink className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const EmailIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Mail className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const ColorsIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Palette className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
+export const SearchIcon = makeHugeIcon(Search01Icon);
+export const AllIcon = makeHugeIcon(Clock01Icon);
+export const TextIcon = makeHugeIcon(HugeTextIcon);
+export const OcrIcon = makeHugeIcon(ScanTextIcon);
+export const CodeIcon = makeHugeIcon(HugeCodeIcon);
+export const ChevronDownIcon = makeHugeIcon(ArrowDown01Icon, { strokeWidth: 1.65 });
+export const FilterIcon = makeHugeIcon(FilterHorizontalIcon);
+export const HelpIcon = makeHugeIcon(HelpCircleIcon);
+export const RichTextIcon = makeHugeIcon(File02Icon);
+export const ImageIcon = makeHugeIcon(Image02Icon);
+export const FilesIcon = makeHugeIcon(FileEmpty02Icon);
+export const LinksIcon = makeHugeIcon(Link04Icon);
+export const EmailIcon = makeHugeIcon(Mail01Icon);
+export const ColorsIcon = makeHugeIcon(DropletIcon);
 
 export const StarIcon: React.FC<IconProps & { filled?: boolean }> = ({
   className = 'icon',
   filled = false,
   size,
-  strokeWidth = 1.8,
-  ...props
+  width,
+  height,
+  strokeWidth = 1.5,
+  style,
 }) => (
-  <Star
+  <HugeiconsIcon
+    icon={HugeStarIcon}
     className={className}
+    size={Number(width ?? height ?? size ?? 24)}
+    strokeWidth={Number(strokeWidth)}
     fill={filled ? 'currentColor' : 'none'}
-    size={size}
-    strokeWidth={strokeWidth}
-    style={resolveIconStyle({ size, ...props })}
+    style={resolveIconStyle({ size, width, height, style })}
   />
 );
 
@@ -150,205 +148,59 @@ export const PinIcon: React.FC<IconProps & { filled?: boolean }> = ({
   className = 'icon',
   filled = false,
   size,
-  strokeWidth = 1.8,
-  ...props
+  width,
+  height,
+  strokeWidth = 1.5,
+  style,
 }) => (
-  <Pin
+  <HugeiconsIcon
+    icon={HugePinIcon}
     className={className}
+    size={Number(width ?? height ?? size ?? 24)}
+    strokeWidth={Number(strokeWidth)}
     fill={filled ? 'currentColor' : 'none'}
-    size={size}
-    strokeWidth={strokeWidth}
-    style={resolveIconStyle({ size, ...props })}
+    style={resolveIconStyle({ size, width, height, style })}
   />
 );
 
-export const CopyIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Copy className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const HollowClipboardIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Clipboard className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const PasteIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <ClipboardPaste className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const DeleteIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Trash2 className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const SettingsIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Settings className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const ChevronRightIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <ChevronRight className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const ChevronLeftIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <ChevronLeft className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const CheckIcon: React.FC<IconProps> = ({
-  className = 'icon',
-  width,
-  height,
-  size = 13,
-  strokeWidth = 2.4,
-  ...props
-}) => (
-  <Check
-    className={className}
-    size={Number(width ?? height ?? size)}
-    strokeWidth={strokeWidth}
-    style={resolveIconStyle({ width, height, size, ...props })}
-  />
-);
-
-export const SunMoonIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <SunMoon className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const VideoIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Video className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const FolderIcon: React.FC<IconProps> = ({ className = '', size = 15, strokeWidth = 1.8, ...props }) => (
-  <Folder
-    className={`icon ${className}`.trim()}
-    size={size}
-    strokeWidth={strokeWidth}
-    style={resolveIconStyle({ size, ...props })}
-  />
-);
-
-export const LockIcon: React.FC<IconProps> = ({ className = '', size = 15, strokeWidth = 2.0, ...props }) => (
-  <Lock
-    className={`icon ${className}`.trim()}
-    size={size}
-    strokeWidth={strokeWidth}
-    style={resolveIconStyle({ size, ...props })}
-  />
-);
-
-export const UnlockIcon: React.FC<IconProps> = ({ className = '', size = 15, strokeWidth = 2.0, ...props }) => (
-  <Unlock
-    className={`icon ${className}`.trim()}
-    size={size}
-    strokeWidth={strokeWidth}
-    style={resolveIconStyle({ size, ...props })}
-  />
-);
-
-export const EyeIcon: React.FC<IconProps> = ({ className = '', size = 14, strokeWidth = 2.0, ...props }) => (
-  <Eye
-    className={className}
-    size={size}
-    strokeWidth={strokeWidth}
-    style={resolveIconStyle({ size, ...props })}
-  />
-);
-
-export const EyeOffIcon: React.FC<IconProps> = ({ className = '', size = 14, strokeWidth = 2.0, ...props }) => (
-  <EyeOff
-    className={className}
-    size={size}
-    strokeWidth={strokeWidth}
-    style={resolveIconStyle({ size, ...props })}
-  />
-);
-
-export const SpinnerIcon: React.FC<IconProps> = ({ className = 'spinner-icon', size = 14, strokeWidth = 2.5, ...props }) => (
-  <Loader2
-    className={className}
-    size={size}
-    strokeWidth={strokeWidth}
-    style={resolveIconStyle({ size, ...props })}
-  />
-);
-
-export const QueueIcon: React.FC<IconProps> = ({ className = 'icon', size = 14, strokeWidth = 2.0, ...props }) => (
-  <ListOrdered
-    className={className}
-    size={size}
-    strokeWidth={strokeWidth}
-    style={resolveIconStyle({ size, ...props })}
-  />
-);
-
-export const DragHandleIcon: React.FC<IconProps> = ({ className = 'drag-handle-icon', size = 14, strokeWidth = 2.0, ...props }) => (
-  <GripVertical
-    className={className}
-    size={size}
-    strokeWidth={strokeWidth}
-    style={resolveIconStyle({ size, ...props })}
-  />
-);
-
-export const PlusIcon: React.FC<IconProps> = ({
-  className = 'icon',
-  width,
-  height,
-  size = 13,
-  strokeWidth = 2.2,
-  ...props
-}) => (
-  <Plus
-    className={className}
-    size={Number(width ?? height ?? size)}
-    strokeWidth={strokeWidth}
-    style={resolveIconStyle({ width, height, size, ...props })}
-  />
-);
-
-export const EditIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 2.0, ...props }) => (
-  <Pencil className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const MoreIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 2.0, ...props }) => (
-  <MoreHorizontal className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const SnippetIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Scissors className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const CalendarIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Calendar className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const ClockIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Clock className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const AtIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <AtSign className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const HashtagIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Hash className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const BoltIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Zap className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const QuoteIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Quote className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const KeyIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Key className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const GearIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 1.8, ...props }) => (
-  <Sliders className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
-
-export const AlertTriangleIcon: React.FC<IconProps> = ({ className = 'icon', size, strokeWidth = 2.0, ...props }) => (
-  <AlertTriangle className={className} size={size} strokeWidth={strokeWidth} style={resolveIconStyle({ size, ...props })} />
-);
+export const CopyIcon = makeHugeIcon(Copy01Icon);
+export const HollowClipboardIcon = makeHugeIcon(ClipboardIcon);
+export const PasteIcon = makeHugeIcon(ClipboardIcon);
+export const DeleteIcon = makeHugeIcon(Delete02Icon);
+export const SettingsIcon = makeHugeIcon(Settings02Icon);
+export const ChevronRightIcon = makeHugeIcon(ArrowRight01Icon, { strokeWidth: 1.6 });
+export const ChevronLeftIcon = makeHugeIcon(ArrowLeft01Icon, { strokeWidth: 1.6 });
+export const CheckIcon = makeHugeIcon(Tick02Icon, { size: 13, strokeWidth: 1.9 });
+export const SunMoonIcon = makeHugeIcon(Sun03Icon);
+export const SunIcon = makeHugeIcon(Sun03Icon);
+export const MoonIcon = makeHugeIcon(Moon02Icon);
+export const SystemThemeIcon = makeHugeIcon(ComputerIcon);
+export const VideoIcon = makeHugeIcon(Video01Icon);
+export const FolderIcon = makeHugeIcon(Folder01Icon, { size: 15, prefixIconClass: true });
+export const LockIcon = makeHugeIcon(HugeLockIcon, { size: 14, strokeWidth: 1.6, prefixIconClass: true });
+export const UnlockIcon = makeHugeIcon(LockOpenIcon, { size: 14, strokeWidth: 1.6, prefixIconClass: true });
+export const EyeIcon = makeHugeIcon(ViewIcon, { className: '', size: 14, strokeWidth: 1.6 });
+export const EyeOffIcon = makeHugeIcon(ViewOffIcon, { className: '', size: 14, strokeWidth: 1.6 });
+export const SpinnerIcon = makeHugeIcon(Loading03Icon, { className: 'spinner-icon', size: 14, strokeWidth: 1.9 });
+export const QueueIcon = makeHugeIcon(LeftToRightListDashIcon, { size: 14, strokeWidth: 1.55 });
+export const DragHandleIcon = makeHugeIcon(DragDropVerticalIcon, { className: 'drag-handle-icon', size: 14, strokeWidth: 1.6 });
+export const PlusIcon = makeHugeIcon(PlusSignIcon, { size: 13, strokeWidth: 1.75 });
+export const EditIcon = makeHugeIcon(PencilEdit02Icon, { strokeWidth: 1.55 });
+export const MoreIcon = makeHugeIcon(MoreHorizontalIcon, { strokeWidth: 1.65 });
+export const SnippetIcon = makeHugeIcon(ScissorIcon);
+export const CalendarIcon = makeHugeIcon(Calendar01Icon);
+export const ClockIcon = makeHugeIcon(Clock01Icon);
+export const AtIcon = makeHugeIcon(HugeAtIcon);
+export const HashtagIcon = makeHugeIcon(Tag01Icon);
+export const BoltIcon = makeHugeIcon(FlashIcon);
+export const QuoteIcon = makeHugeIcon(QuoteUpIcon);
+export const KeyIcon = makeHugeIcon(Key01Icon);
+export const GearIcon = makeHugeIcon(SlidersHorizontalIcon);
+export const AlertTriangleIcon = makeHugeIcon(Alert02Icon, { strokeWidth: 1.65 });
+export const CloseIcon = makeHugeIcon(Cancel01Icon, { size: 13, strokeWidth: 1.75 });
+export const PauseIcon = makeHugeIcon(HugePauseIcon, { size: 13, strokeWidth: 1.65 });
+export const PlayIcon = makeHugeIcon(HugePlayIcon, { size: 13, strokeWidth: 1.65 });
+export const ShieldIcon = makeHugeIcon(Shield01Icon, { size: 14, strokeWidth: 1.55 });
 
 export function getTypeIcon(kind: ContentType) {
   switch (kind) {
@@ -363,18 +215,154 @@ export function getTypeIcon(kind: ContentType) {
   }
 }
 
+const THUMBNAIL_CACHE_MAX = 120;
 const thumbnailCache = new Map<string, string>();
+const thumbnailInflight = new Map<string, Promise<string | null>>();
+const THUMB_MAX_CONCURRENT = 4;
+let thumbActiveCount = 0;
+const thumbPendingQueue: Array<() => void> = [];
+
+// Single shared IntersectionObserver for all ClipTileIcon placeholders so
+// scrolling 200+ image rows allocates 1 observer instead of 200.
+let sharedThumbObserver: IntersectionObserver | null = null;
+const thumbObserverCallbacks = new Map<Element, () => void>();
+
+function getSharedThumbObserver(): IntersectionObserver | null {
+  if (typeof IntersectionObserver === 'undefined') return null;
+  if (!sharedThumbObserver) {
+    sharedThumbObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            const cb = thumbObserverCallbacks.get(entry.target);
+            thumbObserverCallbacks.delete(entry.target);
+            sharedThumbObserver?.unobserve(entry.target);
+            cb?.();
+          }
+        }
+      },
+      { rootMargin: '160px' }
+    );
+  }
+  return sharedThumbObserver;
+}
+
+function getCachedThumbnail(key: string): string | undefined {
+  const val = thumbnailCache.get(key);
+  if (val !== undefined) {
+    // Touch LRU recency
+    thumbnailCache.delete(key);
+    thumbnailCache.set(key, val);
+  }
+  return val;
+}
+
+function setCachedThumbnail(key: string, val: string): void {
+  thumbnailCache.delete(key);
+  thumbnailCache.set(key, val);
+  while (thumbnailCache.size > THUMBNAIL_CACHE_MAX) {
+    const oldestKey = thumbnailCache.keys().next().value;
+    if (oldestKey !== undefined) thumbnailCache.delete(oldestKey);
+    else break;
+  }
+}
+
+function runThumbQueue() {
+  while (thumbActiveCount < THUMB_MAX_CONCURRENT && thumbPendingQueue.length > 0) {
+    const next = thumbPendingQueue.shift();
+    if (next) {
+      thumbActiveCount += 1;
+      next();
+    }
+  }
+}
+
+async function downscaleThumbnail(dataUrl: string): Promise<string> {
+  try {
+    if (typeof document === 'undefined' || typeof Image === 'undefined') return dataUrl;
+    return await new Promise<string>((resolve) => {
+      const img = new Image();
+      img.decoding = 'async';
+      img.onload = () => {
+        try {
+          const maxSide = 64;
+          const nw = img.naturalWidth || 0;
+          const nh = img.naturalHeight || 0;
+          if (!nw || !nh || (nw <= maxSide && nh <= maxSide)) {
+            resolve(dataUrl);
+            return;
+          }
+          const scale = Math.min(maxSide / nw, maxSide / nh);
+          const w = Math.max(1, Math.round(nw * scale));
+          const h = Math.max(1, Math.round(nh * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(dataUrl);
+            return;
+          }
+          ctx.drawImage(img, 0, 0, w, h);
+          const small = canvas.toDataURL('image/webp', 0.8);
+          resolve(small.startsWith('data:image/') ? small : canvas.toDataURL('image/png'));
+        } catch {
+          resolve(dataUrl);
+        }
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
+  } catch {
+    return dataUrl;
+  }
+}
+
+function loadThumbnail(filePath: string): Promise<string | null> {
+  const cached = getCachedThumbnail(filePath);
+  if (cached) return Promise.resolve(cached);
+
+  const existing = thumbnailInflight.get(filePath);
+  if (existing) return existing;
+
+  const promise = new Promise<string | null>((resolve) => {
+    const start = () => {
+      invoke<string>('get_image_data_url', { filePath })
+        .then(async (dataUrl) => {
+          if (!dataUrl) return null;
+          const compact = await downscaleThumbnail(dataUrl);
+          setCachedThumbnail(filePath, compact);
+          return compact;
+        })
+        .catch(() => null)
+        .then((res) => {
+          thumbnailInflight.delete(filePath);
+          thumbActiveCount = Math.max(0, thumbActiveCount - 1);
+          runThumbQueue();
+          resolve(res);
+        });
+    };
+    thumbPendingQueue.push(start);
+    runThumbQueue();
+  });
+
+  thumbnailInflight.set(filePath, promise);
+  return promise;
+}
 
 /**
  * Miniature clip tile icon (Tinycast / Raycast parity):
  * - If sensitive: shielded with LockIcon.
- * - If image with image_path: loads actual image data URL via Tauri IPC and renders miniature thumbnail.
+ * - If image with image_path: lazily loads & downscales miniature 64px thumbnail
+ *   when near the viewport via a single shared IntersectionObserver + bounded LRU
+ *   cache + max-4 concurrency queue (never stalls on 100+ images).
  * - Otherwise: renders content-type glyph.
  */
 export const ClipTileIcon: React.FC<{ item: ClipItem; className?: string }> = ({ item, className }) => {
+  const hostRef = useRef<HTMLSpanElement>(null);
   const [thumb, setThumb] = useState<string | null>(() => {
     if (item.content_type === 'image' && item.image_path && !item.is_sensitive) {
-      return thumbnailCache.get(item.image_path) || null;
+      return getCachedThumbnail(item.image_path) || null;
     }
     return null;
   });
@@ -385,24 +373,36 @@ export const ClipTileIcon: React.FC<{ item: ClipItem; className?: string }> = ({
       return;
     }
 
-    const cached = thumbnailCache.get(item.image_path);
+    const filePath = item.image_path;
+    const cached = getCachedThumbnail(filePath);
     if (cached) {
       setThumb(cached);
       return;
     }
 
     let active = true;
-    invoke<string>('get_image_data_url', { filePath: item.image_path })
-      .then((dataUrl) => {
-        if (active && dataUrl) {
-          thumbnailCache.set(item.image_path!, dataUrl);
-          setThumb(dataUrl);
-        }
-      })
-      .catch((err) => {
-        console.warn('ClipTileIcon failed to load thumbnail:', err);
+    let started = false;
+    const triggerLoad = () => {
+      if (started || !active) return;
+      started = true;
+      loadThumbnail(filePath).then((url) => {
+        if (active && url) setThumb(url);
       });
+    };
 
+    const el = hostRef.current;
+    const observer = el ? getSharedThumbObserver() : null;
+    if (el && observer) {
+      thumbObserverCallbacks.set(el, triggerLoad);
+      observer.observe(el);
+      return () => {
+        active = false;
+        thumbObserverCallbacks.delete(el);
+        observer.unobserve(el);
+      };
+    }
+
+    triggerLoad();
     return () => {
       active = false;
     };
@@ -412,14 +412,22 @@ export const ClipTileIcon: React.FC<{ item: ClipItem; className?: string }> = ({
     return <LockIcon className={className} />;
   }
 
-  if (item.content_type === 'image' && thumb) {
+  if (item.content_type === 'image') {
+    if (thumb) {
+      return (
+        <img
+          src={thumb}
+          alt=""
+          draggable={false}
+          decoding="async"
+          className="clip-thumb-img"
+        />
+      );
+    }
     return (
-      <img
-        src={thumb}
-        alt=""
-        draggable={false}
-        className="clip-thumb-img"
-      />
+      <span ref={hostRef} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+        <ImageIcon />
+      </span>
     );
   }
 
@@ -489,8 +497,7 @@ export const CarbonMarkIcon: React.FC<IconProps> = ({ className = 'icon' }) => (
 // Full-colour Carbon app badge — PNG at highest quality, not SVG. Two PNGs
 // ship: dark for dark theme, light for light theme. CSS shows exactly one
 // via html[data-theme], so the icon swaps automatically when the user
-// switches theme — no React state needed. PNGs are the original Glint
-// exports (1.2–1.3 MB) at native resolution for crisp rendering.
+// switches theme — no React state needed.
 export const BrandBadgeIcon: React.FC<IconProps> = ({ className = 'icon' }) => (
   <>
     <img

@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>A fast, local-first clipboard manager for Windows.</strong><br/>
-  Overlay, searchable history, collections, snippets & OCR — everything stays on your machine.
+  Overlay, searchable history, collections, snippets &amp; offline OCR — everything stays on your machine.
 </p>
 
 <p align="center">
@@ -20,11 +20,11 @@
 
 ## Overview
 
-Carbon is a local-first clipboard manager for Windows. Press a hotkey to summon an overlay anywhere, paste from a searchable history, organize clips into collections, expand snippets system-wide, and extract text from images with bundled PP-OCRv6 Small OCR — all without cloud, accounts, or telemetry.
+Carbon is a local-first clipboard manager for Windows. Press a hotkey to summon an overlay anywhere, paste from a searchable history, organize clips into collections, expand snippets system-wide, and extract &amp; search text from images with bundled PP-OCRv6 Small — all without cloud sync, accounts, or telemetry.
 
-Everything lives in a local SQLite database (`carbon_history.db`) with image files on disk in `%APPDATA%\com.carbon.clipboard\`. History, snippets, and settings never leave your computer.
+Everything lives in a local SQLite database (`carbon_history.db`) with image files on disk in `%APPDATA%\com.carbon.clipboard\`. History, snippets, collections, and settings never leave your computer.
 
-> **New here?** Install the single `Carbon_0.1.21_x64-setup.exe` from [Releases](https://github.com/sanirudh17/Carbon/releases/latest) — no extra dependencies, PP-OCRv6 Small is already bundled.
+> **New here?** Install `Carbon_0.1.21_x64-setup.exe` from [Releases](https://github.com/sanirudh17/Carbon/releases/latest) — no extra dependencies, PP-OCRv6 Small is already bundled.
 
 ## Contents
 
@@ -44,97 +44,87 @@ Everything lives in a local SQLite database (`carbon_history.db`) with image fil
 
 **Capture & History**
 
-- **Automatic capture** of text, code, rich text, images, files, links, email, and color values as you copy — with de-duplication and pinning.
-- **Searchable history** with type filters, full-text search, and inline editing of clip text.
-- **Collections** with colors and optional PIN + recovery code; add/remove clips, rename, and color-code.
-- **Bulk actions** — select many clips to pin, delete, or queue for pasting.
+- **Automatic capture** of text, code, rich text, images, files, links, email, and color values as you copy — with de-duplication, favorites, and native Windows OLE drag-and-drop.
+- **Instant full-text search** powered by SQLite FTS5 across clip text, file paths, extracted image OCR text, and decoded QR payloads — with type filters, source-app filtering, and inline editing.
+- **Collections** with custom colors and optional PIN + recovery code; add/remove clips, rename, and color-code. Unlocked collections and memberships are included in JSON backups.
+- **Bulk actions** — select multiple clips to favorite, delete, add to collections, or queue for sequential pasting.
+- **Pause & Timed Pause** — pause capture from the system tray indefinitely or for 5m / 15m / 1h with live status feedback and automatic resume.
 
 **Overlay & Library**
 
-- **Quick overlay** (`Ctrl+Shift+Z`) — centered at the cursor, shows recent clips and snippets. Raycast 2.0 / Tinycast-style frosted-glass translucency with OS compositor blur-behind (Acrylic, Mica, Blur, or Solid). Filter by type, queue multiple clips with `Ctrl+V` to advance, and paste with transforms (plain text, markdown, JSON, uppercase/lowercase/title, base64, URL encode/decode). Preview pane is toggleable.
-- **Full library** (`Ctrl+Alt+X`) — searchable, sortable view of all history with translucent glass panels, collections sidebar, stats, and snippet management.
+- **Quick Overlay** (`Ctrl+Shift+Z`) — fixed split-frame overlay with permanent preview pane, `1–9` quick-paste, native Windows Desktop Acrylic translucency (`Glass` or `Solid`), type &amp; app filters, Paste Queue (`Shift+Enter` / `Ctrl+V` advance), and paste transforms (plain text, markdown, JSON, uppercase/lowercase/title, base64, URL encode/decode).
+- **Full Library** (`Ctrl+Alt+X`) — searchable history with collections sidebar, syntax-highlighted code previews, rich-text/Markdown rendering, image &amp; video previews, and snippet management.
 
 **Snippets & Expansion**
 
-- Create snippets with keywords (e.g. `/date`) and dynamic placeholders (`{date}`, `{time}`, `{clipboard}`, `{cursor}`).
+- Create snippets with keywords (e.g. `/date`), dynamic placeholders (`{date}`, `{time}`, `{clipboard}`, `{selection}`, `{argument}`, `{snippet:Name}`, `{cursor}`), and chained modifiers.
+- **One-click Save as Snippet** (`Ctrl+Shift+S` or context menu) turns any text, code, OCR, or QR clip directly into a reusable snippet.
 - **System-wide expansion** — type a keyword in any app and it expands inline at native typing speed. Private 256-char in-memory buffer, zero CPU when idle, UIPI-safe in elevated windows. Opt-in via consent.
 
-**Image & Text Tools**
+**Image, Code & Text Tools**
 
-- **OCR** — extract text from image clips locally with bundled PP-OCRv6 Small and ONNX Runtime CPU. Models load on first use; full-window and tall images use overlapping native-resolution strips. No Python, GPU, system OCR installation, or first-use download is required.
-- **Transforms on paste** — choose per-paste or set default plain-text pasting and move-to-top behavior.
+- **Offline OCR &amp; QR** — extract text from image clips locally with bundled PP-OCRv6 Small and ONNX Runtime CPU (using overlapping native-resolution strips for tall screenshots) and decode QR codes automatically. Extracted OCR text and decoded QR payloads are indexed for instant search.
+- **Syntax-highlighted code previews** — theme-aware highlighting for TypeScript, JavaScript, Rust, Python, JSON, HTML, CSS, SQL, Shell, and Markdown.
+- **Transforms on paste** — choose per-paste from `Ctrl+K` / right-click, or set default plain-text pasting and move-to-top behavior.
 
-**Smart Capture**
+**Smart Capture & Privacy**
 
-- **ClipMerge** — rapid successive copies within a window append to the top clip instead of creating separate entries.
-- **URL cleaning** — strip tracking params (`utm_*`, `fbclid`, `gclid`, etc.) at capture time.
+- **Clipboard privacy compliance** — honors Windows standard clipboard exclusion formats (`ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory`, `Clipboard Viewer Ignore`) plus an editable **Ignored apps** list in Settings (pre-populated with common password managers).
+- **ClipMerge** — rapid successive copies within a configurable window append to the top clip instead of creating separate entries.
+- **URL cleaning** — strip tracking parameters (`utm_*`, `fbclid`, `gclid`, etc.) at capture time.
 - **Custom rules** — ordered find/replace (plain text or regex) applied on every capture.
-- **Sensitive detection** — optional local detection of credit cards (Luhn), API keys, JWTs, and private keys, with auto-expiry after 5 minutes.
+- **Sensitive detection** — opt-in local detection of credit cards (Luhn), API keys, JWTs, and private keys, with masking and auto-expiry after 5 minutes.
 
 **Hotkeys, Theming & Glass Materials**
 
-- Two swappable global shortcuts with atomic `unregister_all`/`reapply` and strict rollback. `Ctrl+Alt` handled via `AltGraph` parity and a `WH_KEYBOARD_LL` hook so GPU software can't steal focus; conflicts show inline errors and toast pop-ups.
-- **Frosted-glass translucency** — Native Desktop Acrylic on Windows 11, with a blur fallback on older Windows. Shared theme tints, quiet pane dividers, accent glass controls, and frosted dialog sheets keep the desktop visible without adding noise textures.
-- **Dark/light themes** with PNG badge at native resolution (1.2–1.3 MB dark/light), 6 accent swatches + custom picker, and 4 window materials (`Glass (Acrylic)`, `Mica`, `Blur`, `Solid`). All settings persist in `settings.json`.
+- Two swappable global shortcuts with atomic unregister/reapply and strict rollback. `Ctrl+Alt` handled via `AltGraph` parity and a `WH_KEYBOARD_LL` hook; conflicts show inline errors and notifications.
+- **System, Light &amp; Dark themes** — follow Windows' light/dark mode automatically or pin Dark/Light explicitly, paired with 6 accent swatches + custom color picker, monochrome HugeIcons, and `Glass` (Desktop Acrylic) or `Solid` window material.
 
-### Window Translucency & Materials (Frosted Glass)
-
-Carbon provides Raycast- and Tinycast-style OS compositor translucency for both the Quick Overlay (`Ctrl+Shift+Z`) and full Library (`Ctrl+Alt+X`) windows.
+### Window Materials
 
 | Material | Look & Behavior | Compatibility |
 |---|---|---|
-| **Glass (Acrylic)** *(Default)* | Frosted-glass blur-behind tinted to theme background with subtle anti-banding grain, top-highlight inset, and floating glass pills. | Windows 10 (build 1809+) & Windows 11 |
-| **Mica** | Subtle dynamic material that picks up the desktop wallpaper background tint. | Windows 11 (build 22000+) |
-| **Blur** | Traditional blur-behind translucency for older Windows desktop compositing. | Windows 10 / 11 |
-| **Solid** | Opaque dark or light theme background with zero OS compositor blur. | All platforms |
+| **Glass** *(Default)* | Native Windows Desktop Acrylic blur-behind with theme-matched tint, DWM rounded corners, and zero-flash warm-window choreography. | Windows 10 (1809+) &amp; Windows 11 (automatic Blur → Solid fallback) |
+| **Solid** | Opaque dark or light panels with zero OS compositor blur. | All Windows 10/11 builds &amp; reduced-transparency mode |
 
 **Resilient Fallbacks & Accessibility:**
-- **Automatic fallback chain**: If a chosen material (e.g. Mica or Acrylic) is unsupported on the user's Windows build, Carbon automatically falls back (`Acrylic` → `Blur` → `Solid`) without crashing or panicking.
-- **Accessibility aware**: If *"Turn off transparency"* is enabled in Windows Settings or the system requests reduced transparency (`prefers-reduced-transparency: reduce`), Carbon automatically defaults to solid opaque panels.
-- **DWM rounded corners & gutters**: Uses native DWM rounded corners for both the client and compositor material. The native caption style is removed and guarded against restoration during window and screenshot activation; resizable windows retain their sizing frame.
-- **Zero latency**: Vibrancy is applied once during window creation and theme updates; hidden windows stay warm in memory so hotkey invocation remains instant.
+- **Automatic fallback chain**: If Desktop Acrylic is unsupported on a Windows build, Carbon falls back (`Acrylic` → `Blur` → `Solid`) automatically.
+- **Accessibility aware**: When Windows *"Transparency effects"* are off (`prefers-reduced-transparency: reduce`), Carbon automatically switches to opaque panels.
+- **Always warm**: Hidden windows stay warm in memory with DWM cloaking and frame-gated reveals so hotkey invocation is instant with no white flash.
 
 ## How It Works
-
-Everything between copying and pasting runs as a local pipeline. Each stage can fail without losing your clipboard.
 
 ```
   copy (Ctrl+C / right-click)
         │
         ▼
-  clipboard watcher ───────► classify (text/code/image/file/link/email/color/rich)
-        │                    de-duplicate, apply ClipMerge window
+  clipboard watcher ───────► honor privacy formats & ignored apps
+        │                    classify (text/code/image/file/link/email/color/rich)
+        │                    decode QR, de-duplicate, apply ClipMerge window
         ▼
-  smart capture ───────────► strip tracking params → custom rules (regex/text, ordered)
-        │                    detect sensitive → set expires_at (+5m) if enabled
+  smart capture ───────────► strip tracking params → custom rules (regex/text)
+        │                    detect sensitive → mask + expires_at (+5m) if enabled
         ▼
-  storage ─────────────────► SQLite (WAL) + image files in %APPDATA%\com.carbon.clipboard%\media
+  storage ─────────────────► SQLite (WAL + FTS5 incl. OCR/QR) + media/ on disk
         │                    trim by retention_days / max_entries (hourly + on save)
         ▼
-  overlay / library ───────► search, filter, pin, edit, queue, transform
+  overlay / library ───────► search, filter, favorite, edit, save as snippet, queue
         │
         ▼
   paste ───────────────────► paste_clip / queue_paste_next with PasteTransform
                              (plain/markdown/json/case/base64/url) + bump-to-top
 ```
 
-**Snippets** run on a separate `WH_KEYBOARD_LL` path: keystrokes are buffered, matched against a trie of keywords, and replaced inline via `write_text_to_clipboard` + `paste_text_into_target` with `{cursor}` support.
-
 ## Settings Reference
 
-**Behavior** — `Overlay opens on` (Clips/Snippets) · `Keep window warm` (hide vs close, recreate when cold) · `Start with Windows` (Run registry) · `ClipMerge` + `ClipMerge window` (500–10000 ms, debounced).
-
-**Snippets** — `Enable snippet expansion` (consent-gated, `WH_KEYBOARD_LL`) · `Show snippets in library & overlay`.
-
-**Capture Rules & Sanitization** — `Strip URL tracking parameters` · `Custom Find & Replace Rules` (plain/regex, enabled toggle, ordered).
-
-**Privacy** — `Detect and auto-expire sensitive clips`.
-
-**Storage** — `Retention` (days, `0` = forever) · `Max entries` · `Image size limit` (`0` = unlimited, MB) · `Clear history` (deletes DB rows + orphan images + emits update) · `Export`/`Restore` backup (JSON with base64 images, snippets).
-
-**Appearance** — `Accent theme` (6 swatches + custom `<input type=color>`) · `Theme mode` (dark/light, `html[data-theme]`) · `Window material` (`Glass (Acrylic)`, `Mica`, `Blur`, `Solid`).
-
-Internals: `window_material`, `overlay_default_tab`, `preview_enabled`, `detect_sensitive_data`, `clip_merge_enabled`, `clip_merge_window_ms`, `strip_tracking_params`, `capture_rules`, `snippet_expansion_enabled`, `show_snippets` all in `AppSettings` (`settings.rs`).
+- **Shortcuts** — Quick overlay (`Ctrl+Shift+Z`) · Library window (`Ctrl+Alt+X`).
+- **Behavior** — Start with Windows · Move pasted clip to top · Deselect after paste (web inputs) · ClipMerge + window (`500–10000 ms`).
+- **Snippets** — Inline snippet expansion (consent-gated, `WH_KEYBOARD_LL`) · Show snippets.
+- **Capture Rules** — Strip URL tracking parameters · Find &amp; Replace rules (plain/regex, ordered).
+- **Privacy** — Auto-expire sensitive clips · Ignored apps list (add/remove `.exe` names).
+- **Storage** — Retention (`0` = forever) · Max entries · Image size limit (`0` = unlimited) · Clear history · Export / Restore JSON backup (history, images, snippets, and unlocked collections).
+- **Updates** — Automatic background update check + on-demand check &amp; signed installer update.
+- **Appearance** — Reduced picker animation · Accent color (6 swatches + custom picker) · Theme (`System`, `Light`, `Dark`) · Window material (`Glass`, `Solid`).
 
 ## Download & Install
 
@@ -142,7 +132,7 @@ Download the latest installer from the [**Releases**](https://github.com/sanirud
 
 | Installer | Notes |
 |---|---|
-| **`Carbon_0.1.21_x64-setup.exe`** | NSIS installer — single executable, bundles Tesseract OCR. Recommended. |
+| **`Carbon_0.1.21_x64-setup.exe`** | NSIS installer — single executable, bundles PP-OCRv6 Small &amp; ONNX Runtime CPU. |
 
 Everything Carbon needs is bundled — no extra dependencies. The installer is currently unsigned, so Windows SmartScreen may show *“Windows protected your PC”* → **More info → Run anyway**.
 
@@ -173,7 +163,7 @@ npm run prepare:ocr
 node scripts/prepare-ocr.mjs --offline
 ```
 
-This fetches pinned PP-OCRv6 Small models and ONNX Runtime 1.31.0 CPU resources into `src-tauri/binaries/ocr/`. Sizes and SHA-256 hashes are recorded in `src-tauri/resources/ocr/manifest.json`; required license notices are bundled too. `npm run build` prepares/verifies these files automatically. Native builds fail if any resource is missing or modified. Recognition itself never downloads anything.
+This fetches pinned PP-OCRv6 Small models and ONNX Runtime CPU resources into `src-tauri/binaries/ocr/`. Sizes and SHA-256 hashes are recorded in `src-tauri/resources/ocr/manifest.json`; required license notices are bundled too. `npm run build` prepares/verifies these files automatically.
 
 ### 3. Run in development
 
@@ -181,7 +171,7 @@ This fetches pinned PP-OCRv6 Small models and ONNX Runtime 1.31.0 CPU resources 
 npm run tauri dev
 ```
 
-### 4. Build the single executable
+### 4. Build the installer
 
 ```bash
 npm run tauri build
@@ -191,7 +181,8 @@ npm run tauri build
 ### 5. Run the test suite
 
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path src-tauri/Cargo.toml --lib
+npm test
 npm run build
 ```
 
@@ -200,61 +191,58 @@ npm run build
 | Layer | Technology |
 |---|---|
 | App shell | [Tauri v2](https://v2.tauri.app/) — Rust core + WebView2 |
-| Frontend | React 19, TypeScript, Vite, Zustand |
-| Database | SQLite (`rusqlite` bundled, WAL) |
-| OCR | PP-OCRv6 Small, OAR-OCR 0.10, ONNX Runtime 1.31 CPU (bundled) |
+| Frontend | React 19, TypeScript, Vite, Zustand, HugeIcons |
+| Database | SQLite (`rusqlite` bundled, WAL + FTS5) |
+| OCR &amp; QR | PP-OCRv6 Small, OAR-OCR 0.10, ONNX Runtime CPU (bundled), `quircs` |
 | Hotkeys | `tauri-plugin-global-shortcut` + `WH_KEYBOARD_LL` hook |
-| Clipboard | Windows `Win32_System_DataExchange`, `html2md`, `image` |
+| Clipboard | Windows `Win32_System_DataExchange`, OLE drag-and-drop, `html2md`, `image` |
 
 ## Project Structure
 
 ```
 src/               React + TypeScript frontend (Vite)
-  components/      QuickOverlay, EnlargedWindow, Settings, Icons (PNG badge)
-  assets/          carbon-badge-dark/light.png (1.2–1.3 MB, theme-aware)
+  components/      QuickOverlay, EnlargedWindow, Settings, ClipPreview, SnippetsView, Icons (HugeIcons)
+  lib/             choreo, richText, syntaxHighlight, searchHighlights, accentContrast
+  utils/           clipActions, clipDrag, snippets, collections, hotkeys
 src-tauri/
-  src/             Rust core (clipboard_watcher, db, hotkey, shortcuts, expansion, ocr, paste, history, settings)
-  icons/           Generated from dark PNG (128x128@2x, icon.ico/icns, StoreLogo)
-  binaries/ocr/        Bundled pinned OCR models/runtime (prepared at build time)
+  src/             Rust core (clipboard_watcher, db, hotkey, shortcuts, expansion, ocr, paste, native_drag, vibrancy, settings)
+  icons/           App icons (128x128@2x, icon.ico/icns, StoreLogo)
+  binaries/ocr/    Bundled pinned OCR models & runtime (prepared at build time)
 ```
 
 ## Configuration & Data
 
-Settings, history, and snippets are stored as JSON/SQLite in your user config directory:
-
 ```
 %APPDATA%\com.carbon.clipboard\
-├── settings.json      # AppSettings (hotkeys, theme, retention, etc.)
-├── carbon_history.db  # SQLite (clips, collections, snippets)
+├── settings.json      # AppSettings (hotkeys, theme, ignored apps, retention, etc.)
+├── carbon_history.db  # SQLite (clips, FTS5 index, collections, snippets)
 └── media/             # image files for image clips
 ```
 
-Clipboard watcher and `HistoryManager` trim history hourly and on save according to `retention_days` (0 = keep forever) and `max_entries` (oldest unpinned first). App windows stay warm in memory (hidden, never destroyed) so hotkey open/close is instant.
-
 ## Privacy
 
-Carbon is **local-first**. Clipboard capture, OCR, and snippets run locally. Update checks contact GitHub; clipboard content is not sent. No cloud sync, accounts, or telemetry. Clipboard history, images, snippets, and settings live in `%APPDATA%\com.carbon.clipboard\` and never leave your disk. Snippet expansion uses a private 256-char in-memory buffer never written to disk; it is opt-in and `snippet_expansion_enabled` is excluded from backup/restore by design. Window titles are never logged for context detection.
+Carbon is **local-first**. Clipboard capture, OCR, QR decoding, and snippets run locally. Update checks contact GitHub; clipboard content is never sent. Carbon honors Windows clipboard privacy formats and lets you configure ignored applications in Settings. Locked collections are hidden from global search and excluded from plain JSON exports. Snippet expansion uses a private 256-char in-memory buffer never written to disk; it is opt-in and `snippet_expansion_enabled` is excluded from backup/restore by design.
 
 ## Troubleshooting
 
 **Overlay doesn't appear with the hotkey.**
-Another app may own that combo — Windows gives it to whoever registered first. Carbon keeps your previous hotkey and shows an inline error + toast. Try a different combo (`Ctrl+Shift+Z` is free by default).
+Another app may own that combo — Windows gives it to whoever registered first. Carbon keeps your previous hotkey and shows an inline error. Try a different combo (`Ctrl+Shift+Z` is free by default).
 
 **OCR reports missing bundled files.**
-Reinstall Carbon from the complete installer. For a development build, run `npm run prepare:ocr` before building. A separate Tesseract installation is not used by this OCR engine.
+Reinstall Carbon from the complete installer. For a development build, run `npm run prepare:ocr` before building.
 
 **Nothing happens when I paste.**
-Check `Behavior → Keep window warm` and `Paste plain text` settings. If `move to top on paste` is on, the pasted clip bumps to the top of history.
+Check `Settings → Behavior → Deselect after paste` (for web chats) and verify the target window is not elevated as Administrator (Windows UIPI blocks synthetic input to elevated apps; Carbon stages the clip on your clipboard and notifies you).
 
 **History grows forever or deletes too quickly.**
-`Storage → Retention` (`0` = forever) and `Max entries` are enforced by `trim_history`; `Clear history` removes unpinned clips and orphan images.
+`Settings → Storage → Retention` (`0` = forever) and `Max entries` are enforced automatically; favorites and locked-collection items are always kept.
 
 ## License
 
 Released under the [MIT License](./LICENSE). © 2026 Sanirudh ([sanirudh17](https://github.com/sanirudh17)).
 
-Bundled Tesseract is third-party software under [Apache-2.0](https://github.com/tesseract-ocr/tesseract) and remains under its own license. It is fetched per-machine and not part of this repository.
+Bundled PP-OCRv6 Small models (PaddleOCR) and ONNX Runtime are third-party components shipped under their respective Apache-2.0 and MIT licenses (notices included in the installer).
 
 ## Acknowledgements
 
-Built with [Tauri](https://v2.tauri.app/) and [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) / [OAR-OCR](https://github.com/GreatV/oar-ocr). Icon design from the Carbon layered-clipboard illustration.
+Built with [Tauri](https://v2.tauri.app/), [HugeIcons](https://hugeicons.com/), and [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) / [OAR-OCR](https://github.com/GreatV/oar-ocr).

@@ -136,26 +136,45 @@ fn content_search_covers_types_literals_filters_and_index_updates() {
     file.file_paths = Some("C:\\work\\quasar_notes.txt".into());
     db.insert_entry(&mut file).unwrap();
     let mut image = fixture("image", "image", "quasar");
+    image.title = "Image".into();
     image.ocr_text = Some("quasar engine".into());
     db.insert_entry(&mut image).unwrap();
+    let mut image_qr = fixture("image-qr", "image", "");
+    image_qr.title = "Image".into();
+    image_qr.qr_content = Some("https://qr.example.com/quasar-invite".into());
+    db.insert_entry(&mut image_qr).unwrap();
+    let mut plain_image = fixture("image-plain", "image", "");
+    plain_image.title = "Image".into();
+    db.insert_entry(&mut plain_image).unwrap();
 
     let search = |q: &str| db.get_all_entries(Some(q), None, false, None).unwrap();
     assert_eq!(
         search("qUaSaR").len(),
-        7,
-        "body matches across every text-bearing type, never images"
+        9,
+        "body matches across every text-bearing type plus images with matching OCR or QR text"
+    );
+    assert!(
+        search("Image").is_empty(),
+        "default Image titles without matching OCR/QR must not pollute text search"
     );
     assert_eq!(
         db.get_today_entries(Some("quasar"), None, None)
             .unwrap()
             .len(),
-        7
+        9
     );
     assert_eq!(
-        search("engine quasar")[0].id,
-        "plain",
-        "words can appear in either order"
+        search("engine quasar").len(),
+        2,
+        "words can appear in either order across text and OCR"
     );
+    assert!(search("qr.example.com").iter().any(|c| c.id == "image-qr"),
+        "punctuation search matches QR payloads");
+    db.update_ocr_text("image-plain", "Invoice #4821 Total $99.50").unwrap();
+    assert!(search("4821").iter().any(|c| c.id == "image-plain"),
+        "updating OCR text immediately indexes the image for FTS search");
+    assert!(search("$99.50").iter().any(|c| c.id == "image-plain"),
+        "punctuation search matches extracted OCR text");
     assert_eq!(
         search("compute")[0].id,
         "code",
@@ -174,8 +193,8 @@ fn content_search_covers_types_literals_filters_and_index_updates() {
     assert_eq!(search("#1234")[0].id, "color");
     assert_eq!(
         search("   ").len(),
-        10,
-        "clearing the search restores images"
+        12,
+        "clearing the search restores all clips including images"
     );
     assert_eq!(
         db.get_all_entries(Some("quasar"), Some("code"), false, None)
@@ -263,5 +282,48 @@ fn content_search_large_history_latency() {
     assert_eq!(first_page.len(), 201, "broad matches have a bounded interactive payload");
     assert!(start.elapsed() < std::time::Duration::from_secs(1));
     drop(db);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn backup_round_trip_preserves_unlocked_collections_and_excludes_locked() {
+    let dir = std::env::temp_dir().join(format!(
+        "carbon_backup_cols_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let db1 = DbState::new(dir.join("src.db")).unwrap();
+    let mut c1 = fixture("clip-1", "text", "Design tokens for Carbon");
+    let mut c2 = fixture("clip-2", "text", "Locked secret note");
+    db1.insert_entry(&mut c1).unwrap();
+    db1.insert_entry(&mut c2).unwrap();
+
+    let open_col = db1.create_collection("Design".into(), Some("#5B7CFA".into()), None).unwrap();
+    let locked_col = db1.create_collection("Vault".into(), Some("#F43F5E".into()), None).unwrap();
+    db1.add_clip_to_collection("clip-1", &open_col.id).unwrap();
+    db1.add_clip_to_collection("clip-2", &locked_col.id).unwrap();
+    db1.set_collection_pin(&locked_col.id, "4321").unwrap();
+
+    let backup = db1.export_backup().unwrap();
+    assert_eq!(backup.version, 3);
+    assert_eq!(backup.collections.len(), 1, "only unlocked collections are exported");
+    assert_eq!(backup.collections[0].name, "Design");
+    assert_eq!(backup.collections[0].clip_ids, vec!["clip-1".to_string()]);
+    assert!(!backup.entries.iter().any(|e| e.id == "clip-2"), "locked collection clips stay excluded");
+
+    let db2 = DbState::new(dir.join("dest.db")).unwrap();
+    let res = db2.import_backup(backup, &dir.join("media")).unwrap();
+    assert_eq!(res.imported_count, 1);
+    let restored_cols = db2.list_collections().unwrap();
+    assert_eq!(restored_cols.len(), 1);
+    assert_eq!(restored_cols[0].name, "Design");
+    assert_eq!(restored_cols[0].color.as_deref(), Some("#5B7CFA"));
+    assert_eq!(restored_cols[0].item_count, 1);
+    assert_eq!(db2.get_clip_collection_ids("clip-1").unwrap(), vec![open_col.id]);
+
+    drop(db1);
+    drop(db2);
     fs::remove_dir_all(dir).unwrap();
 }

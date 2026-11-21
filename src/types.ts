@@ -51,7 +51,7 @@ export interface AppSettings {
   max_entries: number;
   image_size_limit_mb: number;
   accent_color: string;
-  theme: string;
+  theme: 'dark' | 'light' | 'system' | string;
   ignore_apps: string[];
   // Legacy preview-toggle key (toggle removed; split-frame preview is
   // permanent). Optional so older settings payloads still parse.

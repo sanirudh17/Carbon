@@ -5,6 +5,7 @@ import {createRequire} from 'node:module';
 import {Window} from 'happy-dom';
 const require=createRequire(import.meta.url),esbuild=require('esbuild');
 const bundle=esbuild.buildSync({entryPoints:['src/lib/choreo.ts'],bundle:true,platform:'node',format:'cjs',write:false}).outputFiles[0].text;
+const validationDir=new URL('../.validation/',import.meta.url);fs.mkdirSync(validationDir,{recursive:true});
 const file=new URL('../.validation/choreo-reveal-test.cjs',import.meta.url);fs.writeFileSync(file,bundle);
 const {executeWindowShow,getFadeTarget,initCompositorHeartbeat}=require(file.pathname.replace(/^\/(.:\/)/,'$1'));
 process.on('exit',()=>{try{fs.unlinkSync(file)}catch{}});

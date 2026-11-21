@@ -16,6 +16,10 @@ import {
   applyEntryUpdatedToList,
 } from '../lib/entryEdit';
 import { SnippetsView } from './SnippetsView';
+import { SnippetEditorModal, snippetDraftFromClip, type SnippetDraft } from './SnippetEditorModal';
+import { SlidingSegmentedControl } from './SlidingSegmentedControl';
+import { useSlidingIndicator } from '../hooks/useSlidingIndicator';
+import { groupItemsByDate, formatTimeAgo } from '../utils/dateGroups';
 import {
   SearchIcon,
   BrandBadgeIcon,
@@ -44,6 +48,8 @@ import {
   EditIcon,
   OcrIcon,
   SnippetIcon,
+  AlertTriangleIcon,
+  CloseIcon,
   getTypeIcon,
   getTypeColor,
   ClipTileIcon,
@@ -62,46 +68,6 @@ declare global {
 const emptyDragImg = typeof Image !== 'undefined' ? new Image() : null;
 if (emptyDragImg) {
   emptyDragImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-}
-
-interface DateGroup {
-  label: string;
-  items: ClipItem[];
-}
-
-function groupItemsByDate(items: ClipItem[]): DateGroup[] {
-  const groups: { [key: string]: ClipItem[] } = {};
-  const order: string[] = [];
-
-  const now = new Date();
-  const todayStr = now.toDateString();
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = yesterday.toDateString();
-
-  items.forEach((item) => {
-    let label = 'Older';
-    if (item.created_at) {
-      const d = new Date(item.created_at);
-      if (!isNaN(d.getTime())) {
-        if (d.toDateString() === todayStr) {
-          label = 'Today';
-        } else if (d.toDateString() === yesterdayStr) {
-          label = 'Yesterday';
-        } else {
-          label = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-        }
-      }
-    }
-
-    if (!groups[label]) {
-      groups[label] = [];
-      order.push(label);
-    }
-    groups[label].push(item);
-  });
-
-  return order.map((label) => ({ label, items: groups[label] }));
 }
 
 // Cheap equality for full-history snapshots: same rows in the same order at
@@ -158,7 +124,7 @@ const EnlargedRow = memo(function EnlargedRow({
       </div>
       <div className="row-body">
         <div className="row-title">
-          {item.is_pinned && <span className="pin-star" style={{ color: '#F59E0B' }}>★</span>}
+          {item.is_pinned && <span className="pin-star" style={{ color: '#EAB308', opacity: 0.88 }}><StarIcon filled size={11} /></span>}
           {queueIdx >= 0 && (
             <span className="queue-pos-badge" title={`Position #${queueIdx + 1} in paste queue`}>
               #{queueIdx + 1}
@@ -196,6 +162,7 @@ const EnlargedRow = memo(function EnlargedRow({
 
 interface EnlargedWindowProps {
   onOpenSettings: () => void;
+  isHidden?: boolean;
 }
 
 /** Hard cap for the cold-open content hold (ms): the first open after a
@@ -205,7 +172,7 @@ interface EnlargedWindowProps {
  * the show recovery can never cut a content wait short. */
 const COLD_HOLD_CAP_MS = 5000;
 
-export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }) => {
+export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, isHidden = false }) => {
   const [loadedItems, setItems] = useState<ClipItem[]>(() => (typeof window !== 'undefined' && window.__carbonInitialData) || []);
   const [initialLoaded, setInitialLoaded] = useState(() => Boolean(typeof window !== 'undefined' && window.__carbonInitialData && window.__carbonInitialData.length > 0));
   const [search, setSearch] = useState('');
@@ -231,6 +198,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   const [viewMode, setViewMode] = useState<'clips' | 'snippets'>('clips');
   const [showSnippets, setShowSnippets] = useState(true);
   const [snippetCreateSignal, setSnippetCreateSignal] = useState(0);
+  const [snippetDraftModal, setSnippetDraftModal] = useState<SnippetDraft | null>(null);
   const [sourceAppFilter, setSourceAppFilter] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<ClipItem | null>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);
@@ -456,6 +424,42 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   const [pasteQueue, setPasteQueue] = useState<ClipItem[]>([]);
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
+  const mainListRef = useRef<HTMLDivElement>(null);
+  const sideIndicatorRef = useRef<HTMLDivElement>(null);
+  const listIndicatorRef = useRef<HTMLDivElement>(null);
+  const actionModalRef = useRef<HTMLDivElement>(null);
+  const actionIndicatorRef = useRef<HTMLDivElement>(null);
+  useSlidingIndicator({
+    containerRef: sidebarRef,
+    indicatorRef: sideIndicatorRef,
+    activeSelector: '.side-item.active',
+    readyDataAttr: 'sideIndicator',
+    deps: [selectedFilter, viewMode, showSnippets, collections.length],
+    snapDeps: [isHidden],
+    enabled: !isHidden,
+    scrollRelative: false,
+  });
+  useSlidingIndicator({
+    containerRef: mainListRef,
+    indicatorRef: listIndicatorRef,
+    activeSelector: '.row.selected:not(.multi-selected)',
+    readyDataAttr: 'listIndicator',
+    deps: [selectedIndex, selectedItem?.id, items.length],
+    snapDeps: [selectedFilter, search, sourceAppFilter, viewMode, isCurrentCollectionLocked, isHidden],
+    enabled: !isHidden && viewMode === 'clips' && !isCurrentCollectionLocked && selectedIds.size <= 1 && items.length > 0,
+    scrollRelative: true,
+  });
+  useSlidingIndicator({
+    containerRef: actionModalRef,
+    indicatorRef: actionIndicatorRef,
+    activeSelector: '.action-item.selected',
+    readyDataAttr: 'actionIndicator',
+    deps: [actionIndex, actionPanelOpen, selectedItem?.id],
+    snapDeps: [actionPanelOpen, selectedItem?.id],
+    enabled: !isHidden && actionPanelOpen && !!selectedItem,
+    scrollRelative: true,
+  });
+
   const fetchCollections = async () => {
     try {
       const list = await invoke<Collection[]>('list_collections');
@@ -497,6 +501,16 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   };
 
   const allCachedItemsRef = useRef<ClipItem[]>([]);
+  const filterCacheRef = useRef<Map<string, ClipItem[]>>(new Map());
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.hidden) {
+        filterCacheRef.current.clear();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
   // Seed once from the boot prewarm snapshot (same source as the useState
   // initializer below) so the first open's snapshot compares equal and
   // skips its commit instead of re-painting identical rows.
@@ -610,6 +624,17 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       const paged = !sourceAppFilter;
       setHasMoreMatches(paged && res.length > searchLimit);
       let list = paged ? res.slice(0, searchLimit) : res || [];
+      if (!search.trim() && !sourceAppFilter) {
+        const cache = filterCacheRef.current;
+        cache.delete(activeFilter);
+        cache.set(activeFilter, list);
+        // Keep only the 4 most recently visited filter slices in RAM
+        while (cache.size > 4) {
+          const oldestKey = cache.keys().next().value;
+          if (oldestKey !== undefined) cache.delete(oldestKey);
+          else break;
+        }
+      }
       if (activeFilter === 'all' && !search.trim() && !colId) {
         allCachedItemsRef.current = list;
         // Full unfiltered re-read absorbs every mutation to date (overlay-A2
@@ -687,7 +712,11 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   };
 
   const handleSelectFilter = (filterKey: string) => {
+    if ((document.activeElement as HTMLElement | null)?.closest?.('.sidebar')) {
+      (document.activeElement as HTMLElement).blur();
+    }
     if (selectedFilter === filterKey && viewMode === 'clips') return;
+    setSnippetCreateSignal(0);
     setViewMode('clips');
     setSelectedFilter(filterKey);
     setSelectedIds(new Set());
@@ -696,36 +725,44 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     setPinError(false);
 
     // Optimistic instantaneous in-memory filter (0ms visual switch)
-    if (!search.trim() && allCachedItemsRef.current.length > 0) {
-      const isCol = filterKey.startsWith('col_');
-      const isPinned = filterKey === 'pinned';
-      const category = !isCol && filterKey !== 'all' && filterKey !== 'pinned' ? filterKey : null;
+    if (!search.trim()) {
+      const cachedForFilter = !sourceAppFilter ? filterCacheRef.current.get(filterKey) : undefined;
+      if (cachedForFilter && cachedForFilter.length > 0) {
+        const sliced = cachedForFilter.slice(0, searchLimit);
+        setItems(sliced);
+        setSelectedIndex(0);
+        setSelectedItem(sliced[0]);
+        setEditingContent(sliced[0].text_content || '');
+      } else if (allCachedItemsRef.current.length > 0) {
+        const isCol = filterKey.startsWith('col_');
+        const isPinned = filterKey === 'pinned';
+        const category = !isCol && filterKey !== 'all' && filterKey !== 'pinned' ? filterKey : null;
 
-      if (!isCol) {
-        let immediateList = allCachedItemsRef.current;
-        if (isPinned) {
-          immediateList = immediateList.filter((i) => i.is_pinned);
-        } else if (category) {
-          immediateList = immediateList.filter((i) => i.content_type === category);
-        }
-        if (sourceAppFilter) {
-          immediateList = immediateList.filter(
-            (i) => i.source_app && i.source_app.toLowerCase() === sourceAppFilter.toLowerCase()
-          );
-        }
-        setItems(immediateList);
-        if (immediateList.length > 0) {
-          setSelectedIndex(0);
-          setSelectedItem(immediateList[0]);
-          setEditingContent(immediateList[0].text_content || '');
-        } else {
-          setSelectedItem(null);
-          setEditingContent('');
+        if (!isCol) {
+          let immediateList = allCachedItemsRef.current;
+          if (isPinned) {
+            immediateList = immediateList.filter((i) => i.is_pinned);
+          } else if (category) {
+            immediateList = immediateList.filter((i) => i.content_type === category);
+          }
+          if (sourceAppFilter) {
+            immediateList = immediateList.filter(
+              (i) => i.source_app && i.source_app.toLowerCase() === sourceAppFilter.toLowerCase()
+            );
+          }
+          const sliced = immediateList.slice(0, searchLimit);
+          setItems(sliced);
+          if (sliced.length > 0) {
+            setSelectedIndex(0);
+            setSelectedItem(sliced[0]);
+            setEditingContent(sliced[0].text_content || '');
+          } else {
+            setSelectedItem(null);
+            setEditingContent('');
+          }
         }
       }
     }
-
-    fetchItems(filterKey);
   };
 
   useEffect(() => {
@@ -733,6 +770,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     setBulkConfirmDelete(false);
     setPinInput('');
     setPinError(false);
+    if (selectedFilter === '__snippets__') return;
     fetchItems();
   }, [search, searchLimit, selectedFilter, sourceAppFilter]);
 
@@ -862,6 +900,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     // the capture "pop in" a second after open. Filtered/search views still
     // need a real refetch so the row respects the active query.
     const unlistenUpdated = listen<ClipItem | null>('clipboard-updated', (e) => {
+      filterCacheRef.current.clear();
       const item = e.payload;
       const unfiltered =
         selectedFilterRef.current === 'all' &&
@@ -1256,7 +1295,17 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 
 
   // Group once per items change — toggling the sidebar must not regroup the list
-  const dateGroups = useMemo(() => groupItemsByDate(items), [items]);
+  const [dayKey, setDayKey] = useState(() => new Date().toDateString());
+  useEffect(() => {
+    const refreshDay = () => {
+      const next = new Date().toDateString();
+      setDayKey((prev) => (prev === next ? prev : next));
+    };
+    window.addEventListener('focus', refreshDay);
+    return () => window.removeEventListener('focus', refreshDay);
+  }, []);
+
+  const dateGroups = useMemo(() => groupItemsByDate(items), [items, dayKey]);
 
   const handleSelectAll = () => {
     if (items.length === 0) return;
@@ -1728,6 +1777,10 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
     onDelete: (item) => handleDelete(item),
     onQueue: (item) => handleQueueClip(item),
     onExtractOcr: (item) => handleExtractOrCopyOcr(item),
+    onSaveAsSnippet: (item) => {
+      setActionPanelOpen(false);
+      setSnippetDraftModal(snippetDraftFromClip(item));
+    },
     onAddToCollection: () => handleOpenAddToCollection(),
     onRemoveFromCollection: (item) => handleRemoveFromCollection(item),
     isInCollection: isCollection,
@@ -1758,6 +1811,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent | KeyboardEvent) => {
+    if (isHidden) return;
     // The window's capture listener runs before React's input handler. Leave
     // pending-query Enter to the input so it cannot paste an obsolete result.
     if (e.key === 'Enter' && (e.target as HTMLElement)?.dataset?.searchPending === 'true') return;
@@ -1825,6 +1879,14 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       return;
     }
 
+    if (snippetDraftModal) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSnippetDraftModal(null);
+      }
+      return;
+    }
+
     if (actionPanelOpen) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -1834,7 +1896,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
         e.preventDefault();
         setActionIndex((prev) => (prev - 1 + modalActions.length) % modalActions.length);
         return;
-      } else if (e.key === 'Escape') {
+      } else if (e.key === 'Escape' || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) {
         e.preventDefault();
         setActionPanelOpen(false);
         return;
@@ -2052,6 +2114,14 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       <div
         ref={sidebarRef}
         className="sidebar"
+        onMouseDown={(e) => {
+          // Keep mouse clicks on sidebar tabs from trapping keyboard focus so
+          // subsequent Up/Down arrows navigate the clip list without leaving
+          // a focus outline stuck on the sidebar button.
+          if ((e.target as HTMLElement | null)?.closest?.('.side-item')) {
+            e.preventDefault();
+          }
+        }}
         onDragOver={(e) => {
           e.preventDefault();
           e.dataTransfer.dropEffect = 'copy';
@@ -2061,6 +2131,12 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
           e.dataTransfer.dropEffect = 'copy';
         }}
       >
+        <div
+          ref={sideIndicatorRef}
+          className="side-active-indicator"
+          aria-hidden="true"
+          style={{ opacity: 0 }}
+        />
         <div className="brand">
           <div className="brand-mark brand-badge" title="Carbon">
             <BrandBadgeIcon className="brand-badge-svg" />
@@ -2212,7 +2288,8 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
               className={`side-item ${viewMode === 'snippets' ? 'active' : ''}`}
               onClick={() => {
                 // Deactivate every clips-mode highlight so only the Snippets
-                // tab is lit while this section is open.
+                // tab is lit while this section is open; clear any stale "+" signal.
+                setSnippetCreateSignal(0);
                 setSelectedFilter('__snippets__');
                 setViewMode('snippets');
               }}
@@ -2403,13 +2480,21 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
         </div>
       </div>
 
-      {/* Snippets view replaces the clip browser entirely when active */}
+      {/* Keep Clips browser mounted while Snippets is open so switching tabs is
+          instantaneous with zero DOM teardown/remount lag. */}
       {viewMode === 'snippets' && showSnippets ? (
-        <SnippetsView createSignal={snippetCreateSignal} initialSnippets={snippetsCache} />
-      ) : (
-        <>
-          {/* Main Content Area */}
-          <div className="enlarged-main">
+        <SnippetsView
+        createSignal={snippetCreateSignal}
+        onCreateSignalConsumed={() => setSnippetCreateSignal(0)}
+        initialSnippets={snippetsCache}
+      />
+      ) : null}
+
+      {/* Main Content Area */}
+      <div
+        className="enlarged-main"
+        style={viewMode === 'snippets' && showSnippets ? { display: 'none' } : undefined}
+      >
         {isCurrentCollectionLocked ? (
           <div className="col-locked-screen">
             <div className="col-locked-card">
@@ -2545,7 +2630,13 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
             )}
 
             {/* Items List */}
-            <div className="main-list">
+            <div ref={mainListRef} className="main-list">
+              <div
+                ref={listIndicatorRef}
+                className="list-active-indicator"
+                aria-hidden="true"
+                style={{ opacity: 0 }}
+              />
               {items.length === 0 ? (
                 initialLoaded ? (
                   <div className="empty">
@@ -2594,7 +2685,10 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
       </div>
 
       {/* Type-Specific Preview Pane or Bulk Action Pane */}
-      <div className={`preview ${!isCurrentCollectionLocked && (selectedItem || selectedIds.size > 1) ? 'open' : ''}`}>
+      <div
+        className={`preview ${!isCurrentCollectionLocked && (selectedItem || selectedIds.size > 1) ? 'open' : ''}`}
+        style={viewMode === 'snippets' && showSnippets ? { display: 'none' } : undefined}
+      >
         {!isCurrentCollectionLocked && (
           selectedIds.size > 1 ? (
             <div className="preview-inner bulk-preview-panel">
@@ -2604,8 +2698,8 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                 {selectedIds.size} items selected
               </span>
               <div className="preview-actions">
-                <button className="act" title="Deselect All (Esc)" onClick={handleClearSelection}>
-                  ✕
+                <button className="act" title="Deselect All (Esc)" aria-label="Deselect All" onClick={handleClearSelection}>
+                  <CloseIcon size={13} />
                 </button>
               </div>
             </div>
@@ -2614,7 +2708,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
               {bulkConfirmDelete ? (
                 <div className="bulk-confirm-box">
                   <div className="bulk-confirm-title">
-                    ⚠️ Delete {selectedIds.size} items?
+                    <AlertTriangleIcon size={15} /> Delete {selectedIds.size} items?
                   </div>
                   <div className="bulk-confirm-desc">
                     This will permanently remove all {selectedIds.size} selected items from your clipboard history.
@@ -2732,21 +2826,19 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
               </span>
               {selectedItem &&
                 (!!search.trim() || selectedItem.content_type === 'rich_text' ||
+                  (selectedItem.content_type === 'code' && Boolean(selectedItem.text_content)) ||
                   (selectedItem.content_type === 'text' && Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!))) && (
-                <div className="seg" style={{ marginRight: 4 }}>
-                  <button
-                    className={`seg-btn ${renderMode ? 'active' : ''}`}
-                    onClick={() => setRenderMode(true)}
-                  >
-                    <span className="carbon-control-label">Render</span>
-                  </button>
-                  <button
-                    className={`seg-btn ${!renderMode ? 'active' : ''}`}
-                    onClick={() => setRenderMode(false)}
-                  >
-                    <span className="carbon-control-label">Raw</span>
-                  </button>
-                </div>
+                <SlidingSegmentedControl
+                  variant="preview"
+                  ariaLabel="Preview mode"
+                  value={renderMode ? 'render' : 'raw'}
+                  options={[
+                    { value: 'render', label: 'Render' },
+                    { value: 'raw', label: 'Raw' },
+                  ]}
+                  onChange={(mode) => setRenderMode(mode === 'render')}
+                  style={{ marginRight: 4 }}
+                />
               )}
               </>
               )}
@@ -2890,6 +2982,7 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
                   </div>
                 </div>
               ) : (!!search.trim() || selectedItem.content_type === 'rich_text' ||
+                  (selectedItem.content_type === 'code' && Boolean(selectedItem.text_content)) ||
                   (selectedItem.content_type === 'text' && Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!))) &&
                 renderMode ? (
                 /* Read-only RENDERED preview (Rich text & Markdown). Toggle to Raw to edit the source. */
@@ -2944,20 +3037,19 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
               <CheckIcon />
               {selectedItem.content_type === 'image' || selectedItem.content_type === 'file'
                 ? 'Press Enter to paste item'
-                : renderMode && (!!search.trim() || selectedItem.content_type === 'rich_text' || (selectedItem.text_content && isMarkdownContent(selectedItem.text_content)))
-                  ? 'Read-only rendered preview — Enter pastes this content'
+                : renderMode && (!!search.trim() || selectedItem.content_type === 'rich_text' || selectedItem.content_type === 'code' || (selectedItem.text_content && isMarkdownContent(selectedItem.text_content)))
+                  ? 'Read-only rendered preview — switch to Raw to edit · Enter pastes'
                   : 'Edits save to history — Enter pastes this content'}
             </div>
           </div>
         ) : null)}
-          </div>
-        </>
-      )}
+      </div>
 
       {/* Action Panel Modal Overlay (Ctrl+K) */}
       {actionPanelOpen && selectedItem && (
         <div className="action-modal-overlay" onClick={() => setActionPanelOpen(false)}>
-          <div className="action-modal" onClick={(e) => e.stopPropagation()}>
+          <div ref={actionModalRef} className="action-modal" onClick={(e) => e.stopPropagation()}>
+            <div ref={actionIndicatorRef} className="action-active-indicator" aria-hidden="true" />
             {modalActions.map((act, i) => (
               <div
                 key={act.id}
@@ -3282,9 +3374,9 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
             </div>
             <div className="modal-body">
               <div className="recovery-warning-banner">
-                <span>⚠️</span>
+                <span className="recovery-warning-icon"><AlertTriangleIcon size={16} /></span>
                 <div>
-                  <b>Important:</b> This is the <b>only time</b> this recovery code will be shown. If you ever forget your passcode, this code is required to recover access to <b>&ldquo;{recoveryCodeModal.col.name}&rdquo;</b>.
+                  <b>Save this code now.</b> It won&rsquo;t be shown again and is required to recover <b>&ldquo;{recoveryCodeModal.col.name}&rdquo;</b> if you forget your passcode.
                 </div>
               </div>
 
@@ -3731,6 +3823,22 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
           </div>
         </div>
       )}
+      {snippetDraftModal && (
+        <SnippetEditorModal
+          key={`clip-snippet-${snippetDraftModal.name ?? ''}`}
+          snippet={null}
+          initialDraft={snippetDraftModal}
+          onClose={() => setSnippetDraftModal(null)}
+          onSaved={(saved) => {
+            setSnippetDraftModal(null);
+            setSnippetsCache((prev) => [saved, ...prev.filter((s) => s.id !== saved.id)]);
+            setSnippetsCount((n) => n + 1);
+            setPasteNotice(`Saved snippet "${saved.name}" (${saved.keyword})`);
+            if (pasteNoticeTimerRef.current) window.clearTimeout(pasteNoticeTimerRef.current);
+            pasteNoticeTimerRef.current = window.setTimeout(() => setPasteNotice(null), 3000) as unknown as number;
+          }}
+        />
+      )}
       {pasteNotice && (
         <div className="sn-confirm-pill">
           <span className="sn-pill-check">ⓘ</span> {pasteNotice}
@@ -3743,18 +3851,6 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings }
 function constrainTitle(title: string, max = 36): string {
   if (!title) return title;
   return title.length > max ? title.slice(0, max - 1).trimEnd() + '…' : title;
-}
-
-function formatTimeAgo(dateStr: string): string {
-  if (!dateStr) return 'just now';
-  const d = new Date(dateStr.replace(' ', 'T'));
-  const now = new Date();
-  const diffSec = Math.floor((now.getTime() - d.getTime()) / 1000);
-
-  if (diffSec < 60) return 'just now';
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-  return `${Math.floor(diffSec / 86400)}d ago`;
 }
 
 function formatBytes(bytes: number): string {

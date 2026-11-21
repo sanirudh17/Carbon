@@ -13,8 +13,8 @@ macro_rules! cached_regex {
 }
 
 use std::fs;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::{AppHandle, Emitter};
@@ -42,8 +42,16 @@ const CF_UNICODETEXT: u32 = 13;
 const CF_HDROP: u32 = 15;
 const CF_DIBV5: u32 = 17;
 
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct PauseStatus {
+    pub paused: bool,
+    pub resume_at_ms: Option<u64>,
+}
+
 pub struct ClipboardWatcher {
     pub paused: Arc<AtomicBool>,
+    pub pause_until_ms: Arc<AtomicU64>,
+    pub pause_gen: Arc<AtomicU64>,
 }
 
 static LAST_CAPTURED_CLIP: Mutex<Option<(String, u64, String)>> = Mutex::new(None);
@@ -174,8 +182,12 @@ impl ClipboardWatcher {
         media_dir: PathBuf,
     ) -> Arc<Self> {
         let paused = Arc::new(AtomicBool::new(false));
+        let pause_until_ms = Arc::new(AtomicU64::new(0));
+        let pause_gen = Arc::new(AtomicU64::new(0));
         let watcher = Arc::new(ClipboardWatcher {
             paused: paused.clone(),
+            pause_until_ms: pause_until_ms.clone(),
+            pause_gen: pause_gen.clone(),
         });
 
         let watcher_clone = watcher.clone();
@@ -216,7 +228,7 @@ impl ClipboardWatcher {
                         let mut msg = MSG::default();
                         while GetMessageW(&mut msg, HWND::default(), 0, 0).as_bool() {
                             if msg.message == WM_CLIPBOARDUPDATE {
-                                if !watcher_clone.paused.load(Ordering::Relaxed) {
+                                if !watcher_clone.is_paused() {
                                     let seq = GetClipboardSequenceNumber();
                                     if seq != last_seq {
                                         last_seq = seq;
@@ -249,11 +261,79 @@ impl ClipboardWatcher {
         watcher
     }
 
+    pub fn is_paused(&self) -> bool {
+        if !self.paused.load(Ordering::SeqCst) {
+            return false;
+        }
+        let until = self.pause_until_ms.load(Ordering::SeqCst);
+        if until > 0 && now_ms() >= until {
+            self.paused.store(false, Ordering::SeqCst);
+            self.pause_until_ms.store(0, Ordering::SeqCst);
+            return false;
+        }
+        true
+    }
+
+    pub fn status(&self) -> PauseStatus {
+        let paused = self.is_paused();
+        let until = if paused {
+            let v = self.pause_until_ms.load(Ordering::SeqCst);
+            if v > 0 { Some(v) } else { None }
+        } else {
+            None
+        };
+        PauseStatus {
+            paused,
+            resume_at_ms: until,
+        }
+    }
+
+    pub fn resume(&self) {
+        self.pause_gen.fetch_add(1, Ordering::SeqCst);
+        self.pause_until_ms.store(0, Ordering::SeqCst);
+        self.paused.store(false, Ordering::SeqCst);
+    }
+
+    pub fn pause_for_minutes<F>(&self, minutes: Option<u64>, on_auto_resume: F) -> PauseStatus
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let gen = self.pause_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        self.paused.store(true, Ordering::SeqCst);
+        match minutes {
+            Some(mins) if mins > 0 => {
+                let dur_ms = mins.saturating_mul(60_000);
+                let until = now_ms().saturating_add(dur_ms);
+                self.pause_until_ms.store(until, Ordering::SeqCst);
+                let paused_ref = self.paused.clone();
+                let until_ref = self.pause_until_ms.clone();
+                let gen_ref = self.pause_gen.clone();
+                thread::spawn(move || {
+                    thread::sleep(std::time::Duration::from_millis(dur_ms));
+                    if gen_ref.load(Ordering::SeqCst) == gen {
+                        paused_ref.store(false, Ordering::SeqCst);
+                        until_ref.store(0, Ordering::SeqCst);
+                        on_auto_resume();
+                    }
+                });
+            }
+            _ => {
+                self.pause_until_ms.store(0, Ordering::SeqCst);
+            }
+        }
+        self.status()
+    }
+
     pub fn toggle_pause(&self) -> bool {
-        let cur = self.paused.load(Ordering::Relaxed);
-        let next = !cur;
-        self.paused.store(next, Ordering::Relaxed);
-        next
+        if self.is_paused() {
+            self.resume();
+            false
+        } else {
+            self.pause_gen.fetch_add(1, Ordering::SeqCst);
+            self.pause_until_ms.store(0, Ordering::SeqCst);
+            self.paused.store(true, Ordering::SeqCst);
+            true
+        }
     }
 }
 
@@ -300,6 +380,244 @@ fn schedule_deferred_retry(
     });
 }
 
+/// Checks standard Windows clipboard privacy formats set by password managers,
+/// incognito browsers, and secure credential fields. Must be called while the
+/// clipboard is open.
+unsafe fn is_clipboard_excluded_by_privacy_formats() -> bool {
+    fn reg_fmt(name: &str) -> u32 {
+        let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        unsafe { RegisterClipboardFormatW(PCWSTR(wide.as_ptr())) }
+    }
+
+    static EXCLUDE_MONITOR: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    static VIEWER_IGNORE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    static CAN_INCLUDE_HISTORY: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+
+    let exclude_fmt = *EXCLUDE_MONITOR
+        .get_or_init(|| reg_fmt("ExcludeClipboardContentFromMonitorProcessing"));
+    if exclude_fmt != 0 && IsClipboardFormatAvailable(exclude_fmt).is_ok() {
+        return true;
+    }
+
+    let ignore_fmt = *VIEWER_IGNORE.get_or_init(|| reg_fmt("Clipboard Viewer Ignore"));
+    if ignore_fmt != 0 && IsClipboardFormatAvailable(ignore_fmt).is_ok() {
+        return true;
+    }
+
+    let history_fmt = *CAN_INCLUDE_HISTORY
+        .get_or_init(|| reg_fmt("CanIncludeInClipboardHistory"));
+    if history_fmt != 0 && IsClipboardFormatAvailable(history_fmt).is_ok() {
+        if let Ok(handle) = GetClipboardData(history_fmt) {
+            let hglobal = HGLOBAL(handle.0 as *mut _);
+            let ptr = GlobalLock(hglobal);
+            if !ptr.is_null() {
+                let size = GlobalSize(hglobal);
+                let allowed = if size >= 4 {
+                    *(ptr as *const u32) != 0
+                } else if size >= 1 {
+                    *(ptr as *const u8) != 0
+                } else {
+                    false
+                };
+                GlobalUnlock(hglobal).ok();
+                if !allowed {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+const MAX_IMAGE_FILE_PIXELS: u64 = 40_000_000;
+
+pub(crate) fn is_image_file_ext(path: &Path) -> bool {
+    path.extension()
+        .and_then(|s| s.to_str())
+        .map(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "webp" | "bmp" | "gif"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn is_file_manager_app(source_app: Option<&str>) -> bool {
+    match source_app {
+        Some(app) => {
+            let lower = app.to_ascii_lowercase();
+            matches!(
+                lower.as_str(),
+                "explorer.exe"
+                    | "files.exe"
+                    | "totalcmd.exe"
+                    | "totalcmd64.exe"
+                    | "dopus.exe"
+                    | "onecommander.exe"
+                    | "q-dir.exe"
+            )
+        }
+        None => false,
+    }
+}
+
+/// Decides whether a `CF_HDROP` clipboard payload should be captured as a real
+/// `image` clip instead of a plain `file` reference.
+///
+/// Screenshot tools and chat/capture apps (like Glint, ShareX, Snipping Tool,
+/// Discord, GOAT, etc.) often place a single `.png` attachment path in
+/// `CF_HDROP` (with or without a companion `CF_DIB`/`CF_DIBV5`). When the user
+/// copies a single image file from a non-file-manager app — or when the
+/// clipboard also provides `CF_DIB`/`CF_DIBV5`, or the path is inside an app's
+/// attachments/screenshots/temp folder — Carbon captures it as a full `image`
+/// clip (thumbnail, preview, zoom, OCR, QR) while keeping Explorer file copies,
+/// multi-file selections, and non-image files as `file` entries.
+fn should_capture_hdrop_as_image(
+    paths: &[String],
+    has_dib: bool,
+    source_app: Option<&str>,
+) -> bool {
+    if paths.len() != 1 {
+        return false;
+    }
+    let path = Path::new(&paths[0]);
+    if !is_image_file_ext(path) {
+        return false;
+    }
+    if has_dib {
+        return true;
+    }
+    if source_app.is_some() && !is_file_manager_app(source_app) {
+        return true;
+    }
+    let path_lower = paths[0].to_ascii_lowercase();
+    path_lower.contains("\\attachments\\")
+        || path_lower.contains("\\temp\\")
+        || path_lower.contains("\\screenshots\\")
+        || path_lower.contains("com.glint.app")
+}
+
+fn build_file_clip_item(
+    paths: Vec<String>,
+    total_size: u64,
+    is_video: bool,
+    source_app: Option<String>,
+) -> ClipItem {
+    let title = if paths.len() == 1 {
+        PathBuf::from(&paths[0])
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| paths[0].clone())
+    } else {
+        format!("{} files", paths.len())
+    };
+    let file_paths_json = serde_json::to_string(&paths).unwrap_or_default();
+    let id = uuid_v4();
+    ClipItem {
+        id,
+        content_type: "file".to_string(),
+        title,
+        text_content: Some(paths.join("\n")),
+        rtf_content: None,
+        html_content: None,
+        image_path: None,
+        image_width: None,
+        image_height: None,
+        file_paths: Some(file_paths_json),
+        is_video,
+        file_size: total_size,
+        is_pinned: false,
+        source_app,
+        created_at: String::new(),
+        updated_at: String::new(),
+        qr_content: None,
+        is_sensitive: false,
+        expires_at: None,
+        ocr_text: None,
+    }
+}
+
+pub(crate) fn capture_image_from_file(
+    source_path: &Path,
+    media_dir: &Path,
+    image_size_limit_mb: u32,
+    source_app: Option<String>,
+    scan_qr: bool,
+) -> Option<ClipItem> {
+    let meta = fs::metadata(source_path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let max_bytes = (image_size_limit_mb as u64) * 1024 * 1024;
+    if image_size_limit_mb > 0 && meta.len() > max_bytes {
+        return None;
+    }
+
+    let reader = image::ImageReader::open(source_path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?;
+    let format = reader.format()?;
+    let (width, height) = reader.into_dimensions().ok()?;
+    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > MAX_IMAGE_FILE_PIXELS {
+        return None;
+    }
+
+    fs::create_dir_all(media_dir).ok();
+    let id = uuid_v4();
+    let img_filename = format!("img_{}.png", id);
+    let img_full_path = media_dir.join(&img_filename);
+
+    let qr_content = if format == image::ImageFormat::Png {
+        // Fast lossless file copy: avoids slow PNG re-encoding (especially in dev/debug builds).
+        fs::copy(source_path, &img_full_path).ok()?;
+        if scan_qr {
+            image::open(source_path)
+                .ok()
+                .and_then(|img| decode_qr_content(&img.to_rgba8()))
+        } else {
+            None
+        }
+    } else {
+        let img_buf = image::open(source_path).ok()?.to_rgba8();
+        img_buf.save(&img_full_path).ok()?;
+        if scan_qr {
+            decode_qr_content(&img_buf)
+        } else {
+            None
+        }
+    };
+
+    let file_size = fs::metadata(&img_full_path)
+        .map(|m| m.len())
+        .unwrap_or_else(|_| meta.len());
+
+    Some(ClipItem {
+        id,
+        content_type: "image".to_string(),
+        title: "Image".to_string(),
+        text_content: None,
+        rtf_content: None,
+        html_content: None,
+        image_path: Some(img_full_path.to_string_lossy().to_string()),
+        image_width: Some(width),
+        image_height: Some(height),
+        file_paths: None,
+        is_video: false,
+        file_size,
+        is_pinned: false,
+        source_app,
+        created_at: String::new(),
+        updated_at: String::new(),
+        qr_content,
+        is_sensitive: false,
+        expires_at: None,
+        ocr_text: None,
+    })
+}
+
 fn process_clipboard_change(
     app_handle: &AppHandle,
     db_state: &DbState,
@@ -313,8 +631,9 @@ fn process_clipboard_change(
     if let Some(ref app_name) = source_app {
         let app_lower = app_name.to_lowercase();
         for ignored in &settings.ignore_apps {
-            if app_lower.contains(&ignored.to_lowercase()) {
-                return false; // Skip password managers
+            let trimmed = ignored.trim();
+            if !trimmed.is_empty() && app_lower.contains(&trimmed.to_lowercase()) {
+                return true; // Intentionally skipped (do not schedule deferred retries)
             }
         }
     }
@@ -333,6 +652,12 @@ fn process_clipboard_change(
             return false;
         }
 
+        // Respect Windows clipboard privacy formats (password managers, incognito, etc.)
+        if is_clipboard_excluded_by_privacy_formats() {
+            CloseClipboard().ok();
+            return true;
+        }
+
         let html_format = RegisterClipboardFormatW(
             PCWSTR("HTML Format\0".encode_utf16().collect::<Vec<u16>>().as_ptr()),
         );
@@ -341,9 +666,14 @@ fn process_clipboard_change(
         );
 
         let mut item: Option<ClipItem> = None;
+        let mut hdrop_image_fallback: Option<(Vec<String>, u64, bool)> = None;
+        let has_hdrop = IsClipboardFormatAvailable(CF_HDROP).is_ok();
+        let has_dib = IsClipboardFormatAvailable(CF_DIB).is_ok()
+            || IsClipboardFormatAvailable(CF_DIBV5).is_ok();
 
-        // A. CF_HDROP Files
-        if IsClipboardFormatAvailable(CF_HDROP).is_ok() {
+        // A. CF_HDROP Files (and single-image screenshot/attachment drops like Glint)
+        let mut defer_to_image = false;
+        if has_hdrop {
             if let Ok(handle) = GetClipboardData(CF_HDROP) {
                 let hdrop = windows::Win32::UI::Shell::HDROP(handle.0 as *mut _);
                 let file_count = DragQueryFileW(hdrop, 0xFFFFFFFF, None);
@@ -377,47 +707,22 @@ fn process_clipboard_change(
                 }
 
                 if !paths.is_empty() {
-                    let title = if paths.len() == 1 {
-                        PathBuf::from(&paths[0])
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| paths[0].clone())
+                    if should_capture_hdrop_as_image(&paths, has_dib, source_app.as_deref()) {
+                        defer_to_image = true;
+                        hdrop_image_fallback = Some((paths, total_size, is_video));
                     } else {
-                        format!("{} files", paths.len())
-                    };
-
-                    let file_paths_json = serde_json::to_string(&paths).unwrap_or_default();
-                    let id = uuid_v4();
-
-                    item = Some(ClipItem {
-                        id,
-                        content_type: "file".to_string(),
-                        title,
-                        text_content: Some(paths.join("\n")),
-                        rtf_content: None,
-                        html_content: None,
-                        image_path: None,
-                        image_width: None,
-                        image_height: None,
-                        file_paths: Some(file_paths_json),
-                        is_video,
-                        file_size: total_size,
-                        is_pinned: false,
-                        source_app: source_app.clone(),
-                        created_at: String::new(),
-                        updated_at: String::new(),
-                        qr_content: None,
-                        is_sensitive: false,
-                        expires_at: None,
-                        ocr_text: None,
-                    });
+                        item = Some(build_file_clip_item(
+                            paths,
+                            total_size,
+                            is_video,
+                            source_app.clone(),
+                        ));
+                    }
                 }
             }
         }
-        // B. Image CF_DIB or CF_DIBV5
-        else if IsClipboardFormatAvailable(CF_DIB).is_ok()
-            || IsClipboardFormatAvailable(CF_DIBV5).is_ok()
-        {
+        // B. Image CF_DIB or CF_DIBV5 (also runs when CF_HDROP was a screenshot/image attachment)
+        if item.is_none() && (!has_hdrop || defer_to_image) && has_dib {
             let format = if IsClipboardFormatAvailable(CF_DIBV5).is_ok() {
                 CF_DIBV5
             } else {
@@ -488,7 +793,11 @@ fn process_clipboard_change(
             }
         }
         // C. CF_UNICODETEXT Text / Link / Email / Color / Code / RichText
-        else if IsClipboardFormatAvailable(CF_UNICODETEXT).is_ok() {
+        if item.is_none()
+            && !has_hdrop
+            && !has_dib
+            && IsClipboardFormatAvailable(CF_UNICODETEXT).is_ok()
+        {
             if let Ok(handle) = GetClipboardData(CF_UNICODETEXT) {
                 let hglobal = HGLOBAL(handle.0 as *mut _);
                 let ptr = GlobalLock(hglobal);
@@ -661,6 +970,31 @@ fn process_clipboard_change(
         }
 
         CloseClipboard().ok();
+
+        // If CF_HDROP held a single screenshot/image attachment (e.g. Glint) and
+        // no CF_DIB bitmap was captured, decode the image file off the clipboard
+        // lock so it enters history as a first-class image clip (with fallback
+        // to a file clip if unreadable or over size limit).
+        if item.is_none() {
+            if let Some((paths, total_size, is_video)) = hdrop_image_fallback {
+                let first_path = PathBuf::from(&paths[0]);
+                item = capture_image_from_file(
+                    &first_path,
+                    media_dir,
+                    settings.image_size_limit_mb,
+                    source_app.clone(),
+                    true,
+                )
+                .or_else(|| {
+                    Some(build_file_clip_item(
+                        paths,
+                        total_size,
+                        is_video,
+                        source_app.clone(),
+                    ))
+                });
+            }
+        }
 
         // D. Insert into DB if new & not a duplicate (or our own paste)
         if let Some(mut new_item) = item {
@@ -948,36 +1282,35 @@ pub fn classify_text_content(
 ) -> String {
     let trimmed = text.trim();
 
-    // 1. Color hex/rgb/hsl (only for short single strings)
-    if trimmed.len() <= 32 && !trimmed.contains('\n') {
-        let hex_re = cached_regex!(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$");
-        let rgb_re = cached_regex!(r"^(rgb|rgba|hsl|hsla)\([0-9%.,\s]+\)$");
-        if hex_re.is_match(trimmed) || rgb_re.is_match(trimmed) {
+    // 1. Color hex/rgb/hsl/oklch/lab (only for short single-line color literals)
+    if trimmed.len() <= 48 && !trimmed.contains('\n') {
+        let hex_re = cached_regex!(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$");
+        let fn_color_re = cached_regex!(
+            r"^(?i)(rgb|rgba|hsl|hsla|oklch|oklab|lch|lab)\([0-9a-zA-Z%.,/\s+-]+\)$"
+        );
+        if hex_re.is_match(trimmed) || fn_color_re.is_match(trimmed) {
             return "color".to_string();
         }
     }
 
-    // 2. Email (only for single words)
-    if trimmed.len() <= 120 && !trimmed.contains('\n') && !trimmed.contains(' ') {
+    // 2. Email (single token, optionally `mailto:` or angle-bracket wrapped)
+    if trimmed.len() <= 128 && !trimmed.contains('\n') && !trimmed.contains(' ') && !trimmed.contains('\t') {
+        let candidate = trimmed
+            .strip_prefix("mailto:")
+            .or_else(|| trimmed.strip_prefix("MAILTO:"))
+            .unwrap_or(trimmed)
+            .trim_start_matches('<')
+            .trim_end_matches('>');
         let email_re = cached_regex!(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$");
-        if email_re.is_match(trimmed) {
+        if email_re.is_match(candidate) {
             return "email".to_string();
         }
     }
 
-    // 3. Link / URL (single URL)
+    // 3. Link / URL (single URL — rejects filenames like `package.json` or
+    // code member expressions like `console.log` / `ClipPreview.tsx`)
     if !trimmed.contains('\n') && !trimmed.contains(' ') && !trimmed.contains('\t') {
-        let is_url_prefix = trimmed.starts_with("http://")
-            || trimmed.starts_with("https://")
-            || trimmed.starts_with("ftp://")
-            || trimmed.starts_with("www.")
-            || trimmed.starts_with("localhost:")
-            || trimmed.starts_with("127.0.0.1:");
-
-        let domain_re = cached_regex!(r"^(?i)([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,24}(:\d+)?(/.*)?$");
-        let ip_re = cached_regex!(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?(/.*)?$");
-
-        if is_url_prefix || domain_re.is_match(trimmed) || ip_re.is_match(trimmed) {
+        if is_likely_url(trimmed) {
             return "link".to_string();
         }
     }
@@ -1064,7 +1397,9 @@ pub fn classify_text_content(
         return "code".to_string();
     }
 
-    // Last resort: an editor source hint, which never applies to prose.
+    // Last resort: an editor source hint ONLY tips the balance when the text
+    // carries real code syntax (never for plain words like "Please do so",
+    // dividers like "================", or labeled text like "TITLE: ...").
     let prose = looks_like_prose(trimmed);
     let is_code_app = source_app.map_or(false, |app| {
         let app_l = app.to_lowercase();
@@ -1072,11 +1407,144 @@ pub fn classify_text_content(
         // they carry prose, commands and shell output, not just source code.
         app_l.contains("code") || app_l.contains("devenv") || app_l.contains("idea") || app_l.contains("sublime")
     });
-    if is_code_app && !prose {
+    if is_code_app && !prose && has_code_syntax_hint(trimmed) {
         return "code".to_string();
     }
 
     "text".to_string()
+}
+
+/// Distinguishes genuine URLs / bare domains from filenames (`package.json`,
+/// `index.html`, `ClipPreview.tsx`) and code member accesses (`console.log`).
+fn is_likely_url(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("ftp://")
+        || lower.starts_with("www.")
+        || lower.starts_with("localhost:")
+        || lower.starts_with("127.0.0.1:")
+    {
+        return true;
+    }
+
+    let ip_re = cached_regex!(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?(/.*)?$");
+    if ip_re.is_match(s) {
+        return true;
+    }
+
+    let domain_re = cached_regex!(r"^(?i)([a-z0-9-]+\.)+([a-z]{2,24})(:\d+)?(/.*)?$");
+    let Some(caps) = domain_re.captures(s) else {
+        return false;
+    };
+    let tld = caps.get(2).map(|m| m.as_str().to_ascii_lowercase()).unwrap_or_default();
+    let has_port = caps.get(3).is_some();
+    let has_path = caps.get(4).is_some();
+
+    // Common file extensions & code suffixes that must never be treated as bare domains
+    // when there is no scheme (`http://`/`www.`) and no URL path/port.
+    const NON_DOMAIN_EXTS: &[&str] = &[
+        "js", "jsx", "mjs", "cjs", "ts", "tsx", "rs", "py", "rb", "go", "java", "kt", "kts",
+        "swift", "cpp", "hpp", "cc", "hh", "cs", "php", "vue", "svelte", "html", "htm", "css",
+        "scss", "sass", "less", "json", "toml", "yaml", "yml", "xml", "svg", "md", "mdx", "txt",
+        "log", "csv", "tsv", "sql", "env", "ini", "cfg", "conf", "lock", "pdf", "doc", "docx",
+        "xls", "xlsx", "ppt", "pptx", "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "mp3",
+        "mp4", "mov", "mkv", "avi", "wav", "zip", "tar", "gz", "rar", "7z", "exe", "dll", "msi",
+        "bat", "cmd", "ps1", "sh", "zsh", "fish", "wasm", "map", "bak", "tmp",
+    ];
+    if NON_DOMAIN_EXTS.contains(&tld.as_str()) {
+        // Allow genuine web TLDs like `docs.rs/tauri` or `registry.sh/x` ONLY when
+        // accompanied by an explicit `/path` or `:port` AND lowercase hostname.
+        return (has_path || has_port)
+            && matches!(tld.as_str(), "rs" | "sh" | "cc" | "md" | "py" | "go" | "to" | "tv" | "so")
+            && s.chars().take_while(|&c| c != '/').all(|c| !c.is_ascii_uppercase());
+    }
+
+    // For bare `word.word` without a `/path` or `:port`, require a known real-world TLD
+    // so member expressions like `Math.max`, `window.location`, `user.name` stay text.
+    if !has_path && !has_port {
+        const KNOWN_TLDS: &[&str] = &[
+            "com", "org", "net", "io", "dev", "app", "ai", "co", "edu", "gov", "mil", "me",
+            "gg", "tv", "xyz", "info", "biz", "uk", "de", "fr", "jp", "ca", "au", "in", "us",
+            "eu", "nl", "ch", "se", "no", "es", "it", "br", "kr", "cn", "tr", "pl", "cz",
+            "cloud", "tech", "site", "online", "store", "blog", "news", "design", "studio",
+            "pages", "run", "build", "tools", "codes", "live", "pro", "fm", "ly", "be", "to",
+        ];
+        return KNOWN_TLDS.contains(&tld.as_str());
+    }
+
+    true
+}
+
+/// True for decorative dividers (`========`, `=== VERSIONS ===`, `-------`) or
+/// plain labeled text lines (`TITLE: ...`, `Email: ...`) that must never be
+/// mistaken for source code.
+fn is_banner_or_plain_label(t: &str) -> bool {
+    if t.is_empty() {
+        return true;
+    }
+    // Purely repeated punctuation / divider characters (e.g. `================`)
+    if t.chars().all(|c| c.is_whitespace() || matches!(c, '=' | '-' | '_' | '*' | '~' | '#' | '+')) {
+        return true;
+    }
+    // Section banner like `=== VERSIONS ===` or `--- NOTES ---`
+    if cached_regex!(r"^[=\-*~#]{2,}\s*[^\{\};\(\)]+\s*[=\-*~#]{2,}").is_match(t)
+        && !t.contains('{')
+        && !t.contains(';')
+    {
+        return true;
+    }
+    // Single-line plain label like `Email: user@example.com` or `TITLE: Seek Revamp: Glass ...`
+    if !t.contains('\n')
+        && cached_regex!(r"^[A-Za-z][A-Za-z0-9 _-]{1,24}:\s+\S").is_match(t)
+        && !t.contains('{')
+        && !t.contains('}')
+        && !t.contains(';')
+        && !t.contains("=>")
+        && !t.contains("->")
+        && !cached_regex!(r"\b\w+\([^)]*\)").is_match(t)
+    {
+        return true;
+    }
+    false
+}
+
+/// Lightweight syntax check used ONLY when the source app is a code editor
+/// (VS Code, JetBrains, Monocode, etc.) to distinguish real short code snippets
+/// (`foo.bar(baz)`, `#[derive(Debug)]`, `x = y + 1`) from English phrases
+/// (`Please do so`, `So we make`) copied out of an editor or AI chat panel.
+fn has_code_syntax_hint(t: &str) -> bool {
+    if is_banner_or_plain_label(t) {
+        return false;
+    }
+    // Function call `ident(...)`, Rust macro `ident!(...)`, attribute `#[...]`,
+    // scope `a::b`, arrow `=>` / `->`, strict equality `===`/`!==`, assignment
+    // `ident = expr`, trailing semicolon, or balanced braces `{...}`.
+    if cached_regex!(r"\b[A-Za-z_]\w*!?\([^()\n]*\)").is_match(t) {
+        return true;
+    }
+    if cached_regex!(r"#!?\[[^\]]+\]").is_match(t) {
+        return true;
+    }
+    if cached_regex!(r"\b[A-Za-z_]\w*::[A-Za-z_]\w*").is_match(t) {
+        return true;
+    }
+    if cached_regex!(r"(?:=>|->|!==|===|&&|\|\|)").is_match(t) {
+        return true;
+    }
+    if cached_regex!(r"^\s*(?:const|let|var|fn|pub|def|func|class|struct|enum|trait|impl|import|export|from|return|package|#include)\b").is_match(t) {
+        return true;
+    }
+    if t.contains('{') && t.contains('}') {
+        return true;
+    }
+    if t.trim_end().ends_with(';') && cached_regex!(r"[=()]").is_match(t) {
+        return true;
+    }
+    if cached_regex!(r"\b[a-zA-Z_]\w*\s*(?::=|\+=|-=|\*=|/=|=)\s*[^=\s]").is_match(t) {
+        return true;
+    }
+    false
 }
 
 /// Heuristic: does this read like a Markdown document? Headings, fences,
@@ -1141,11 +1609,29 @@ pub fn looks_like_markdown(s: &str) -> bool {
 /// with block structure, or blocks of semicolon/brace-terminated lines.
 fn is_structural_code(s: &str) -> bool {
     let t = s.trim();
+    if is_banner_or_plain_label(t) {
+        return false;
+    }
 
-    // JSON document
+    // Shebang script (`#!/usr/bin/env python3`, `#!/bin/bash`)
+    if t.starts_with("#!/") {
+        return true;
+    }
+
+    // JSON object / non-trivial array (rejects footnote markers like `[1]`)
     if (t.starts_with('{') && t.ends_with('}')) || (t.starts_with('[') && t.ends_with(']')) {
-        if serde_json::from_str::<serde_json::Value>(t).is_ok() {
-            return true;
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(t) {
+            let nontrivial = match &val {
+                serde_json::Value::Object(map) => !map.is_empty(),
+                serde_json::Value::Array(arr) => {
+                    arr.len() >= 2
+                        || arr.iter().any(|v| v.is_object() || v.is_array())
+                }
+                _ => false,
+            };
+            if nontrivial {
+                return true;
+            }
         }
     }
 
@@ -1156,17 +1642,33 @@ fn is_structural_code(s: &str) -> bool {
         return true;
     }
 
-    // SQL statement
-    if cached_regex!(r"(?i)^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|WITH)\s[^;]+;\s*$")
+    // SQL statement (with or without trailing semicolon when SQL clause anatomy is present)
+    if cached_regex!(r"(?i)^\s*(SELECT|INSERT\s+INTO|UPDATE|DELETE\s+FROM|CREATE\s+(?:TABLE|INDEX|VIEW)|ALTER\s+TABLE|DROP\s+(?:TABLE|INDEX|VIEW)|WITH\s+\w+\s+AS)\b[\s\S]+(?:\b(?:FROM|VALUES|SET|WHERE|JOIN|TABLE)\b|;)")
         .is_match(t)
+    {
+        return true;
+    }
+
+    // CSS rule block (e.g. `.card { color: red; padding: 8px; }`)
+    if cached_regex!(r"^\s*(?:@media|@keyframes|@supports|:root|[.#a-zA-Z][\w.#:\s>,+~*\[\]=^$|'\x22-]*)\s*\{[\s\S]*[a-z-]+\s*:\s*[^;{}]+;[\s\S]*\}\s*$").is_match(t) {
+        return true;
+    }
+
+    // Strong single-line code declarations (imports, C includes, Rust attributes, fn/def/func)
+    if cached_regex!(r"^\s*#include\s*[<'\x22][^>'\x22]+[>'\x22]").is_match(t)
+        || cached_regex!(r"^\s*#!?\[[a-zA-Z_]\w*(?:\([^\)]*\))?\]\s*$").is_match(t)
+        || cached_regex!(r"^\s*(?:export\s+)?(?:import\s+.+\s+from\s+['\x22]|from\s+[\w.]+\s+import\s+\w+)").is_match(t)
+        || cached_regex!(r"^\s*(?:pub\s+(?:\([^)]+\)\s+)?)?(?:async\s+)?(?:fn|func|def)\s+[A-Za-z_]\w*\s*[<(]").is_match(t)
+        || cached_regex!(r"^\s*(?:export\s+)?(?:const|let|var)\s+[A-Za-z_]\w*(?:\s*:\s*[^=]+)?\s*=\s*\S.*;\s*$").is_match(t)
     {
         return true;
     }
 
     let code_keywords = [
         "const ", "let ", "var ", "function ", "import ", "export ", "class ", "def ", "fn ", "pub ",
-        "return ", "if (", "for (", "while (", "SELECT ", "INSERT INTO ", "UPDATE ", "DELETE FROM ",
-        "struct ", "interface ", "async ", "await ", "std::", "fmt.", "::", "=>", "->",
+        "func ", "package ", "return ", "if (", "for (", "while (", "SELECT ", "INSERT INTO ",
+        "UPDATE ", "DELETE FROM ", "struct ", "interface ", "impl ", "async ", "await ",
+        "std::", "fmt.", "=>", "->",
     ];
     let kw_hits = code_keywords.iter().filter(|k| t.contains(**k)).count();
     let has_braces = t.contains('{') && t.contains('}');
@@ -1174,7 +1676,7 @@ fn is_structural_code(s: &str) -> bool {
     let multiline = t.lines().count() > 1;
 
     // Several language keywords plus block/line structure = real code.
-    if kw_hits >= 2 && (has_braces || has_semis || multiline) {
+    if kw_hits >= 2 && (has_braces || has_semis || (multiline && !looks_like_prose(t))) {
         return true;
     }
     if kw_hits >= 1 && has_braces && has_semis {
@@ -1500,5 +2002,136 @@ EndFragment:0000000705
         let rtf = r#"{\rtf1\ansi\ansicpg1252\deff0\nouicompat\deflang1033{\fonttbl{\f0\fnil\fcharset0 Calibri;}}\pard\sa200\sl276\slmult1\f0\fs22\lang9 Hello world\par}"#;
         assert!(!is_rich_rtf(rtf));
         assert_eq!(classify_text_content("Hello world", None, Some(rtf), None), "text");
+    }
+
+    #[test]
+    fn glint_screenshot_hdrop_captures_as_image() {
+        let glint_path = vec![
+            r"C:\Users\sanir\AppData\Local\com.glint.app\attachments\glint-7923f44da05286c2-103611.png"
+                .to_string(),
+        ];
+        // Glint writing CF_HDROP + CF_DIB
+        assert!(should_capture_hdrop_as_image(&glint_path, true, Some("glint.exe")));
+        // Glint writing CF_HDROP only (no CF_DIB)
+        assert!(should_capture_hdrop_as_image(&glint_path, false, Some("glint.exe")));
+        // Even if foreground window briefly showed explorer or unknown, attachments/com.glint.app stays image
+        assert!(should_capture_hdrop_as_image(&glint_path, false, None));
+        // GOAT / chat / screenshot apps copying a single .png attachment
+        assert!(should_capture_hdrop_as_image(&glint_path, false, Some("GOAT (Nightly).exe")));
+    }
+
+    #[test]
+    fn explorer_file_copies_and_non_images_stay_file() {
+        let photo = vec![r"C:\Users\sanir\Pictures\vacation.png".to_string()];
+        // Regular Explorer copy of an image file stays a file clip
+        assert!(!should_capture_hdrop_as_image(&photo, false, Some("explorer.exe")));
+        assert!(!should_capture_hdrop_as_image(&photo, false, Some("Explorer.EXE")));
+        assert!(!should_capture_hdrop_as_image(&photo, false, Some("Files.exe")));
+
+        // Multiple image files always stay a file clip
+        let multi = vec![
+            r"C:\Users\sanir\AppData\Local\com.glint.app\attachments\a.png".to_string(),
+            r"C:\Users\sanir\AppData\Local\com.glint.app\attachments\b.png".to_string(),
+        ];
+        assert!(!should_capture_hdrop_as_image(&multi, true, Some("glint.exe")));
+
+        // Non-image files always stay a file clip
+        let pdf = vec![r"C:\Users\sanir\AppData\Local\com.glint.app\attachments\doc.pdf".to_string()];
+        assert!(!should_capture_hdrop_as_image(&pdf, true, Some("glint.exe")));
+    }
+
+    #[test]
+    fn capture_image_from_file_creates_media_copy_and_dimensions() {
+        let tmp = std::env::temp_dir().join(format!("carbon_glint_test_{}", uuid_v4()));
+        let src_dir = tmp.join("attachments");
+        let media_dir = tmp.join("media");
+        fs::create_dir_all(&src_dir).unwrap();
+        let src_file = src_dir.join("glint-sample.png");
+
+        let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(16, 12, Rgba([120, 80, 240, 255]));
+        img.save(&src_file).unwrap();
+
+        let captured = capture_image_from_file(&src_file, &media_dir, 10, Some("glint.exe".into()), true)
+            .expect("single png attachment should capture as an image clip");
+        assert_eq!(captured.content_type, "image");
+        assert_eq!(captured.title, "Image");
+        assert_eq!(captured.image_width, Some(16));
+        assert_eq!(captured.image_height, Some(12));
+        assert!(captured.file_paths.is_none());
+        let saved = PathBuf::from(captured.image_path.expect("saved image path"));
+        assert!(saved.is_file());
+        assert!(saved.starts_with(&media_dir));
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn short_phrases_banners_and_labels_from_code_editors_stay_text() {
+        for sample in [
+            "Please do so",
+            "Yes I am",
+            "So we make",
+            "========================",
+            "=== VERSIONS === GOAT 1.0",
+            "Email: user.name+demo@example.com",
+            "TITLE: Seek Revamp: Glass Polish",
+            "[1]",
+        ] {
+            assert_eq!(
+                classify_text_content(sample, None, None, Some("Monocode Gpui.exe")),
+                "text",
+                "Expected plain text for: {sample}"
+            );
+            assert_eq!(
+                classify_text_content(sample, None, None, Some("Code.exe")),
+                "text",
+                "Expected plain text from Code.exe for: {sample}"
+            );
+        }
+    }
+
+    #[test]
+    fn filenames_and_member_expressions_do_not_misclassify_as_links() {
+        for sample in [
+            "package.json",
+            "index.html",
+            "ClipPreview.tsx",
+            "clipboard_watcher.rs",
+            "console.log",
+            "Math.max",
+            "window.location",
+        ] {
+            assert_ne!(
+                classify_text_content(sample, None, None, None),
+                "link",
+                "Filename/identifier must not become link: {sample}"
+            );
+        }
+        for url in [
+            "https://github.com/berkaygkc/yabbistir",
+            "github.com/sanirudh17/carbon",
+            "example.com",
+            "docs.rs/tauri",
+            "localhost:3210",
+        ] {
+            assert_eq!(
+                classify_text_content(url, None, None, None),
+                "link",
+                "Real URL/domain must classify as link: {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn modern_colors_emails_and_real_code_classify_accurately() {
+        assert_eq!(classify_text_content("#8b5cf6", None, None, None), "color");
+        assert_eq!(classify_text_content("rgb(22 22 26 / 68%)", None, None, None), "color");
+        assert_eq!(classify_text_content("oklch(0.65 0.2 280)", None, None, None), "color");
+        assert_eq!(classify_text_content("mailto:dev@example.com", None, None, None), "email");
+        assert_eq!(classify_text_content("const x: number = 42;", None, None, None), "code");
+        assert_eq!(classify_text_content("fn main() { println!(\"hi\"); }", None, None, None), "code");
+        assert_eq!(classify_text_content(".card { color: red; padding: 8px; }", None, None, None), "code");
+        assert_eq!(classify_text_content("SELECT id, title FROM entries WHERE is_pinned = 1", None, None, None), "code");
     }
 }

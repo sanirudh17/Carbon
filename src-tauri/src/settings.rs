@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use windows::core::PCWSTR;
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegSetValueExW, HKEY_CURRENT_USER, KEY_WRITE,
-    REG_OPTION_NON_VOLATILE, REG_SZ,
+    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
+    HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ,
 };
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -151,11 +151,62 @@ fn sanitize_settings(s: &mut AppSettings) {
     s.quick_hotkey = s.quick_hotkey.trim().to_string();
     s.enlarged_hotkey = s.enlarged_hotkey.trim().to_string();
     s.accent_color = s.accent_color.trim().to_string();
-    s.theme = s.theme.trim().to_string();
+    s.theme = match s.theme.trim().to_lowercase().as_str() {
+        "light" => "light".to_string(),
+        "system" => "system".to_string(),
+        _ => "dark".to_string(),
+    };
     s.window_material = match s.window_material.trim().to_lowercase().as_str() {
         "solid" => "solid".to_string(),
         _ => "acrylic".to_string(),
     };
+}
+
+/// Detects the current Windows app theme preference from HKCU Personalize.
+/// Returns `"light"` when `AppsUseLightTheme == 1`, otherwise `"dark"`.
+pub fn detect_system_theme() -> &'static str {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        let subkey: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize\0"
+            .encode_utf16()
+            .collect();
+        let value_name: Vec<u16> = "AppsUseLightTheme\0".encode_utf16().collect();
+        let mut hkey = std::mem::zeroed();
+        if RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            PCWSTR(subkey.as_ptr()),
+            0,
+            KEY_READ,
+            &mut hkey,
+        )
+        .is_ok()
+        {
+            let mut val: u32 = 0;
+            let mut size: u32 = std::mem::size_of::<u32>() as u32;
+            let res = RegQueryValueExW(
+                hkey,
+                PCWSTR(value_name.as_ptr()),
+                None,
+                None,
+                Some(&mut val as *mut u32 as *mut u8),
+                Some(&mut size),
+            );
+            let _ = RegCloseKey(hkey);
+            if res.is_ok() && val == 1 {
+                return "light";
+            }
+        }
+    }
+    "dark"
+}
+
+/// Resolves `"dark" | "light" | "system"` to a concrete `"dark"` or `"light"` theme.
+pub fn resolve_effective_theme(theme: &str) -> &'static str {
+    match theme.trim().to_lowercase().as_str() {
+        "light" => "light",
+        "system" => detect_system_theme(),
+        _ => "dark",
+    }
 }
 
 impl Default for AppSettings {
@@ -391,5 +442,27 @@ mod tests {
             sanitize_settings(&mut s);
             assert_eq!(s.window_material, expected, "input '{}' should sanitize to '{}'", input, expected);
         }
+    }
+
+    #[test]
+    fn test_theme_sanitization_supports_system() {
+        for (input, expected) in [
+            ("dark", "dark"),
+            ("light", "light"),
+            ("LIGHT", "light"),
+            ("system", "system"),
+            (" System ", "system"),
+            ("unknown", "dark"),
+            ("", "dark"),
+        ] {
+            let mut s = AppSettings::default();
+            s.theme = input.to_string();
+            sanitize_settings(&mut s);
+            assert_eq!(s.theme, expected);
+        }
+        assert_eq!(resolve_effective_theme("light"), "light");
+        assert_eq!(resolve_effective_theme("dark"), "dark");
+        let sys = resolve_effective_theme("system");
+        assert!(sys == "dark" || sys == "light");
     }
 }

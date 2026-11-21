@@ -80,7 +80,8 @@ pub fn update_native_theme(window: &WebviewWindow, theme: &str) {
     #[cfg(target_os = "windows")]
     if let Ok(handle) = window.hwnd() {
         use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
-        let dark = i32::from(theme != "light");
+        let effective = crate::settings::resolve_effective_theme(theme);
+        let dark = i32::from(effective != "light");
         unsafe { let _ = DwmSetWindowAttribute(windows::Win32::Foundation::HWND(handle.0 as _), DWMWA_USE_IMMERSIVE_DARK_MODE, (&dark as *const i32).cast(), 4); }
     }
     #[cfg(not(target_os = "windows"))]
@@ -262,7 +263,9 @@ pub fn apply_window_material(window: &WebviewWindow, material: WindowMaterial) {
         if let Ok(w_hwnd) = window.hwnd() {
             unsafe {
                 let hwnd = windows::Win32::Foundation::HWND(w_hwnd.0 as _);
-                let is_dark = i32::from(window.app_handle().try_state::<crate::AppState>().map(|state| state.settings.get().theme != "light").unwrap_or(true));
+                let is_dark = i32::from(window.app_handle().try_state::<crate::AppState>()
+                    .map(|state| crate::settings::resolve_effective_theme(&state.settings.get().theme) != "light")
+                    .unwrap_or(true));
                 let _ = DwmSetWindowAttribute(
                     hwnd,
                     DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -465,6 +468,7 @@ pub fn set_window_default_background(
     #[cfg(target_os = "windows")]
     {
         use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_COLOR;
+        let theme = crate::settings::resolve_effective_theme(theme);
         let color = match material {
             WindowMaterial::Solid if theme.eq_ignore_ascii_case("light") => {
                 COREWEBVIEW2_COLOR { A: 255, R: 244, G: 244, B: 246 }
@@ -563,6 +567,7 @@ pub fn set_webview_default_background<W: tauri::Runtime>(
     #[cfg(target_os = "windows")]
     {
         use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_COLOR;
+        let theme = crate::settings::resolve_effective_theme(theme);
         let color = match material {
             WindowMaterial::Solid if theme.eq_ignore_ascii_case("light") => {
                 COREWEBVIEW2_COLOR { A: 255, R: 244, G: 244, B: 246 }

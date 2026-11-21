@@ -14,7 +14,7 @@ mod titles;
 mod vibrancy;
 mod webview_bg;
 
-use clipboard_watcher::ClipboardWatcher;
+use clipboard_watcher::{ClipboardWatcher, PauseStatus};
 use db::{ClipItem, Collection, DbState, DbStats, Snippet};
 use history::HistoryManager;
 use hotkey::{handle_enlarged_hotkey, handle_overlay_hotkey, HotkeyManager};
@@ -23,10 +23,44 @@ use settings::{AppSettings, SettingsState};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
     AppHandle, Emitter, Listener, Manager, State, WebviewWindow, WindowEvent,
 };
+
+struct TrayPauseMenu(MenuItem<tauri::Wry>);
+
+fn sync_tray_pause_ui(app: &AppHandle, status: &PauseStatus) {
+    let label = if !status.paused {
+        "Pause Capture".to_string()
+    } else if let Some(until) = status.resume_at_ms {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let rem_mins = until.saturating_sub(now).saturating_add(59_999) / 60_000;
+        if rem_mins > 0 {
+            format!("Resume Capture ({rem_mins}m left)")
+        } else {
+            "Resume Capture".to_string()
+        }
+    } else {
+        "Resume Capture".to_string()
+    };
+
+    if let Some(menu) = app.try_state::<TrayPauseMenu>() {
+        let _ = menu.0.set_text(&label);
+    }
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let tooltip = if status.paused {
+            "Carbon — Capture Paused"
+        } else {
+            "Carbon"
+        };
+        let _ = tray.set_tooltip(Some(tooltip));
+    }
+    let _ = app.emit("capture-pause-changed", status);
+}
 
 pub struct AppState {
     pub db: Arc<DbState>,
@@ -116,11 +150,9 @@ fn queue_add_clips(
 
     // Prepare the first queued item on the clipboard for immediate pasting
     if let Some(first_id) = queue.front() {
-        if let Ok(clips) = state.db.get_all_entries(None, None, false, None) {
-            if let Some(first_item) = clips.into_iter().find(|c| &c.id == first_id) {
-                paste::write_item_to_clipboard(&first_item, false).ok();
-                crate::clipboard_watcher::mark_paste(&first_item);
-            }
+        if let Ok(Some(first_item)) = state.db.get_entry_by_id(first_id) {
+            paste::write_item_to_clipboard(&first_item, false).ok();
+            crate::clipboard_watcher::mark_paste(&first_item);
         }
     }
 
@@ -141,11 +173,9 @@ fn queue_remove_clip(
     let len = queue.len();
 
     if let Some(first_id) = queue.front() {
-        if let Ok(clips) = state.db.get_all_entries(None, None, false, None) {
-            if let Some(first_item) = clips.into_iter().find(|c| &c.id == first_id) {
-                paste::write_item_to_clipboard(&first_item, false).ok();
-                crate::clipboard_watcher::mark_paste(&first_item);
-            }
+        if let Ok(Some(first_item)) = state.db.get_entry_by_id(first_id) {
+            paste::write_item_to_clipboard(&first_item, false).ok();
+            crate::clipboard_watcher::mark_paste(&first_item);
         }
     }
 
@@ -168,12 +198,14 @@ fn queue_clear(
 async fn queue_get_clips(
     state: State<'_, AppState>,
 ) -> Result<Vec<ClipItem>, String> {
-    let queue = state.paste_queue.lock().map_err(|e| e.to_string())?;
-    let all_clips = state.db.get_all_entries(None, None, false, None)?;
-    let mut result = Vec::new();
-    for id in queue.iter() {
-        if let Some(clip) = all_clips.iter().find(|c| &c.id == id) {
-            result.push(clip.clone());
+    let ids: Vec<String> = {
+        let queue = state.paste_queue.lock().map_err(|e| e.to_string())?;
+        queue.iter().cloned().collect()
+    };
+    let mut result = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Ok(Some(clip)) = state.db.get_entry_by_id(&id) {
+            result.push(clip);
         }
     }
     Ok(result)
@@ -197,8 +229,7 @@ fn queue_paste_next(
         None => return Ok(()),
     };
 
-    let clips = state.db.get_all_entries(None, None, false, None)?;
-    if let Some(item) = clips.into_iter().find(|c| c.id == target_id) {
+    if let Some(item) = state.db.get_entry_by_id(&target_id)? {
         let settings = state.settings.get();
         let transform = match transform.as_deref() {
             None => {
@@ -241,11 +272,9 @@ fn queue_paste_next(
         // If there are more items in queue, prepare the next one on the clipboard
         let queue = state.paste_queue.lock().map_err(|e| e.to_string())?;
         if let Some(next_id) = queue.front() {
-            if let Ok(all) = state.db.get_all_entries(None, None, false, None) {
-                if let Some(next_item) = all.into_iter().find(|c| &c.id == next_id) {
-                    paste::write_item_to_clipboard(&next_item, false).ok();
-                    crate::clipboard_watcher::mark_paste(&next_item);
-                }
+            if let Ok(Some(next_item)) = state.db.get_entry_by_id(next_id) {
+                paste::write_item_to_clipboard(&next_item, false).ok();
+                crate::clipboard_watcher::mark_paste(&next_item);
             }
         }
 
@@ -276,8 +305,7 @@ fn paste_clip(
         "[PASTE_CLIP] Called for id='{}', window='{}', transform={:?}",
         id, window.label(), transform
     ));
-    let clips = state.db.get_all_entries(None, None, false, None)?;
-    if let Some(item) = clips.into_iter().find(|c| c.id == id) {
+    if let Some(item) = state.db.get_entry_by_id(&id)? {
         let settings = state.settings.get();
         let transform = match transform.as_deref() {
             None => {
@@ -363,8 +391,7 @@ fn copy_clip(
     app_handle: AppHandle,
 ) -> Result<(), String> {
     paste::log_diag(&format!("[COPY_CLIP] Called for clip '{}'", id));
-    let clips = state.db.get_all_entries(None, None, false, None)?;
-    if let Some(item) = clips.into_iter().find(|c| c.id == id) {
+    if let Some(item) = state.db.get_entry_by_id(&id)? {
         // Respect the "move to top on copy" setting — previously this bumped
         // unconditionally, so disabling the option had no effect here.
         if state.settings.get().move_to_top_on_paste {
@@ -803,8 +830,57 @@ fn toggle_enlarged(app_handle: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn toggle_pause_capture(state: State<'_, AppState>) -> Result<bool, String> {
-    Ok(state.watcher.toggle_pause())
+fn toggle_pause_capture(state: State<'_, AppState>, app: AppHandle) -> Result<bool, String> {
+    let paused = state.watcher.toggle_pause();
+    let status = state.watcher.status();
+    sync_tray_pause_ui(&app, &status);
+    Ok(paused)
+}
+
+#[tauri::command]
+fn get_pause_status(state: State<'_, AppState>) -> PauseStatus {
+    state.watcher.status()
+}
+
+#[tauri::command]
+fn pause_capture_for(
+    minutes: Option<u64>,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<PauseStatus, String> {
+    let app_for_resume = app.clone();
+    let status = state.watcher.pause_for_minutes(minutes, move || {
+        if let Some(st) = app_for_resume.try_state::<AppState>() {
+            let resumed = st.watcher.status();
+            sync_tray_pause_ui(&app_for_resume, &resumed);
+        }
+    });
+    sync_tray_pause_ui(&app, &status);
+    Ok(status)
+}
+
+#[tauri::command]
+fn resume_capture(state: State<'_, AppState>, app: AppHandle) -> Result<PauseStatus, String> {
+    state.watcher.resume();
+    let status = state.watcher.status();
+    sync_tray_pause_ui(&app, &status);
+    Ok(status)
+}
+
+#[tauri::command]
+fn sync_native_theme(
+    effective_theme: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let mat = vibrancy::WindowMaterial::from_str(&state.settings.get().window_material);
+    let theme = if effective_theme.eq_ignore_ascii_case("light") {
+        "light"
+    } else {
+        "dark"
+    };
+    vibrancy::set_default_background_for_all(&app, mat, theme);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1256,6 +1332,18 @@ pub fn run() {
 
             let db_state = Arc::new(DbState::new(db_path).expect("Failed to initialize SQLite database"));
             let settings_state = Arc::new(SettingsState::new(settings_path));
+            let repair_db = db_state.clone();
+            let repair_media = media_dir.clone();
+            let repair_limit = settings_state.get().image_size_limit_mb;
+            let repair_app = app_handle.clone();
+            std::thread::spawn(move || {
+                if let Ok(converted) = repair_db.repair_glint_image_entries(&repair_media, repair_limit) {
+                    if converted > 0 {
+                        hotkey::invalidate_prewarm_cache();
+                        let _ = repair_app.emit("clipboard-updated", Option::<crate::db::ClipItem>::None);
+                    }
+                }
+            });
             let watcher = ClipboardWatcher::start(
                 app_handle.clone(),
                 db_state.clone(),
@@ -1412,13 +1500,30 @@ pub fn run() {
             // Build Tray Icon
             let show_i = MenuItem::with_id(app, "show", "Open Carbon", true, None::<&str>)?;
             let overlay_i = MenuItem::with_id(app, "overlay", "Quick Overlay", true, None::<&str>)?;
+            let sep1 = PredefinedMenuItem::separator(app)?;
             let pause_i = MenuItem::with_id(app, "pause", "Pause Capture", true, None::<&str>)?;
+            let pause_5m_i = MenuItem::with_id(app, "pause_5m", "5 minutes", true, None::<&str>)?;
+            let pause_15m_i = MenuItem::with_id(app, "pause_15m", "15 minutes", true, None::<&str>)?;
+            let pause_60m_i = MenuItem::with_id(app, "pause_60m", "1 hour", true, None::<&str>)?;
+            let pause_timed_sub = Submenu::with_items(
+                app,
+                "Pause for…",
+                true,
+                &[&pause_5m_i, &pause_15m_i, &pause_60m_i],
+            )?;
+            let sep2 = PredefinedMenuItem::separator(app)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit Carbon", true, None::<&str>)?;
 
-            let tray_menu = Menu::with_items(app, &[&show_i, &overlay_i, &pause_i, &quit_i])?;
+            app.manage(TrayPauseMenu(pause_i.clone()));
 
-            let _tray = TrayIconBuilder::new()
+            let tray_menu = Menu::with_items(
+                app,
+                &[&show_i, &overlay_i, &sep1, &pause_i, &pause_timed_sub, &sep2, &quit_i],
+            )?;
+
+            let _tray = TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("Carbon")
                 .menu(&tray_menu)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "show" => {
@@ -1430,9 +1535,28 @@ pub fn run() {
                         handle_overlay_hotkey(app);
                     }
                     "pause" => {
-                        crate::paste::log_diag("[TRAY] 'Pause Capture' clicked");
+                        crate::paste::log_diag("[TRAY] 'Pause/Resume Capture' clicked");
                         let state = app.state::<AppState>();
                         state.watcher.toggle_pause();
+                        let status = state.watcher.status();
+                        sync_tray_pause_ui(app, &status);
+                    }
+                    "pause_5m" | "pause_15m" | "pause_60m" => {
+                        let mins = match event.id.as_ref() {
+                            "pause_5m" => 5,
+                            "pause_15m" => 15,
+                            _ => 60,
+                        };
+                        crate::paste::log_diag(&format!("[TRAY] 'Pause for {}m' clicked", mins));
+                        let state = app.state::<AppState>();
+                        let app_resume = app.clone();
+                        let status = state.watcher.pause_for_minutes(Some(mins), move || {
+                            if let Some(st) = app_resume.try_state::<AppState>() {
+                                let resumed = st.watcher.status();
+                                sync_tray_pause_ui(&app_resume, &resumed);
+                            }
+                        });
+                        sync_tray_pause_ui(app, &status);
                     }
                     "quit" => {
                         crate::paste::log_diag("[TRAY] 'Quit Carbon' clicked");
@@ -1568,6 +1692,10 @@ pub fn run() {
             toggle_overlay,
             toggle_enlarged,
             toggle_pause_capture,
+            get_pause_status,
+            pause_capture_for,
+            resume_capture,
+            sync_native_theme,
             reveal_file_in_explorer,
             get_image_data_url,
             extract_image_ocr,

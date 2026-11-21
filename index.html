@@ -26,7 +26,10 @@
           var accent = localStorage.getItem('carbon_accent_color');
           if (accent) document.documentElement.style.setProperty('--accent-base', accent);
           var theme = localStorage.getItem('carbon_theme');
-          if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+          var resolvedTheme = theme === 'system'
+            ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+            : (theme === 'light' ? 'light' : 'dark');
+          document.documentElement.setAttribute('data-theme', resolvedTheme);
           var rawMat = localStorage.getItem('carbon_window_material') || 'acrylic';
           var material = rawMat === 'acrylic' ? 'glass' : rawMat;
           document.documentElement.setAttribute('data-material', material);

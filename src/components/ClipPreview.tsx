@@ -1,5 +1,6 @@
 import { ImagePreview } from './ImagePreview';
 import { highlightPreview } from '../lib/searchHighlights';
+import { detectCodeLanguage, highlightCodeTokens } from '../lib/syntaxHighlight';
 import React, { useMemo, useState, useEffect, useRef, memo } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { ClipItem, ContentType } from '../types';
@@ -15,39 +16,6 @@ import {
  * ═════════════════════════════════════════════════════════════════════ */
 
 // ── Content-type labels, specific rather than generic ──────────────────
-
-function detectCodeLanguage(text: string): string | null {
-  const t = (text || '').trim();
-  if (!t) return null;
-
-  if (/^\s*<(!DOCTYPE\s+)?html[\s>]/i.test(t) || /<[a-z][\s>][^>]*>[\s\S]*<\/[a-z]>/i.test(t.slice(0, 400))) {
-    return 'HTML';
-  }
-  if (/^\s*[a-z.#*][\w.#:>-]*\s*\{[\s\S]*\}/i.test(t) && /:\s*[\w#()%.\s]+;/.test(t)) {
-    return 'CSS';
-  }
-  if (/^\s*[{\[].*\s*:/s.test(t.slice(0, 300))) {
-    try {
-      JSON.parse(t);
-      return 'JSON';
-    } catch {
-      /* not strict JSON — fall through */
-    }
-  }
-  if (/\b(export|import|const|let|function|=>|async)\b/.test(t) && /[{}()]/.test(t)) {
-    return 'JavaScript';
-  }
-  if (/^\s*(def|class|import|from)\s+\w+/m.test(t) && /\s*:\s*$/.test(t.split('\n')[0] || '')) {
-    return 'Python';
-  }
-  if (/^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|WITH)\s/i.test(t) && /;/.test(t)) {
-    return 'SQL';
-  }
-  if (/^\s*(#{1,6}\s|\s*[-*+]\s|```)/m.test(t)) {
-    return 'Markdown';
-  }
-  return null;
-}
 
 export function getClipFilePaths(item: Pick<ClipItem, 'file_paths' | 'text_content'>): string[] {
   if (item.file_paths) {
@@ -656,6 +624,21 @@ const ClipPreviewBody = memo(function ClipPreviewBody({ item, forceRaw = false }
       return (
         <div className="preview-text plain preview-link-card" style={{ wordBreak: 'break-all' }}>
           {text}
+        </div>
+      );
+    }
+    if (item.content_type === 'code' && !forceRaw) {
+      const lang = detectCodeLanguage(text);
+      const tokens = highlightCodeTokens(text, lang);
+      return (
+        <div className="preview-text mono code-highlighted">
+          {tokens.map((tok, i) =>
+            tok.type === 'plain' ? (
+              <React.Fragment key={i}>{tok.text}</React.Fragment>
+            ) : (
+              <span key={i} className={`tok-${tok.type}`}>{tok.text}</span>
+            )
+          )}
         </div>
       );
     }

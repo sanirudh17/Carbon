@@ -8,14 +8,17 @@ import { relaunch } from '@tauri-apps/plugin-process';
 import { getVersion } from '@tauri-apps/api/app';
 import type { Update } from '@tauri-apps/plugin-updater';
 import { AppSettings, DbStats } from '../types';
-import { ChevronLeftIcon, SpinnerIcon, CheckIcon, AlertTriangleIcon, DeleteIcon } from './Icons';
+import { ChevronLeftIcon, SpinnerIcon, CheckIcon, AlertTriangleIcon, DeleteIcon, CloseIcon, PlusIcon } from './Icons';
+import { SlidingSegmentedControl } from './SlidingSegmentedControl';
 
 import { keyEventToCombo, normalizeCombo } from '../utils/hotkeys';
 
 interface SettingsProps {
   onBack: () => void;
   onThemeToggle: () => void;
+  onThemeChange?: (theme: 'dark' | 'light' | 'system') => void;
   currentTheme: string;
+  themePreference?: 'dark' | 'light' | 'system';
 }
 
 const DEFAULT_HOTKEYS = {
@@ -48,7 +51,8 @@ const ACCENT_SWATCHES = [
   { name: 'Rose', color: '#F43F5E' },
 ];
 
-export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, currentTheme }) => {
+export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, onThemeChange, currentTheme, themePreference }) => {
+  const [ignoreAppInput, setIgnoreAppInput] = useState('');
   const [settings, setSettings] = useState<AppSettings>({
     quick_hotkey: 'Ctrl+Shift+Z',
     enlarged_hotkey: 'Ctrl+Alt+X',
@@ -690,31 +694,15 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
         {/* Shortcuts */}
         <section>
           <div className="sec-title">Shortcuts</div>
-          <div className="hotkey-guide">
-            <div className="hotkey-guide-title">How to change a shortcut</div>
-            <ol>
-              <li>Click a key chip, then press the key combination you want.</li>
-              <li>
-                Every shortcut needs <kbd>Ctrl</kbd>, <kbd>Alt</kbd>, or <kbd>Win</kbd> plus one more key (
-                <kbd>Shift</kbd> is optional). Letters, numbers and F-keys all work.
-              </li>
-              <li>
-                Press <kbd>Esc</kbd> to cancel, or <kbd>Backspace</kbd> to start over.
-              </li>
-            </ol>
-            <p>
-              Changes apply instantly and survive restarts. If another app already owns the combo you picked, Carbon
-              keeps your previous shortcut and tells you right here.
-            </p>
-          </div>
           <div className="set-row">
             <div className="set-label">
-              Quick paste hotkey
-              <div className="set-hint">Opens the overlay anywhere. Click the key to change it.</div>
+              Quick overlay hotkey
+              <div className="set-hint">Opens the quick picker anywhere. Click the shortcut to record a new combination.</div>
             </div>
             <div className="set-control hotkey-control">
               <button
                 className={`hotkey-chip ${recording === 'quick' ? 'recording' : ''}`}
+                title="Click to record shortcut"
                 onClick={() => {
                   setRecording(recording === 'quick' ? null : 'quick');
                   setDraftCombo('');
@@ -739,7 +727,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                 <button
                   type="button"
                   className="btn subtle small"
-                  title="Reset to default (Ctrl+Shift+Z)"
+                  title="Reset to Ctrl+Shift+Z"
                   onClick={() => handleResetHotkey('quick_hotkey')}
                 >
                   <span className="carbon-control-label">Reset</span>
@@ -754,12 +742,13 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           )}
           <div className="set-row">
             <div className="set-label">
-              Enlarged window hotkey
-              <div className="set-hint">Opens full library and settings. Click the key to change it.</div>
+              Library window hotkey
+              <div className="set-hint">Opens the full clipboard library and settings. Press Esc while recording to cancel.</div>
             </div>
             <div className="set-control hotkey-control">
               <button
                 className={`hotkey-chip ${recording === 'enlarged' ? 'recording' : ''}`}
+                title="Click to record shortcut"
                 onClick={() => {
                   setRecording(recording === 'enlarged' ? null : 'enlarged');
                   setDraftCombo('');
@@ -784,7 +773,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                 <button
                   type="button"
                   className="btn subtle small"
-                  title="Reset to default (Ctrl+Alt+X)"
+                  title="Reset to Ctrl+Alt+X"
                   onClick={() => handleResetHotkey('enlarged_hotkey')}
                 >
                   <span className="carbon-control-label">Reset</span>
@@ -822,7 +811,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="set-row">
             <div className="set-label">
               Start with Windows
-              <div className="set-hint">Runs quietly in the tray on login</div>
+              <div className="set-hint">Runs quietly in the system tray when you sign in</div>
             </div>
             <div className="set-control">
               <button
@@ -837,7 +826,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="set-row">
             <div className="set-label">
               Move to top on paste
-              <div className="set-hint">Bump the pasted clip to the top of history</div>
+              <div className="set-hint">Bumps the pasted clip to the top of your clipboard history</div>
             </div>
             <div className="set-control">
               <button
@@ -851,8 +840,8 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
           <div className="set-row">
             <div className="set-label">
-              Deselect after paste (web chats)
-              <div className="set-hint">Send one Right-arrow after pasting into browser/chat inputs that leave text selected. Off by default.</div>
+              Deselect after paste
+              <div className="set-hint">Sends Right Arrow after pasting into web or chat inputs that leave text selected · Off by default</div>
             </div>
             <div className="set-control">
               <button
@@ -866,10 +855,8 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
           <div className="set-row">
             <div className="set-label">
-              ClipMerge (append on repeat copy)
-              <div className="set-hint">
-                Copying text repeatedly within a short window appends to the top clip rather than creating separate entries.
-              </div>
+              ClipMerge
+              <div className="set-hint">Appends rapid repeated copies to the top clip instead of creating separate entries</div>
             </div>
             <div className="set-control">
               <button
@@ -892,7 +879,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
             <div className="set-row">
               <div className="set-label">
                 ClipMerge window
-                <div className="set-hint">Time window to detect rapid successive copies</div>
+                <div className="set-hint">Time window to detect rapid consecutive copies</div>
               </div>
               <div className="set-control">
                 <input
@@ -977,10 +964,8 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="sec-title">Snippets</div>
           <div className="set-row">
             <div className="set-label">
-              Enable snippet expansion
-              <div className="set-hint">
-                Type keywords anywhere (e.g. <code>/select</code>) to expand snippets inline. Dynamic placeholders like <code>{'{date}'}</code> and <code>{'{clipboard}'}</code> evaluate in real time.
-              </div>
+              Inline snippet expansion
+              <div className="set-hint">Type keywords like <code>/date</code> anywhere to expand snippets inline with live placeholders</div>
             </div>
             <div className="set-control" style={{ gap: 8, alignItems: 'center' }}>
               {settings.snippet_expansion_enabled && (
@@ -999,9 +984,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="set-row">
             <div className="set-label">
               Show snippets in library &amp; overlay
-              <div className="set-hint">
-                Controls visibility of the Snippets section in the overlay and library.
-              </div>
+              <div className="set-hint">Displays the Snippets section in both the quick picker and full library</div>
             </div>
             <div className="set-control">
               <button
@@ -1016,13 +999,11 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
         {/* Capture Rules */}
         <section>
-          <div className="sec-title">Capture Rules & Sanitization</div>
+          <div className="sec-title">Capture Rules</div>
           <div className="set-row">
             <div className="set-label">
               Strip URL tracking parameters
-              <div className="set-hint">
-                Auto-strips analytics tags (<code>utm_source</code>, <code>fbclid</code>, <code>gclid</code>, <code>igshid</code>, etc.) from copied URLs.
-              </div>
+              <div className="set-hint">Automatically removes analytics tags (<code>utm_*</code>, <code>fbclid</code>, <code>gclid</code>, <code>igshid</code>) from copied links</div>
             </div>
             <div className="set-control">
               <button
@@ -1036,7 +1017,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
           <div className="capture-rules-box">
             <div className="capture-rules-header">
-              <span className="capture-rules-title">Custom Find & Replace Rules</span>
+              <span className="capture-rules-title">Custom Find &amp; Replace Rules</span>
               <button
                 className="btn subtle"
                 style={{ fontSize: 11 }}
@@ -1053,13 +1034,14 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                   updateSetting('capture_rules', [...(settings.capture_rules || []), newRule]);
                 }}
               >
-                <span className="carbon-control-label">+ Add Rule</span>
+                <PlusIcon size={12} />
+                <span className="carbon-control-label">Add Rule</span>
               </button>
             </div>
 
             {(settings.capture_rules || []).length === 0 ? (
               <div className="capture-rules-empty">
-                No custom capture rules defined. Click <b>+ Add Rule</b> to auto-clean or transform copied text the moment it is captured.
+                No custom rules yet. Click <b>Add Rule</b> to automatically clean or transform text as it is captured.
               </div>
             ) : (
               <div className="capture-rules-list">
@@ -1114,12 +1096,13 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                         <button
                           className="capture-rule-delete-btn"
                           title="Delete rule"
+                          aria-label="Delete rule"
                           onClick={() => {
                             const updated = settings.capture_rules.filter((_, i) => i !== idx);
                             updateSetting('capture_rules', updated);
                           }}
                         >
-                          <span className="carbon-control-label">✕</span>
+                          <CloseIcon size={12} />
                         </button>
                       </div>
                     </div>
@@ -1180,10 +1163,8 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="sec-title">Privacy</div>
           <div className="set-row">
             <div className="set-label">
-              Detect and auto-expire sensitive clips
-              <div className="set-hint">
-                Auto-masks credit cards, API keys, JWTs, and private keys on capture, and wipes them after a short timer. Opt-in local convenience, not an enterprise DLP guarantee.
-              </div>
+              Auto-expire sensitive clips
+              <div className="set-hint">Masks API keys, JWTs, private keys, and payment cards on capture and wipes them after 5 minutes</div>
             </div>
             <div className="set-control">
               <button
@@ -1194,6 +1175,64 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               </button>
             </div>
           </div>
+
+          <div className="ignore-apps-box">
+            <div className="ignore-apps-header">
+              <div className="set-label">
+                Ignored apps
+                <div className="set-hint">Copies from these executables are never captured (password managers are also skipped automatically)</div>
+              </div>
+              <form
+                className="ignore-apps-form"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const val = ignoreAppInput.trim();
+                  if (!val) return;
+                  const current = settings.ignore_apps || [];
+                  if (!current.some((a) => a.toLowerCase() === val.toLowerCase())) {
+                    updateSetting('ignore_apps', [...current, val]);
+                  }
+                  setIgnoreAppInput('');
+                }}
+              >
+                <input
+                  type="text"
+                  className="ignore-apps-input"
+                  placeholder="App.exe"
+                  aria-label="Add ignored application executable"
+                  value={ignoreAppInput}
+                  onChange={(e) => setIgnoreAppInput(e.target.value)}
+                />
+                <button type="submit" className="btn subtle small" disabled={!ignoreAppInput.trim()}>
+                  <PlusIcon size={12} />
+                  <span className="carbon-control-label">Add</span>
+                </button>
+              </form>
+            </div>
+            {(settings.ignore_apps || []).length > 0 && (
+              <div className="ignore-apps-chips">
+                {(settings.ignore_apps || []).map((appName) => (
+                  <span key={appName} className="ignore-app-chip">
+                    <span>{appName}</span>
+                    <button
+                      type="button"
+                      className="ignore-app-remove"
+                      aria-label={`Remove ${appName}`}
+                      title={`Remove ${appName}`}
+                      onClick={() => {
+                        updateSetting(
+                          'ignore_apps',
+                          (settings.ignore_apps || []).filter((a) => a !== appName)
+                        );
+                      }}
+                    >
+                      <CloseIcon size={11} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
         </section>
 
         {/* Storage */}
@@ -1202,7 +1241,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="set-row">
             <div className="set-label">
               Retention
-              <div className="set-hint">Entries older than this are deleted (0 = keep forever). Favorites and locked-collection items are always kept.</div>
+              <div className="set-hint">Entries older than this are pruned (0 = keep forever). Favorites and locked items are always kept.</div>
             </div>
             <div className="set-control">
               <input
@@ -1223,7 +1262,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="set-row">
             <div className="set-label">
               Max entries
-              <div className="set-hint">Oldest entries beyond this are trimmed — favorites and locked-collection items are always kept and don't count toward the limit</div>
+              <div className="set-hint">Oldest entries beyond this cap are trimmed — favorites and locked items are exempt</div>
             </div>
             <div className="set-control">
               <input
@@ -1243,7 +1282,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="set-row">
             <div className="set-label">
               Image size limit
-              <div className="set-hint">Copies larger than this are skipped (0 = unlimited)</div>
+              <div className="set-hint">Images larger than this are skipped (0 = unlimited)</div>
             </div>
             <div className="set-control">
               <input
@@ -1263,12 +1302,12 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
           <div className="set-row">
             <div className="set-label">
-              Current usage
-              <div className="set-hint">Local SQLite, WAL mode — everything stays on this machine</div>
+              Database
+              <div className="set-hint">Local SQLite in WAL mode — everything stays on this machine</div>
             </div>
             <div className="set-control">
-              <span style={{ fontSize: 11.5, color: 'var(--text-2)' }}>
-                {stats ? `${formatBytes(stats.db_size_bytes)} · ${stats.total_items} items` : 'Loading...'}
+              <span style={{ fontSize: 12, color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>
+                {stats ? `${formatBytes(stats.db_size_bytes)} · ${stats.total_items} items` : 'Loading…'}
               </span>
             </div>
           </div>
@@ -1276,7 +1315,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="set-row">
             <div className="set-label">
               Clear history
-              <div className="set-hint">Deletes everything except favorites and locked-collection items</div>
+              <div className="set-hint">Deletes history while preserving favorites, locked collections, and snippets</div>
             </div>
             <div className="set-control">
               <button className="btn danger" onClick={() => setShowClearConfirm(true)}>
@@ -1287,34 +1326,10 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
           <div className="set-row">
             <div className="set-label">
-              Export backup
-              <div className="set-hint">Download a local JSON backup of your history and images</div>
+              Backup &amp; restore
+              <div className="set-hint">Export clips, images, and unlocked collections to JSON, or merge a saved backup</div>
             </div>
-            <div className="set-control">
-              <button
-                className="btn subtle"
-                onClick={handleExportBackup}
-                disabled={isExporting}
-                style={{ opacity: isExporting ? 0.75 : 1 }}
-              >
-                {isExporting ? (
-                  <>
-                    <SpinnerIcon />
-                    <span>Exporting…</span>
-                  </>
-                ) : (
-                  <span>Export backup (.json)</span>
-                )}
-              </button>
-            </div>
-          </div>
-
-          <div className="set-row">
-            <div className="set-label">
-              Restore from backup
-              <div className="set-hint">Merge entries from a previous Carbon backup into history</div>
-            </div>
-            <div className="set-control">
+            <div className="set-control" style={{ gap: 8 }}>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -1324,6 +1339,21 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               />
               <button
                 className="btn subtle"
+                onClick={handleExportBackup}
+                disabled={isExporting}
+                style={{ opacity: isExporting ? 0.75 : 1 }}
+              >
+                {isExporting ? (
+                  <>
+                    <SpinnerIcon />
+                    <span className="carbon-control-label">Exporting…</span>
+                  </>
+                ) : (
+                  <span className="carbon-control-label">Export (.json)</span>
+                )}
+              </button>
+              <button
+                className="btn subtle"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isImporting}
                 style={{ opacity: isImporting ? 0.75 : 1 }}
@@ -1331,10 +1361,10 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                 {isImporting ? (
                   <>
                     <SpinnerIcon />
-                    <span>Restoring…</span>
+                    <span className="carbon-control-label">Restoring…</span>
                   </>
                 ) : (
-                  <span>Restore backup…</span>
+                  <span className="carbon-control-label">Restore…</span>
                 )}
               </button>
             </div>
@@ -1349,8 +1379,8 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="sec-title">Updates</div>
           <div className="set-row">
             <div className="set-label">
-              <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.2 }}>Current version</div>
-              <div style={{ fontSize: 12.5, color: 'var(--text-2)', marginTop: 2 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 500, lineHeight: 1.25 }}>Current version</div>
+              <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>
                 <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>v{appVersion || '…'}</span>
               </div>
               <div className="set-hint" style={{ marginTop: 4 }}>{updateStatus}</div>
@@ -1363,7 +1393,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
                 style={{ opacity: updateBtnDisabled ? 0.7 : 1 }}
               >
                 {updateBtnDisabled && updateBtnText === 'Checking…' ? <SpinnerIcon /> : null}
-                <span>{updateBtnText}</span>
+                <span className="carbon-control-label">{updateBtnText}</span>
               </button>
             </div>
           </div>
@@ -1383,9 +1413,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="set-row">
             <div className="set-label">
               Reduced picker animation
-              <div className="set-hint">
-                Trims the picker&apos;s extra hide zoom/fade to match the main window. Turn off to restore the full animation.
-              </div>
+              <div className="set-hint">Trims the quick overlay&apos;s extra hide zoom/fade to match the main window</div>
             </div>
             <div className="set-control">
               <button
@@ -1400,7 +1428,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           </div>
           <div className="set-row">
             <div className="set-label">
-              Accent theme
+              Accent color
               <div className="set-hint">Currently active: {currentSwatchName}</div>
             </div>
             <div className="set-control">
@@ -1491,20 +1519,27 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
 
           <div className="set-row">
             <div className="set-label">
-              Theme mode
-              <div className="set-hint">Dark / Light contrast preference</div>
+              Theme
+              <div className="set-hint">Follow your Windows theme or lock Carbon to Light or Dark</div>
             </div>
             <div className="set-control">
-              <button
-                className="btn subtle"
-                onClick={() => {
-                  const nextTheme = currentTheme === 'light' ? 'dark' : 'light';
-                  onThemeToggle();
-                  updateSetting('theme', nextTheme);
+              <SlidingSegmentedControl
+                ariaLabel="Theme"
+                value={((themePreference || settings.theme || currentTheme || 'dark').toLowerCase() as 'system' | 'light' | 'dark')}
+                options={[
+                  { value: 'system', label: 'System' },
+                  { value: 'light', label: 'Light' },
+                  { value: 'dark', label: 'Dark' },
+                ]}
+                onChange={(next) => {
+                  if (onThemeChange) {
+                    onThemeChange(next);
+                  } else if (next !== currentTheme && next !== 'system') {
+                    onThemeToggle();
+                  }
+                  updateSetting('theme', next);
                 }}
-              >
-                <span className="carbon-control-label">Switch to</span> <span className="carbon-control-label">{currentTheme === 'light' ? 'Dark' : 'Light'}</span>
-              </button>
+              />
             </div>
           </div>
 
@@ -1513,27 +1548,20 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
               Window material
               <div className="set-hint">
                 {settings.window_material === 'solid'
-                  ? 'Solid: original opaque panels with no OS blur'
-                  : 'Glass: frosted-glass blur-behind translucency'}
+                  ? 'Solid: opaque panels without OS backdrop blur'
+                  : 'Glass: frosted blur-behind translucency'}
               </div>
             </div>
             <div className="set-control">
-              <div className="segmented-control" role="radiogroup" aria-label="Window material">
-                {[
+              <SlidingSegmentedControl
+                ariaLabel="Window material"
+                value={((settings.window_material || 'acrylic') === 'solid' ? 'solid' : 'acrylic')}
+                options={[
                   { value: 'acrylic', label: 'Glass' },
                   { value: 'solid', label: 'Solid' },
-                ].map((option) => (
-                  <button
-                    key={option.value}
-                    role="radio"
-                    aria-checked={(settings.window_material || 'acrylic') === option.value}
-                    className={`seg-btn ${(settings.window_material || 'acrylic') === option.value ? 'active' : ''}`}
-                    onClick={() => updateSetting('window_material', option.value as any)}
-                  >
-                    <span className="carbon-control-label">{option.label}</span>
-                  </button>
-                ))}
-              </div>
+                ]}
+                onChange={(next) => updateSetting('window_material', next as any)}
+              />
             </div>
           </div>
         </section>
@@ -1542,7 +1570,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
       {toast && (
         <div className={`settings-toast ${toast.type}`}>
           <div className="settings-toast-icon">
-            {toast.type === 'success' ? <CheckIcon /> : toast.type === 'info' ? <SpinnerIcon /> : '⚠️'}
+            {toast.type === 'success' ? <CheckIcon /> : toast.type === 'info' ? <SpinnerIcon /> : <AlertTriangleIcon size={14} />}
           </div>
           <div className="settings-toast-message">{toast.message}</div>
         </div>
@@ -1553,7 +1581,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
           <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420, width: '100%' }}>
             <div className="modal-header">
               <span className="modal-title">Enable Snippet Expansion</span>
-              <button className="modal-close-btn" onClick={() => setShowExpansionConsent(false)}><span className="carbon-control-label">✕</span></button>
+              <button className="modal-close-btn" onClick={() => setShowExpansionConsent(false)} aria-label="Close"><CloseIcon /></button>
             </div>
             <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '16px 18px' }}>
               <p style={{ fontSize: 13, lineHeight: 1.5, margin: 0, color: 'var(--text-2)' }}>
@@ -1598,7 +1626,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, curre
             <div className="modal-header">
               <span className="modal-head-icon modal-head-danger"><DeleteIcon /></span>
               <span className="modal-title" id="clear-history-title">Clear history?</span>
-              <button className="modal-close-btn" onClick={() => setShowClearConfirm(false)} aria-label="Cancel"><span className="carbon-control-label">✕</span></button>
+              <button className="modal-close-btn" onClick={() => setShowClearConfirm(false)} aria-label="Cancel"><CloseIcon /></button>
             </div>
             <div className="modal-body">
               <p className="modal-desc">

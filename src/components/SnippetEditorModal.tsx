@@ -1,11 +1,52 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
-import { Snippet } from '../types';
+import { ClipItem, Snippet } from '../types';
 import { highlightSnippetTokens } from '../utils/snippets';
 import { useTextHistory, restoreSelection } from '../utils/useTextHistory';
-import { SnippetIcon, SNIPPET_ICONS, HelpIcon } from './Icons';
+import { SnippetIcon, SNIPPET_ICONS, HelpIcon, CloseIcon } from './Icons';
 import { Dropdown } from './Dropdown';
+
+export interface SnippetDraft {
+  name?: string;
+  keyword?: string;
+  content?: string;
+  icon?: string | null;
+  tags?: string[];
+}
+
+export function snippetDraftFromClip(item: ClipItem): SnippetDraft {
+  const content = (
+    item.text_content?.trim()
+      ? item.text_content
+      : item.ocr_text?.trim()
+        ? item.ocr_text
+        : item.qr_content || ''
+  );
+  const rawTitle = (item.title || content.split(/\r?\n/)[0] || 'Saved Clip')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const name = rawTitle.length > 48 ? `${rawTitle.slice(0, 48).trimEnd()}…` : rawTitle;
+  const icon =
+    item.content_type === 'code'
+      ? 'code'
+      : item.content_type === 'link'
+        ? 'link'
+        : item.content_type === 'email'
+          ? 'email'
+          : item.content_type === 'color'
+            ? 'colors'
+            : 'snippet';
+  const slug = rawTitle
+    .toLowerCase()
+    .replace(/^https?:\/\/(www\.)?/, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 16)
+    .replace(/-+$/, '');
+  const keyword = `/${slug || 'clip'}`;
+  return { name, keyword, content, icon };
+}
 
 /** Shared keydown wiring for Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y on one field. */
 function historyKeyHandler(
@@ -59,14 +100,15 @@ const TOKEN_DOCS: { token: string; insert?: string; desc: string }[] = [
  */
 export const SnippetEditorModal: React.FC<{
   snippet: Snippet | null;
+  initialDraft?: SnippetDraft | null;
   onClose: () => void;
   onSaved: (snippet: Snippet) => void;
-}> = ({ snippet, onClose, onSaved }) => {
-  const [draftName, setDraftName] = useState(snippet?.name ?? '');
-  const [draftKeyword, setDraftKeyword] = useState(snippet?.keyword ?? '');
-  const [draftContent, setDraftContent] = useState(snippet?.content ?? '');
-  const [draftIcon, setDraftIcon] = useState(snippet?.icon || 'snippet');
-  const [draftTags, setDraftTags] = useState<string[]>(snippet?.tags || []);
+}> = ({ snippet, initialDraft, onClose, onSaved }) => {
+  const [draftName, setDraftName] = useState(snippet?.name ?? initialDraft?.name ?? '');
+  const [draftKeyword, setDraftKeyword] = useState(snippet?.keyword ?? initialDraft?.keyword ?? '');
+  const [draftContent, setDraftContent] = useState(snippet?.content ?? initialDraft?.content ?? '');
+  const [draftIcon, setDraftIcon] = useState(snippet?.icon || initialDraft?.icon || 'snippet');
+  const [draftTags, setDraftTags] = useState<string[]>(snippet?.tags || initialDraft?.tags || []);
   const [tagInput, setTagInput] = useState('');
   // Confirmation is on by default for new snippets; existing snippets keep
   // their stored choice (the per-snippet toggle was removed from this form).
@@ -81,9 +123,21 @@ export const SnippetEditorModal: React.FC<{
   const helpPopRef = useRef<HTMLDivElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
+  const keywordInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setTimeout(() => nameInputRef.current?.focus(), 60);
+    setTimeout(() => {
+      if (!snippet && initialDraft?.name) {
+        const kw = keywordInputRef.current;
+        if (kw) {
+          kw.focus();
+          const start = kw.value.startsWith('/') ? 1 : 0;
+          kw.setSelectionRange(start, kw.value.length);
+        }
+      } else {
+        nameInputRef.current?.focus();
+      }
+    }, 60);
   }, []);
 
   const addTag = (raw: string) => {
@@ -225,7 +279,7 @@ export const SnippetEditorModal: React.FC<{
         <div className="modal-header">
           <span className="modal-head-icon"><SnippetIcon /></span>
           <span className="modal-title">{snippet ? 'Edit Snippet' : 'New Snippet'}</span>
-          <button className="modal-close-btn" onClick={onClose}><span className="carbon-control-label">✕</span></button>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close"><CloseIcon /></button>
         </div>
         <form
           onSubmit={(e) => {
@@ -341,6 +395,7 @@ export const SnippetEditorModal: React.FC<{
               <div className="modal-field">
                 <label className="modal-label">Keyword / Trigger</label>
                 <input
+                  ref={keywordInputRef}
                   type="text"
                   className="modal-input sn-keyword-input"
                   placeholder="/address"
@@ -373,8 +428,8 @@ export const SnippetEditorModal: React.FC<{
                 <div className="sn-tag-edit">
                   {draftTags.map((t) => (
                     <span key={t} className="sn-tag-chip">
-                      {t}
-                      <button type="button" onClick={() => setDraftTags((p) => p.filter((x) => x !== t))}>✕</button>
+                      <span className="carbon-control-label">#{t}</span>
+                      <button type="button" aria-label={`Remove #${t}`} onClick={() => setDraftTags((p) => p.filter((x) => x !== t))}>✕</button>
                     </span>
                   ))}
                   <input

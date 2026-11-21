@@ -1,16 +1,17 @@
-# Monochrome Icon System Manifest (ADDENDUM v10.2)
+# Monochrome Icon System Manifest (HugeIcons)
 
 ## 1. Hierarchy & Token Rules
-- **Monochrome Policy**: All glyphs render in `currentColor`. No colored dots, no colored type badges.
+- **Active Icon Library**: `@hugeicons/core-free-icons` rendered via `@hugeicons/react` (`HugeiconsIcon`) in `src/components/Icons.tsx`.
+- **Monochrome Policy**: All glyphs render in `currentColor`. No colored dots, no colored type badges, and no structural emojis.
 - **Tile Tokens (ADDENDUM v13 F2)**:
   - **Dark theme**: background `rgba(255, 255, 255, 0.07)` (hover `0.10`, selected `0.09`), zero border, glyph alpha `0.72`
   - **Light theme**: background `rgba(0, 0, 0, 0.06)` (hover `0.10`, selected `0.09`), zero border, glyph alpha `0.66`
-  - **Tile geometry**: `36px` tile, `10px` border-radius (`--tile-radius: 10px`), zero border in any state
-  - **Glyph ratio**: `20px` in `36px` tile (~55-60% of tile box)
+  - **Tile geometry**: `32px` tile, `8px` border-radius (`--tile-radius: 8px`), zero border in any state
+  - **Glyph ratio**: `16px` in `32px` tile (50% calm TinyCast proportion)
 - **Hierarchy by Stroke & Alpha**:
-  - Primary UI / Navigation: `strokeWidth: 2` (or `2.25`), alpha `1.0`
-  - Content Rows & Lists: `strokeWidth: 1.8` (or `1.75`), alpha `0.72` (dark) / `0.66` (light)
-  - Micro / Inline hints: `strokeWidth: 2.0`, size `13-14px`, alpha `0.55`
+  - Primary UI / Navigation: `strokeWidth: 1.5–1.65`, alpha `1.0`
+  - Content Rows & Lists: `strokeWidth: 1.5`, alpha `0.68` (dark) / `0.64` (light)
+  - Micro / Inline hints: `strokeWidth: 1.65–1.9`, size `13-14px`, alpha `0.55`
 - **Accent Isolation**: Accent color (`var(--accent)`) applies strictly to selection rings, keyboard focus rings, and active tab highlights — NEVER to glyph paths or tile backgrounds.
 
 ---
@@ -21,9 +22,9 @@
 |:---|:---|:---|:---|:---|:---|:---|:---|
 | `content-text` | Content Types | `Type` | `Text` | `TextT` | https://lucide.dev/icons/type | 16, 20px | 1.8 |
 | `content-code` | Content Types | `Code` | `Code` | `Code` | https://lucide.dev/icons/code | 16, 20px | 1.8 |
-| `content-rich` | Content Types | `FileText` | `FileDocument` | `Article` | https://lucide.dev/icons/file-text | 16, 20px | 1.8 |
-| `content-image` | Content Types | `Image` | `Image01` | `Image` | https://lucide.dev/icons/image | 16, 20px | 1.8 |
-| `content-file` | Content Types | `File` | `File01` | `File` | https://lucide.dev/icons/file | 16, 20px | 1.8 |
+| `content-rich` | Content Types | `FileText` | `File02Icon` | `Article` | https://lucide.dev/icons/file-text | 16, 20px | 1.5 |
+| `content-image` | Content Types | `Image` | `Image02Icon` | `Image` | https://lucide.dev/icons/image | 16, 20px | 1.5 |
+| `content-file` | Content Types | `File` | `FileEmpty02Icon` | `File` | https://lucide.dev/icons/file | 16, 20px | 1.5 |
 | `content-link` | Content Types | `Link` | `Link01` | `Link` | https://lucide.dev/icons/link | 16, 20px | 1.8 |
 | `content-email` | Content Types | `Mail` | `Mail01` | `EnvelopeSimple` | https://lucide.dev/icons/mail | 16, 20px | 1.8 |
 | `content-color` | Content Types | `Palette` | `PaintBoard` | `Palette` | https://lucide.dev/icons/palette | 16, 20px | 1.8 |

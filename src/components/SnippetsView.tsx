@@ -13,6 +13,7 @@ import { useSnippetFlow } from '../utils/useSnippetFlow';
 import { SnippetArgPrompt } from './SnippetArgPrompt';
 import { SnippetEditorModal } from './SnippetEditorModal';
 import { Dropdown } from './Dropdown';
+import { useSlidingIndicator } from '../hooks/useSlidingIndicator';
 import { snippetIconFor, SearchIcon,
   CopyIcon,
   PasteIcon,
@@ -35,9 +36,11 @@ interface ActionEntry {
 
 export const SnippetsView: React.FC<{
   createSignal: number;
+  /** Called once the create dialog consumes `createSignal` so remounting Snippets never re-opens it. */
+  onCreateSignalConsumed?: () => void;
   /** Warm cache from the parent — lets the section render instantly. */
   initialSnippets?: Snippet[];
-}> = ({ createSignal, initialSnippets }) => {
+}> = ({ createSignal, onCreateSignalConsumed, initialSnippets }) => {
   const [snippets, setSnippets] = useState<Snippet[]>(initialSnippets ?? []);
   const [loading, setLoading] = useState(!(initialSnippets && initialSnippets.length > 0));
   const [search, setSearch] = useState('');
@@ -56,6 +59,21 @@ export const SnippetsView: React.FC<{
   const [actionOpen, setActionOpen] = useState(false);
   const [actionIndex, setActionIndex] = useState(0);
   const activeActionRef = useRef<HTMLDivElement>(null);
+  const actionModalRef = useRef<HTMLDivElement>(null);
+  const actionIndicatorRef = useRef<HTMLDivElement>(null);
+  const snippetsListRef = useRef<HTMLDivElement>(null);
+  const snippetsIndicatorRef = useRef<HTMLDivElement>(null);
+
+  useSlidingIndicator({
+    containerRef: actionModalRef,
+    indicatorRef: actionIndicatorRef,
+    activeSelector: '.action-item.selected',
+    readyDataAttr: 'actionIndicator',
+    deps: [actionIndex, actionOpen, selectedId],
+    snapDeps: [actionOpen, selectedId],
+    enabled: actionOpen && !!selectedId,
+    scrollRelative: true,
+  });
 
   // Confirmation pill
   const [confirmPill, setConfirmPill] = useState<{ text: string; error?: boolean } | null>(null);
@@ -94,10 +112,11 @@ export const SnippetsView: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchSnippets]);
 
-  // Sidebar "+" → open the create dialog.
+  // Sidebar "+" → open the create dialog once, then clear the signal in parent.
   useEffect(() => {
     if (createSignal > 0) {
       openCreateDialog();
+      onCreateSignalConsumed?.();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [createSignal]);
@@ -266,6 +285,17 @@ export const SnippetsView: React.FC<{
     return () => cancelAnimationFrame(raf);
   }, [selectedId]);
 
+  useSlidingIndicator({
+    containerRef: snippetsListRef,
+    indicatorRef: snippetsIndicatorRef,
+    activeSelector: '.snippet-row.selected',
+    readyDataAttr: 'listIndicator',
+    deps: [selectedId, filtered.length],
+    snapDeps: [search, tagFilter, loading],
+    enabled: !loading && filtered.length > 0 && !!selectedId,
+    scrollRelative: true,
+  });
+
   // Any mouse click on a button drops keyboard focus from it, so a later
   // Enter always means "paste" in the view instead of re-activating the last
   // clicked button (Copy, Actions, Edit, ...).
@@ -315,7 +345,7 @@ export const SnippetsView: React.FC<{
           e.preventDefault();
           setActionIndex((p) => (p - 1 + actionsRef.current.length) % actionsRef.current.length);
           return;
-        } else if (e.key === 'Escape') {
+        } else if (e.key === 'Escape' || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) {
           e.preventDefault();
           setActionOpen(false);
           return;
@@ -432,7 +462,7 @@ export const SnippetsView: React.FC<{
                 ariaLabel="Filter by tag"
                 options={[
                   { value: '__all__', label: 'All Tags' },
-                  ...allTags.map((t) => ({ value: t, label: t })),
+                  ...allTags.map((t) => ({ value: t, label: `#${t}` })),
                 ]}
               />
             </span>
@@ -442,7 +472,13 @@ export const SnippetsView: React.FC<{
           </div>
         </div>
 
-        <div className="snippets-list">
+        <div ref={snippetsListRef} className="snippets-list">
+          <div
+            ref={snippetsIndicatorRef}
+            className="list-active-indicator"
+            aria-hidden="true"
+            style={{ opacity: 0 }}
+          />
           {loading ? (
             <div className="empty">
               <div className="big">Loading snippets…</div>
@@ -512,11 +548,10 @@ export const SnippetsView: React.FC<{
       <div className={`snippets-preview ${selected ? 'open' : ''}`}>
         {selected && SelectedIcon ? (
           <div className="snippets-preview-inner">
-            <div className="preview-head">
-              <span className="preview-kind">
+            <div className="preview-head sn-preview-head">
+              <span className="sn-preview-title-wrap">
                 <span className="sn-detail-ic"><SelectedIcon /></span>
-                {selected.name}
-                {selected.keyword && <span className="sn-keyword-badge">{selected.keyword}</span>}
+                <span className="sn-preview-title">{selected.name}</span>
               </span>
               <div className="preview-actions">
                 <button className="act" title="Edit Snippet (E)" onClick={() => openEditDialog(selected)}>
@@ -542,45 +577,61 @@ export const SnippetsView: React.FC<{
                 )}
                 {selected.content.length === 0 && <span className="sn-content-empty">Empty snippet — add content in Edit.</span>}
               </div>
+            </div>
 
+            {/* Snippet-tailored inspector: trigger, tags, usage, and confirmation. */}
+            <div className="meta-strip">
+              <div className="meta-title">Details</div>
+              <div className="meta-row">
+                <span className="meta-label">Trigger</span>
+                <span className="meta-value">
+                  {selected.keyword ? (
+                    <span className="sn-keyword-badge">{selected.keyword}</span>
+                  ) : (
+                    'None'
+                  )}
+                </span>
+              </div>
               {(selected.tags || []).length > 0 && (
-                <div className="sn-detail-tags">
-                  {(selected.tags || []).map((t) => (
-                    <span key={t} className="sn-tag-chip" onClick={() => setTagFilter(t)}>{t}</span>
-                  ))}
+                <div className="meta-row">
+                  <span className="meta-label">Tags</span>
+                  <div className="sn-detail-tags">
+                    {(selected.tags || []).map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        className="sn-tag-chip"
+                        title={`Filter by #${t}`}
+                        onClick={() => setTagFilter(t)}
+                      >
+                        <span className="carbon-control-label">#{t}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="meta-row">
+                <span className="meta-label">Times Used</span>
+                <span className="meta-value">{selected.use_count.toLocaleString()}</span>
+              </div>
+              <div className="meta-row">
+                <span className="meta-label">Last Used</span>
+                <span className="meta-value">{formatSnippetLastUsed(selected.last_used_at)}</span>
+              </div>
+              {selected.show_confirmation && (
+                <div className="meta-row">
+                  <span className="meta-label">Confirmation</span>
+                  <span className="meta-value sn-foot-confirm">Asks before pasting</span>
                 </div>
               )}
             </div>
 
-            {/* Pinned above the footer like the captures Information strip:
-                big content box fills, facts sit at the bottom. */}
-            <div className="meta-strip">
-              <div className="meta-row">
-                <span className="meta-label">Label</span>
-                <span className="meta-value">{selected.name}</span>
-              </div>
-              <div className="meta-row">
-                <span className="meta-label">Content Type</span>
-                <span className="meta-value">Plain Text</span>
-              </div>
-              <div className="meta-row">
-                <span className="meta-label">Times Copied</span>
-                <span className="meta-value">{selected.use_count.toLocaleString()}</span>
-              </div>
-              <div className="meta-row">
-                <span className="meta-label">Last Copied</span>
-                <span className="meta-value">{formatSnippetLastUsed(selected.last_used_at)}</span>
-              </div>
-            </div>
-
             <div className="snippets-preview-foot">
-              <span className="sn-foot-label">
-                {selected.show_confirmation && <span className="sn-foot-confirm">confirms on use</span>}
-              </span>
+              <span className="sn-foot-label" />
               <div className="sn-foot-actions">
                 <button type="button" className="btn subtle sn-actions-btn" onClick={() => { setActionIndex(0); setActionOpen(true); }}>
                   <span className="key"><span className="carbon-control-label">Ctrl+K</span></span>
-                  <span>Actions</span>
+                  <span className="carbon-control-label">Actions</span>
                 </button>
                 <button className="btn primary" disabled={selected.content.length === 0} onClick={() => useSnippet(selected, 'copy')}>
                   <CopyIcon /> <span className="carbon-control-label">Copy to Clipboard</span>
@@ -623,7 +674,8 @@ export const SnippetsView: React.FC<{
       {/* Action Panel (Ctrl+K) */}
       {actionOpen && selected && (
         <div className="action-modal-overlay" onClick={() => setActionOpen(false)}>
-          <div className="action-modal" onClick={(e) => e.stopPropagation()}>
+          <div ref={actionModalRef} className="action-modal" onClick={(e) => e.stopPropagation()}>
+            <div ref={actionIndicatorRef} className="action-active-indicator" aria-hidden="true" />
             {actions.map((act, i) => (
               <div
                 key={act.id}

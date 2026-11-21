@@ -30,6 +30,7 @@ fn generate_pin_salt() -> String {
 }
 
 static RECOVERY_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+static COLLECTION_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// ADDENDUM v36 A2: monotonic store version. Bumped exactly once per
 /// entry-list mutation (insert / merge-append / dedup-bump / text edit /
@@ -159,6 +160,17 @@ pub struct BackupEntry {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BackupCollection {
+    pub id: String,
+    pub name: String,
+    pub color: Option<String>,
+    pub icon: Option<String>,
+    pub created_at: String,
+    #[serde(default)]
+    pub clip_ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BackupPayload {
     pub version: u32,
     pub app: String,
@@ -170,6 +182,10 @@ pub struct BackupPayload {
     /// Restoring a backup must never silently re-enable keystroke monitoring.
     #[serde(default)]
     pub snippets: Vec<Snippet>,
+    /// Unlocked collections and their clip memberships. Locked (PIN-protected)
+    /// collections and their items are intentionally excluded from plain JSON exports.
+    #[serde(default)]
+    pub collections: Vec<BackupCollection>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -183,9 +199,10 @@ pub struct DbState {
     pub db_path: PathBuf,
 }
 
-/// Word/prefix search uses the existing Unicode FTS index. Literal terms
-/// also match code identifiers and URLs; LIKE metacharacters remain
-/// literal. Collection, pin and type constraints apply to every match.
+/// Word/prefix search uses the Unicode FTS5 index (covering title, text,
+/// file paths, extracted OCR text, and decoded QR payloads). Literal terms
+/// also match code identifiers and URLs; LIKE metacharacters remain literal.
+/// Collection, pin and type constraints apply to every match.
 fn append_content_search(
     query: &mut String,
     params: &mut Vec<Box<dyn rusqlite::ToSql>>,
@@ -195,7 +212,6 @@ fn append_content_search(
     if terms.is_empty() {
         return;
     }
-    query.push_str(" AND content_type <> 'image'");
     // Keep words on FTS. Punctuation uses indexed candidates before a literal
     // check; OR-ing LIKE here scanned every stored document on every key.
     let indexed: Vec<String> = terms.iter()
@@ -207,10 +223,15 @@ fn append_content_search(
         params.push(Box::new(indexed.join(" AND ")));
     }
     for term in terms.iter().filter(|term| !term.chars().all(char::is_alphanumeric)) {
-        query.push_str(" AND (title LIKE ? ESCAPE '\\' OR text_content LIKE ? ESCAPE '\\' OR file_paths LIKE ? ESCAPE '\\')");
+        query.push_str(
+            " AND ((content_type <> 'image' AND (title LIKE ? ESCAPE '\\' OR text_content LIKE ? ESCAPE '\\')) \
+             OR file_paths LIKE ? ESCAPE '\\' \
+             OR ocr_text LIKE ? ESCAPE '\\' \
+             OR qr_content LIKE ? ESCAPE '\\')"
+        );
         let escaped = term.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
         let pattern = format!("%{}%", escaped);
-        for _ in 0..3 {
+        for _ in 0..5 {
             params.push(Box::new(pattern.clone()));
         }
     }
@@ -239,8 +260,13 @@ impl DbState {
         // Older histories may predate the FTS triggers. Backfill missing rows
         // without rebuilding the index or changing any stored clip content.
         state.conn.lock().map_err(|e| e.to_string())?.execute(
-            "INSERT INTO entries_fts(rowid, id, title, text_content, file_paths)
-             SELECT rowid, id, title, COALESCE(text_content, ''), COALESCE(file_paths, '')
+            "INSERT INTO entries_fts(rowid, id, title, text_content, file_paths, ocr_text, qr_content)
+             SELECT rowid, id,
+                    CASE WHEN content_type = 'image' THEN '' ELSE title END,
+                    CASE WHEN content_type = 'image' THEN '' ELSE COALESCE(text_content, '') END,
+                    COALESCE(file_paths, ''),
+                    COALESCE(ocr_text, ''),
+                    COALESCE(qr_content, '')
              FROM entries WHERE id NOT IN (SELECT id FROM entries_fts)",
             [],
         ).map_err(|e| e.to_string())?;
@@ -309,13 +335,29 @@ impl DbState {
         }
 
 
-        // FTS5 Table for fast search
+        // FTS5 Table for fast search (includes OCR text & decoded QR payloads)
+        let fts_sql: String = conn.query_row(
+            "SELECT COALESCE((SELECT sql FROM sqlite_master WHERE type='table' AND name='entries_fts'), '')",
+            [], |row| row.get(0),
+        ).map_err(|e| e.to_string())?;
+        let fts_needs_schema_upgrade = !fts_sql.is_empty() && (!fts_sql.contains("ocr_text") || !fts_sql.contains("qr_content"));
+        if fts_needs_schema_upgrade {
+            conn.execute_batch(
+                "DROP TRIGGER IF EXISTS entries_ai;
+                 DROP TRIGGER IF EXISTS entries_ad;
+                 DROP TRIGGER IF EXISTS entries_au;
+                 DROP TABLE IF EXISTS entries_fts;"
+            ).map_err(|e| e.to_string())?;
+        }
+
         conn.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
                 id UNINDEXED,
                 title,
                 text_content,
                 file_paths,
+                ocr_text,
+                qr_content,
                 tokenize='unicode61'
             );",
             [],
@@ -330,28 +372,52 @@ impl DbState {
             "SELECT COALESCE((SELECT sql FROM sqlite_master WHERE type='trigger' AND name='entries_ai'), '')",
             [], |row| row.get(0),
         ).map_err(|e| e.to_string())?;
-        if !trigger_sql.contains("new.rowid") {
+        if fts_needs_schema_upgrade || !trigger_sql.contains("new.rowid") || !trigger_sql.contains("ocr_text") {
             conn.execute_batch(
                 "BEGIN IMMEDIATE;
                  DROP TRIGGER IF EXISTS entries_ai;
                  DROP TRIGGER IF EXISTS entries_ad;
                  DROP TRIGGER IF EXISTS entries_au;
                  DELETE FROM entries_fts;
-                 INSERT INTO entries_fts(rowid, id, title, text_content, file_paths)
-                 SELECT rowid, id, title, COALESCE(text_content, ''), COALESCE(file_paths, '') FROM entries;
+                 INSERT INTO entries_fts(rowid, id, title, text_content, file_paths, ocr_text, qr_content)
+                 SELECT rowid, id,
+                        CASE WHEN content_type = 'image' THEN '' ELSE title END,
+                        CASE WHEN content_type = 'image' THEN '' ELSE COALESCE(text_content, '') END,
+                        COALESCE(file_paths, ''),
+                        COALESCE(ocr_text, ''),
+                        COALESCE(qr_content, '')
+                 FROM entries;
                  CREATE TRIGGER entries_ai AFTER INSERT ON entries BEGIN
-                    INSERT INTO entries_fts(rowid, id, title, text_content, file_paths)
-                    VALUES (new.rowid, new.id, new.title, COALESCE(new.text_content, ''), COALESCE(new.file_paths, ''));
+                    INSERT INTO entries_fts(rowid, id, title, text_content, file_paths, ocr_text, qr_content)
+                    VALUES (
+                        new.rowid,
+                        new.id,
+                        CASE WHEN new.content_type = 'image' THEN '' ELSE new.title END,
+                        CASE WHEN new.content_type = 'image' THEN '' ELSE COALESCE(new.text_content, '') END,
+                        COALESCE(new.file_paths, ''),
+                        COALESCE(new.ocr_text, ''),
+                        COALESCE(new.qr_content, '')
+                    );
                  END;
                  CREATE TRIGGER entries_ad AFTER DELETE ON entries BEGIN
                     DELETE FROM entries_fts WHERE rowid = old.rowid;
                  END;
                  CREATE TRIGGER entries_au AFTER UPDATE ON entries
                  WHEN old.title IS NOT new.title OR old.text_content IS NOT new.text_content
-                      OR old.file_paths IS NOT new.file_paths OR old.rowid IS NOT new.rowid BEGIN
+                      OR old.file_paths IS NOT new.file_paths OR old.ocr_text IS NOT new.ocr_text
+                      OR old.qr_content IS NOT new.qr_content OR old.content_type IS NOT new.content_type
+                      OR old.rowid IS NOT new.rowid BEGIN
                     DELETE FROM entries_fts WHERE rowid = old.rowid;
-                    INSERT INTO entries_fts(rowid, id, title, text_content, file_paths)
-                    VALUES (new.rowid, new.id, new.title, COALESCE(new.text_content, ''), COALESCE(new.file_paths, ''));
+                    INSERT INTO entries_fts(rowid, id, title, text_content, file_paths, ocr_text, qr_content)
+                    VALUES (
+                        new.rowid,
+                        new.id,
+                        CASE WHEN new.content_type = 'image' THEN '' ELSE new.title END,
+                        CASE WHEN new.content_type = 'image' THEN '' ELSE COALESCE(new.text_content, '') END,
+                        COALESCE(new.file_paths, ''),
+                        COALESCE(new.ocr_text, ''),
+                        COALESCE(new.qr_content, '')
+                    );
                  END;
                  COMMIT;"
             ).map_err(|e| e.to_string())?;
@@ -536,16 +602,22 @@ impl DbState {
 
                     // A legacy classification repair must never delete a
                     // capture (including pinned and collected captures).
-                    let legacy_prose = content_type == "code" && detected_type == "text"
-                        && (crate::clipboard_watcher::looks_like_prose(source)
-                            || crate::clipboard_watcher::looks_like_markdown(source));
-
-                    // Fix misclassified rich_text that is actually plain text/code/link/email/color
-                    let target_type = if legacy_prose {
-                        "text".to_string()
+                    // Re-sort all text-based categories using the hardened
+                    // classifier so legacy false positives (e.g. "Please do so"
+                    // or "=== VERSIONS ===" stuck in `code`, or `package.json`
+                    // stuck in `link`) move cleanly into their true category.
+                    let target_type = if content_type == "code" && detected_type != "code" {
+                        detected_type
+                    } else if content_type == "link" && detected_type != "link" {
+                        detected_type
                     } else if content_type == "rich_text" && detected_type != "rich_text" {
                         detected_type
-                    } else if content_type == "text" && (detected_type == "link" || detected_type == "email" || detected_type == "color" || detected_type == "file") {
+                    } else if content_type == "text"
+                        && matches!(
+                            detected_type.as_str(),
+                            "code" | "link" | "email" | "color" | "file"
+                        )
+                    {
                         detected_type
                     } else {
                         content_type.clone()
@@ -571,6 +643,94 @@ impl DbState {
 
 
         Ok(())
+    }
+
+    /// One-time idempotent repair for historical Glint screenshot entries that
+    /// were previously captured as `file` clips (pointing at
+    /// `...\com.glint.app\attachments\glint-*.png`). Converts any single-image
+    /// Glint attachment still present on disk into a first-class `image` clip
+    /// while preserving original `id`, timestamps, pins, and collections.
+    /// Regular Windows Explorer file copies are never touched.
+    pub fn repair_glint_image_entries(
+        &self,
+        media_dir: &std::path::Path,
+        image_size_limit_mb: u32,
+    ) -> Result<usize, String> {
+        let candidates: Vec<(String, String, Option<String>)> = {
+            let conn = self.conn.lock().map_err(|e| e.to_string())?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, file_paths, source_app FROM entries
+                     WHERE content_type = 'file'
+                       AND file_paths IS NOT NULL
+                       AND LOWER(file_paths) LIKE '%com.glint.app%'",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })
+                .map_err(|e| e.to_string())?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+
+        if candidates.is_empty() {
+            return Ok(0);
+        }
+
+        let mut converted = 0usize;
+        for (entry_id, file_paths_json, source_app) in candidates {
+            let paths: Vec<String> = match serde_json::from_str(&file_paths_json) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            if paths.len() != 1 {
+                continue;
+            }
+            let src_path = std::path::Path::new(&paths[0]);
+            if !crate::clipboard_watcher::is_image_file_ext(src_path) || !src_path.is_file() {
+                continue;
+            }
+            if let Some(captured) = crate::clipboard_watcher::capture_image_from_file(
+                src_path,
+                media_dir,
+                image_size_limit_mb,
+                source_app,
+                false,
+            ) {
+                let conn = self.conn.lock().map_err(|e| e.to_string())?;
+                conn.execute(
+                    "UPDATE entries
+                     SET content_type = 'image',
+                         title = 'Image',
+                         text_content = NULL,
+                         file_paths = NULL,
+                         is_video = 0,
+                         image_path = ?1,
+                         image_width = ?2,
+                         image_height = ?3,
+                         file_size = ?4,
+                         qr_content = ?5
+                     WHERE id = ?6",
+                    params![
+                        captured.image_path,
+                        captured.image_width,
+                        captured.image_height,
+                        captured.file_size,
+                        captured.qr_content,
+                        entry_id,
+                    ],
+                )
+                .map_err(|e| e.to_string())?;
+                converted += 1;
+            }
+        }
+
+        Ok(converted)
     }
 
     pub fn cleanup_expired_entries(&self) -> Result<(), String> {
@@ -910,7 +1070,8 @@ impl DbState {
         icon: Option<String>,
     ) -> Result<Collection, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let id = format!("col_{}", chrono::Local::now().timestamp_millis());
+        let seq = COLLECTION_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = format!("col_{}_{}", chrono::Local::now().timestamp_millis(), seq);
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
         conn.execute(
@@ -1755,13 +1916,58 @@ impl DbState {
         let total_items = entries.len();
         // Include snippets in backup (expansion flag intentionally excluded)
         let snippets = self.list_snippets().unwrap_or_default();
+
+        // Include unlocked collections and their clip memberships.
+        // PIN-locked collections and their items remain private and excluded.
+        let collections = {
+            let conn = self.conn.lock().map_err(|e| e.to_string())?;
+            let exported_ids: std::collections::HashSet<&str> =
+                entries.iter().map(|e| e.id.as_str()).collect();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, name, color, icon, created_at
+                     FROM collections
+                     WHERE pin_hash IS NULL
+                     ORDER BY created_at ASC",
+                )
+                .map_err(|e| e.to_string())?;
+            let mut cols: Vec<BackupCollection> = stmt
+                .query_map([], |row| {
+                    Ok(BackupCollection {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        color: row.get(2)?,
+                        icon: row.get(3)?,
+                        created_at: row.get(4)?,
+                        clip_ids: Vec::new(),
+                    })
+                })
+                .map_err(|e| e.to_string())?
+                .filter_map(Result::ok)
+                .collect();
+
+            let mut mem_stmt = conn
+                .prepare("SELECT clip_id FROM clip_collections WHERE collection_id = ?1")
+                .map_err(|e| e.to_string())?;
+            for col in &mut cols {
+                if let Ok(rows) = mem_stmt.query_map(params![&col.id], |r| r.get::<_, String>(0)) {
+                    col.clip_ids = rows
+                        .filter_map(Result::ok)
+                        .filter(|cid| exported_ids.contains(cid.as_str()))
+                        .collect();
+                }
+            }
+            cols
+        };
+
         Ok(BackupPayload {
-            version: 2,
+            version: 3,
             app: "Carbon".to_string(),
             exported_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             total_items,
             entries,
             snippets,
+            collections,
         })
     }
 
@@ -1851,7 +2057,29 @@ impl DbState {
             );
         }
 
+        // Import unlocked collections and clip memberships (v3+ backups).
+        // Older v1/v2 backups omit `collections` and deserialize as an empty Vec.
+        for col in payload.collections {
+            let _ = tx.execute(
+                "INSERT INTO collections (id, name, color, icon, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    color = COALESCE(excluded.color, collections.color),
+                    icon = COALESCE(excluded.icon, collections.icon)",
+                params![col.id, col.name, col.color, col.icon, col.created_at],
+            );
+            for clip_id in col.clip_ids {
+                let _ = tx.execute(
+                    "INSERT OR IGNORE INTO clip_collections (clip_id, collection_id)
+                     SELECT ?1, ?2 WHERE EXISTS (SELECT 1 FROM entries WHERE id = ?1)",
+                    params![clip_id, col.id],
+                );
+            }
+        }
+
         tx.commit().map_err(|e| e.to_string())?;
+        bump_store_version();
         Ok(ImportResult {
             imported_count,
             total_in_file,
@@ -2546,6 +2774,153 @@ mod tests {
         assert_eq!(final_cols.len(), 0);
         let final_all = db.get_all_entries(None, None, false, None).unwrap();
         assert_eq!(final_all.len(), 2); // Clips untouched!
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_repair_glint_image_entries_converts_glint_and_keeps_explorer_files() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "carbon_glint_repair_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let glint_dir = temp_dir.join("com.glint.app").join("attachments");
+        let pictures_dir = temp_dir.join("Pictures");
+        let media_dir = temp_dir.join("media");
+        fs::create_dir_all(&glint_dir).unwrap();
+        fs::create_dir_all(&pictures_dir).unwrap();
+
+        let glint_png = glint_dir.join("glint-old-123.png");
+        let explorer_png = pictures_dir.join("photo.png");
+        let sample: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> =
+            image::ImageBuffer::from_pixel(20, 14, image::Rgba([90, 60, 220, 255]));
+        sample.save(&glint_png).unwrap();
+        sample.save(&explorer_png).unwrap();
+
+        let db = DbState::new(temp_dir.join("test.db")).unwrap();
+        let mut glint_item = ClipItem {
+            id: "glint-legacy-1".into(),
+            content_type: "file".into(),
+            title: "glint-old-123.png".into(),
+            text_content: Some(glint_png.to_string_lossy().to_string()),
+            rtf_content: None,
+            html_content: None,
+            image_path: None,
+            image_width: None,
+            image_height: None,
+            file_paths: Some(serde_json::to_string(&vec![glint_png.to_string_lossy().to_string()]).unwrap()),
+            is_video: false,
+            file_size: 123,
+            is_pinned: true,
+            source_app: Some("GOAT (Nightly).exe".into()),
+            created_at: String::new(),
+            updated_at: String::new(),
+            qr_content: None,
+            is_sensitive: false,
+            expires_at: None,
+            ocr_text: None,
+        };
+        let mut explorer_item = ClipItem {
+            id: "explorer-photo-1".into(),
+            content_type: "file".into(),
+            title: "photo.png".into(),
+            text_content: Some(explorer_png.to_string_lossy().to_string()),
+            rtf_content: None,
+            html_content: None,
+            image_path: None,
+            image_width: None,
+            image_height: None,
+            file_paths: Some(serde_json::to_string(&vec![explorer_png.to_string_lossy().to_string()]).unwrap()),
+            is_video: false,
+            file_size: 123,
+            is_pinned: false,
+            source_app: Some("explorer.exe".into()),
+            created_at: String::new(),
+            updated_at: String::new(),
+            qr_content: None,
+            is_sensitive: false,
+            expires_at: None,
+            ocr_text: None,
+        };
+        db.insert_entry(&mut glint_item).unwrap();
+        db.insert_entry(&mut explorer_item).unwrap();
+
+        let converted = db.repair_glint_image_entries(&media_dir, 10).unwrap();
+        assert_eq!(converted, 1);
+        // Second run is idempotent (0 rows converted)
+        assert_eq!(db.repair_glint_image_entries(&media_dir, 10).unwrap(), 0);
+
+        let updated_glint = db.get_entry_by_id("glint-legacy-1").unwrap().unwrap();
+        assert_eq!(updated_glint.content_type, "image");
+        assert_eq!(updated_glint.title, "Image");
+        assert_eq!(updated_glint.image_width, Some(20));
+        assert_eq!(updated_glint.image_height, Some(14));
+        assert!(updated_glint.is_pinned);
+        assert!(updated_glint.file_paths.is_none());
+        assert!(std::path::Path::new(updated_glint.image_path.as_deref().unwrap()).is_file());
+
+        let untouched_explorer = db.get_entry_by_id("explorer-photo-1").unwrap().unwrap();
+        assert_eq!(untouched_explorer.content_type, "file");
+        assert!(untouched_explorer.file_paths.is_some());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_refresh_titles_reclassifies_false_positive_code_and_links() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "carbon_reclassify_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).unwrap();
+        let db = DbState::new(temp_dir.join("test.db")).unwrap();
+
+        let make = |id: &str, content_type: &str, text: &str, app: Option<&str>| ClipItem {
+            id: id.into(),
+            content_type: content_type.into(),
+            title: text.into(),
+            text_content: Some(text.into()),
+            rtf_content: None,
+            html_content: None,
+            image_path: None,
+            image_width: None,
+            image_height: None,
+            file_paths: None,
+            is_video: false,
+            file_size: text.len() as u64,
+            is_pinned: false,
+            source_app: app.map(|s| s.to_string()),
+            created_at: String::new(),
+            updated_at: String::new(),
+            qr_content: None,
+            is_sensitive: false,
+            expires_at: None,
+            ocr_text: None,
+        };
+
+        let mut c1 = make("fp-phrase", "code", "Please do so", Some("Monocode Gpui.exe"));
+        let mut c2 = make("fp-banner", "code", "=== VERSIONS === GOAT", Some("Monocode Gpui.exe"));
+        let mut c3 = make("fp-link", "link", "package.json", None);
+        let mut c4 = make("real-code", "code", "const x: number = 42;", Some("Code.exe"));
+        let mut c5 = make("real-link", "link", "https://github.com/berkaygkc/yabbistir", None);
+
+        for item in [&mut c1, &mut c2, &mut c3, &mut c4, &mut c5] {
+            db.insert_entry(item).unwrap();
+        }
+
+        db.refresh_titles().unwrap();
+
+        assert_eq!(db.get_entry_by_id("fp-phrase").unwrap().unwrap().content_type, "text");
+        assert_eq!(db.get_entry_by_id("fp-banner").unwrap().unwrap().content_type, "text");
+        assert_eq!(db.get_entry_by_id("fp-link").unwrap().unwrap().content_type, "text");
+        assert_eq!(db.get_entry_by_id("real-code").unwrap().unwrap().content_type, "code");
+        assert_eq!(db.get_entry_by_id("real-link").unwrap().unwrap().content_type, "link");
 
         let _ = fs::remove_dir_all(temp_dir);
     }

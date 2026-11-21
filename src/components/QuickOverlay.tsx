@@ -19,6 +19,9 @@ import {
 } from '../utils/snippets';
 import { useSnippetFlow } from '../utils/useSnippetFlow';
 import { SnippetArgPrompt } from './SnippetArgPrompt';
+import { SlidingSegmentedControl } from './SlidingSegmentedControl';
+import { useSlidingIndicator } from '../hooks/useSlidingIndicator';
+import { groupItemsByDate, formatTimeAgo } from '../utils/dateGroups';
 import {
   executeWindowShow,
   executeWindowHide,
@@ -47,7 +50,7 @@ import {
   ClipTileIcon,
 } from './Icons';
 import type { ContentType } from '../types';
-import { SnippetEditorModal } from './SnippetEditorModal';
+import { SnippetEditorModal, snippetDraftFromClip, type SnippetDraft } from './SnippetEditorModal';
 import { Dropdown } from './Dropdown';
 
 declare global {
@@ -68,46 +71,6 @@ const COLD_HOLD_CAP_MS = 5000;
 const emptyDragImg = typeof Image !== 'undefined' ? new Image() : null;
 if (emptyDragImg) {
   emptyDragImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-}
-
-interface DateGroup {
-  label: string;
-  items: ClipItem[];
-}
-
-function groupItemsByDate(items: ClipItem[]): DateGroup[] {
-  const groups: { [key: string]: ClipItem[] } = {};
-  const order: string[] = [];
-
-  const now = new Date();
-  const todayStr = now.toDateString();
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = yesterday.toDateString();
-
-  items.forEach((item) => {
-    let label = 'Older';
-    if (item.created_at) {
-      const d = new Date(item.created_at);
-      if (!isNaN(d.getTime())) {
-        if (d.toDateString() === todayStr) {
-          label = 'Today';
-        } else if (d.toDateString() === yesterdayStr) {
-          label = 'Yesterday';
-        } else {
-          label = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-        }
-      }
-    }
-
-    if (!groups[label]) {
-      groups[label] = [];
-      order.push(label);
-    }
-    groups[label].push(item);
-  });
-
-  return order.map((label) => ({ label, items: groups[label] }));
 }
 
 // ── Memoized overlay row: keeps keyboard-navigation renders O(1) ─────
@@ -147,7 +110,7 @@ const OverlayRow = memo(function OverlayRow({
       </div>
       <div className="row-body">
         <div className="row-title">
-          {item.is_pinned && <span className="pin-star" style={{ color: '#F59E0B' }}>★</span>}
+          {item.is_pinned && <span className="pin-star" style={{ color: '#EAB308', opacity: 0.88 }}><StarIcon filled size={11} /></span>}
           {queueIdx >= 0 && (
             <span className="queue-pos-badge" title={`Position #${queueIdx + 1} in paste queue`}>
               #{queueIdx + 1}
@@ -255,7 +218,7 @@ export const QuickOverlay: React.FC = () => {
   const [snSearch, setSnSearch] = useState('');
   const [snTagFilter, setSnTagFilter] = useState('__all__');
   const [snSelectedId, setSnSelectedId] = useState<string | null>(null);
-  const [snEditorTarget, setSnEditorTarget] = useState<{ snippet: Snippet | null } | null>(null);
+  const [snEditorTarget, setSnEditorTarget] = useState<{ snippet: Snippet | null; initialDraft?: SnippetDraft } | null>(null);
   const [snArgPrompt, setSnArgPrompt] = useState<(ArgumentSpec & { resolvedDefault?: string }) | null>(null);
   const [snArgValue, setSnArgValue] = useState('');
   const [snActionOpen, setSnActionOpen] = useState(false);
@@ -495,6 +458,18 @@ export const QuickOverlay: React.FC = () => {
     return out.slice(0, searchLimit);
   }, [items, sourceAppFilter, typeFilter, searchLimit]);
 
+  const [dayKey, setDayKey] = useState(() => new Date().toDateString());
+  useEffect(() => {
+    const refreshDay = () => {
+      const next = new Date().toDateString();
+      setDayKey((prev) => (prev === next ? prev : next));
+    };
+    window.addEventListener('focus', refreshDay);
+    return () => window.removeEventListener('focus', refreshDay);
+  }, []);
+
+  const overlayDateGroups = useMemo(() => groupItemsByDate(displayItems), [displayItems, dayKey]);
+
   // Reset highlight when the filter changes so Enter/preview stay valid
   useEffect(() => {
     setSelectedIndex(0);
@@ -669,6 +644,7 @@ export const QuickOverlay: React.FC = () => {
     setRenderMode(
       !!search.trim() || item.content_type === 'rich_text' ||
         Boolean(item.html_content) ||
+        (item.content_type === 'code' && Boolean(item.text_content)) ||
         (item.content_type === 'text' && Boolean(item.text_content) && isMarkdownContent(item.text_content || ''))
     );
   }, [selectedIndex, displayItems, search]);
@@ -707,7 +683,7 @@ export const QuickOverlay: React.FC = () => {
     try { localStorage.setItem('carbon_overlay_tab', next); } catch {}
     setSnActionOpen(false);
     setActionPanelOpen(false);
-    focusSearchInput();
+    requestAnimationFrame(() => focusSearchInput());
   };
 
   // Stable row-select handler for memoized rows (identity never changes)
@@ -1387,6 +1363,61 @@ export const QuickOverlay: React.FC = () => {
   // The highlighted clip of the VISIBLE (possibly app-filtered) list — every
   // paste/queue/preview action must operate on this, not the unfiltered array.
   const selectedItem = displayItems[selectedIndex];
+  const overlayListRef = useRef<HTMLDivElement>(null);
+  const overlayListIndicatorRef = useRef<HTMLDivElement>(null);
+  const snOverlayListRef = useRef<HTMLDivElement>(null);
+  const snOverlayListIndicatorRef = useRef<HTMLDivElement>(null);
+  const actionModalRef = useRef<HTMLDivElement>(null);
+  const actionIndicatorRef = useRef<HTMLDivElement>(null);
+  const snActionModalRef = useRef<HTMLDivElement>(null);
+  const snActionIndicatorRef = useRef<HTMLDivElement>(null);
+  const snActiveActionRef = useRef<HTMLDivElement>(null);
+  useSlidingIndicator({
+    containerRef: overlayListRef,
+    indicatorRef: overlayListIndicatorRef,
+    activeSelector: '.row.selected',
+    readyDataAttr: 'listIndicator',
+    deps: [selectedIndex, selectedItem?.id, displayItems.length],
+    snapDeps: [search, typeFilter, sourceAppFilter, tab],
+    enabled: tab === 'clips' && displayItems.length > 0,
+    scrollRelative: true,
+  });
+  useSlidingIndicator({
+    containerRef: snOverlayListRef,
+    indicatorRef: snOverlayListIndicatorRef,
+    activeSelector: '.snippet-row.selected',
+    readyDataAttr: 'listIndicator',
+    deps: [snSelectedId, snFiltered.length],
+    snapDeps: [snSearch, snTagFilter, tab],
+    enabled: tab === 'snippets' && snFiltered.length > 0 && !!snSelectedId,
+    scrollRelative: true,
+  });
+  useSlidingIndicator({
+    containerRef: actionModalRef,
+    indicatorRef: actionIndicatorRef,
+    activeSelector: '.action-item.selected',
+    readyDataAttr: 'actionIndicator',
+    deps: [actionIndex, actionPanelOpen, selectedItem?.id],
+    snapDeps: [actionPanelOpen, selectedItem?.id],
+    enabled: actionPanelOpen && !!selectedItem,
+    scrollRelative: true,
+  });
+  useSlidingIndicator({
+    containerRef: snActionModalRef,
+    indicatorRef: snActionIndicatorRef,
+    activeSelector: '.action-item.selected',
+    readyDataAttr: 'actionIndicator',
+    deps: [snActionIndex, snActionOpen, snSelected?.id],
+    snapDeps: [snActionOpen, snSelected?.id],
+    enabled: snActionOpen && !!snSelected,
+    scrollRelative: true,
+  });
+
+  useEffect(() => {
+    if (snActionOpen && snActiveActionRef.current) {
+      snActiveActionRef.current.scrollIntoView({ block: 'nearest' });
+    }
+  }, [snActionIndex, snActionOpen]);
 
   // Keep editingContent synchronized with selectedItem so raw/edit mode never renders empty text.
   // W1.3: never clobber an uncommitted buffer — the buffer wins until blur/selection flush.
@@ -1464,6 +1495,10 @@ export const QuickOverlay: React.FC = () => {
     onDelete: (item) => handleDelete(item),
     onQueue: (item) => handleQueueClip(item),
     onExtractOcr: (item) => handleExtractOrCopyOcr(item),
+    onSaveAsSnippet: (item) => {
+      setActionPanelOpen(false);
+      setSnEditorTarget({ snippet: null, initialDraft: snippetDraftFromClip(item) });
+    },
     onAddToCollection: () => {
       setActionPanelOpen(false);
       if (!selectedItem) return;
@@ -1524,7 +1559,7 @@ export const QuickOverlay: React.FC = () => {
         e.preventDefault();
         setSnActionIndex((p) => (p - 1 + snActions.length) % snActions.length);
         return;
-      } else if (e.key === 'Escape') {
+      } else if (e.key === 'Escape' || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) {
         e.preventDefault();
         setSnActionOpen(false);
         return;
@@ -1548,6 +1583,15 @@ export const QuickOverlay: React.FC = () => {
     if (matchesHotkeyCombo(e, hotkeyStatus?.enlarged || 'Ctrl+Alt+X')) {
       e.preventDefault();
       invoke('toggle_enlarged').catch(console.error);
+      return;
+    }
+
+    // Escape closes open snippet editor modal before hiding overlay
+    if (snEditorTarget) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSnEditorTarget(null);
+      }
       return;
     }
 
@@ -1733,7 +1777,7 @@ export const QuickOverlay: React.FC = () => {
         e.preventDefault();
         setActionIndex((prev) => (prev - 1 + modalActions.length) % modalActions.length);
         return;
-      } else if (e.key === 'Escape') {
+      } else if (e.key === 'Escape' || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) {
         e.preventDefault();
         setActionPanelOpen(false);
         return;
@@ -1752,6 +1796,15 @@ export const QuickOverlay: React.FC = () => {
         setActionPanelOpen(false);
         return;
       }
+    }
+
+    // Escape closes open snippet editor modal before hiding overlay
+    if (snEditorTarget) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSnEditorTarget(null);
+      }
+      return;
     }
 
     // Escape always hides overlay
@@ -2003,7 +2056,7 @@ export const QuickOverlay: React.FC = () => {
                 ariaLabel="Filter by tag"
                 options={[
                   { value: '__all__', label: 'All Tags' },
-                  ...snAllTags.map((t) => ({ value: t, label: t })),
+                  ...snAllTags.map((t) => ({ value: t, label: `#${t}` })),
                 ]}
               />
             </span>
@@ -2037,7 +2090,16 @@ export const QuickOverlay: React.FC = () => {
 
         {/* Unified split frame: list (left) + permanent preview (right) */}
         <div className="overlay-body">
-          <div className={`overlay-list ${tab === 'snippets' ? 'inactive-tab' : ''}`}>
+          <div
+            ref={overlayListRef}
+            className={`overlay-list ${tab === 'snippets' ? 'inactive-tab' : ''}`}
+          >
+            <div
+              ref={overlayListIndicatorRef}
+              className="list-active-indicator"
+              aria-hidden="true"
+              style={{ opacity: 0 }}
+            />
             {displayItems.length === 0 ? (
               <div className="empty">
                 <div className="big">No entries found</div>
@@ -2052,10 +2114,9 @@ export const QuickOverlay: React.FC = () => {
               </div>
             ) : (
               (() => {
-                const groups = groupItemsByDate(displayItems);
                 let globalIdx = 0;
 
-                return groups.map((group) => (
+                return overlayDateGroups.map((group) => (
                   <div key={group.label} className="date-group">
                     <div className="date-group-label">{group.label}</div>
                     {group.items.map((item) => {
@@ -2085,7 +2146,16 @@ export const QuickOverlay: React.FC = () => {
             {(hasMoreMatches || items.length > displayItems.length) && <button className="btn subtle search-load-more" onClick={() => setSearchLimit((n) => n + 200)}><span className="carbon-control-label">{search.trim() ? 'Load more matches' : 'Load more entries'}</span></button>}
           </div>
           {/* Snippets list (always mounted; hidden when the Clips tab is active) */}
-          <div className={`overlay-list sn-overlay-list ${tab === 'clips' ? 'inactive-tab' : ''}`}>
+          <div
+            ref={snOverlayListRef}
+            className={`overlay-list sn-overlay-list ${tab === 'clips' ? 'inactive-tab' : ''}`}
+          >
+            <div
+              ref={snOverlayListIndicatorRef}
+              className="list-active-indicator"
+              aria-hidden="true"
+              style={{ opacity: 0 }}
+            />
             {snSnippets.length === 0 ? (
               <div className="empty">
                 <div className="big">No snippets yet</div>
@@ -2138,11 +2208,14 @@ export const QuickOverlay: React.FC = () => {
             {tab === 'snippets' ? (
               snSelected ? (
                 <>
-                  <div className="overlay-preview-head">
-                    <span className="preview-kind" style={{ color: 'var(--accent)' }}>
+                  <div className="overlay-preview-head sn-overlay-head">
+                    <span className="sn-preview-title-wrap">
                       <span className="sn-detail-ic">{SnSelectedIcon && <SnSelectedIcon />}</span>
-                      <span className="sn-preview-name">{snSelected.name}</span>
+                      <span className="sn-preview-title">{snSelected.name}</span>
                       {snSelected.keyword && <span className="sn-keyword-badge">{snSelected.keyword}</span>}
+                    </span>
+                    <span className="sn-overlay-used-inline">
+                      {snSelected.use_count.toLocaleString()}× · {formatSnippetLastUsed(snSelected.last_used_at).toLowerCase()}
                     </span>
                   </div>
                   <div className="overlay-preview-content ov-preview-media">
@@ -2157,18 +2230,26 @@ export const QuickOverlay: React.FC = () => {
                       {snSelected.content.length === 0 && <span className="sn-content-empty">Empty snippet — add content in the full window.</span>}
                     </div>
                   </div>
-                  <div className="sn-overlay-meta ov-preview-info">
-                    {(snSelected.tags || []).length > 0 && (
-                      <div className="sn-detail-tags">
-                        {(snSelected.tags || []).map((t) => (
-                          <span key={t} className="sn-tag-chip" onClick={() => setSnTagFilter(t)}>{t}</span>
-                        ))}
+                  {(snSelected.tags || []).length > 0 && (
+                    <div className="sn-overlay-meta ov-preview-info">
+                      <div className="sn-overlay-meta-row">
+                        <span className="sn-overlay-used">Tags</span>
+                        <div className="sn-detail-tags">
+                          {(snSelected.tags || []).map((t) => (
+                            <button
+                              key={t}
+                              type="button"
+                              className="sn-tag-chip"
+                              title={`Filter by #${t}`}
+                              onClick={() => setSnTagFilter(t)}
+                            >
+                              <span className="carbon-control-label">#{t}</span>
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                    )}
-                    <span className="sn-overlay-used">
-                      Used {snSelected.use_count.toLocaleString()}× · last {formatSnippetLastUsed(snSelected.last_used_at).toLowerCase()}
-                    </span>
-                  </div>
+                    </div>
+                  )}
                 </>
               ) : (
                 <div className="sn-overlay-empty">Select a snippet to inspect it.</div>
@@ -2177,6 +2258,7 @@ export const QuickOverlay: React.FC = () => {
               (() => {
                 const hasRenderedVersion =
                   !!search.trim() || selectedItem.content_type === 'rich_text' ||
+                  (selectedItem.content_type === 'code' && Boolean(selectedItem.text_content)) ||
                   (selectedItem.content_type === 'text' && Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!));
 
                 return (
@@ -2194,20 +2276,17 @@ export const QuickOverlay: React.FC = () => {
                         {getSpecificTypeLabel(selectedItem)}
                       </span>
                       {hasRenderedVersion && (
-                        <div className="seg" style={{ marginLeft: 'auto' }}>
-                          <button
-                            className={`seg-btn ${renderMode ? 'active' : ''}`}
-                            onClick={() => setRenderMode(true)}
-                          >
-                            <span className="carbon-control-label">Render</span>
-                          </button>
-                          <button
-                            className={`seg-btn ${!renderMode ? 'active' : ''}`}
-                            onClick={() => setRenderMode(false)}
-                          >
-                            <span className="carbon-control-label">Raw</span>
-                          </button>
-                        </div>
+                        <SlidingSegmentedControl
+                          variant="preview"
+                          ariaLabel="Preview mode"
+                          value={renderMode ? 'render' : 'raw'}
+                          options={[
+                            { value: 'render', label: 'Render' },
+                            { value: 'raw', label: 'Raw' },
+                          ]}
+                          onChange={(mode) => setRenderMode(mode === 'render')}
+                          style={{ marginLeft: 'auto' }}
+                        />
                       )}
                     </div>
                     )}
@@ -2269,7 +2348,7 @@ export const QuickOverlay: React.FC = () => {
         </div>
 
         <div className="overlay-bar">
-          <div className="bar-left">
+          <div className="bar-right bar-actions">
             <span
               className="hint primary"
               onClick={() => {
@@ -2280,9 +2359,10 @@ export const QuickOverlay: React.FC = () => {
                 }
               }}
             >
-              <span className="key"><span className="carbon-control-label">Enter</span></span>
               <b>{targetApp ? `Paste to ${targetApp}` : 'Paste'}</b>
+              <span className="key"><span className="carbon-control-label">Enter</span></span>
             </span>
+            <span className="bar-sep" aria-hidden="true" />
             <span
               className="hint"
               onClick={() => {
@@ -2295,14 +2375,8 @@ export const QuickOverlay: React.FC = () => {
                 }
               }}
             >
-              <span className="key"><span className="carbon-control-label">Ctrl+K</span></span>
               <b>Actions</b>
-            </span>
-          </div>
-          <div className="bar-right">
-            <span className="hint" onClick={() => requestHide()}>
-              <span className="key"><span className="carbon-control-label">Esc</span></span>
-              <b>Close</b>
+              <span className="key"><span className="carbon-control-label">Ctrl+K</span></span>
             </span>
           </div>
         </div>
@@ -2311,7 +2385,8 @@ export const QuickOverlay: React.FC = () => {
         {/* Action Panel Modal (Ctrl+K) */}
         {actionPanelOpen && selectedItem && (
           <div className="action-modal-overlay" onClick={() => setActionPanelOpen(false)}>
-            <div className="action-modal" onClick={(e) => e.stopPropagation()}>
+            <div ref={actionModalRef} className="action-modal" onClick={(e) => e.stopPropagation()}>
+              <div ref={actionIndicatorRef} className="action-active-indicator" aria-hidden="true" />
               {modalActions.map((act, i) => (
                 <div
                   key={act.id}
@@ -2439,10 +2514,12 @@ export const QuickOverlay: React.FC = () => {
         {/* Snippets: action panel (Ctrl+K) */}
         {snActionOpen && snSelected && (
           <div className="action-modal-overlay" onClick={() => setSnActionOpen(false)}>
-            <div className="action-modal" onClick={(e) => e.stopPropagation()}>
+            <div ref={snActionModalRef} className="action-modal" onClick={(e) => e.stopPropagation()}>
+              <div ref={snActionIndicatorRef} className="action-active-indicator" aria-hidden="true" />
               {snActions.map((act, i) => (
                 <div
                   key={act.id}
+                  ref={i === snActionIndex ? snActiveActionRef : undefined}
                   className={`action-item ${i === snActionIndex ? 'selected' : ''} ${act.danger ? 'danger' : ''}`}
                   onClick={() => {
                     act.handler();
@@ -2487,8 +2564,9 @@ export const QuickOverlay: React.FC = () => {
             enlarged window (same editor, same behavior, same tokens) */}
         {snEditorTarget && (
           <SnippetEditorModal
-            key={snEditorTarget.snippet?.id ?? 'new'}
+            key={snEditorTarget.snippet?.id ?? `new-${snEditorTarget.initialDraft?.name ?? ''}`}
             snippet={snEditorTarget.snippet}
+            initialDraft={snEditorTarget.initialDraft}
             onClose={() => setSnEditorTarget(null)}
             onSaved={(saved) => {
               setSnSnippets((prev) => {
@@ -2509,16 +2587,4 @@ export const QuickOverlay: React.FC = () => {
 function constrainTitle(title: string, max = 36): string {
   if (!title) return title;
   return title.length > max ? title.slice(0, max - 1).trimEnd() + '…' : title;
-}
-
-function formatTimeAgo(dateStr: string): string {
-  if (!dateStr) return 'just now';
-  const d = new Date(dateStr.replace(' ', 'T'));
-  const now = new Date();
-  const diffSec = Math.floor((now.getTime() - d.getTime()) / 1000);
-
-  if (diffSec < 60) return 'just now';
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-  return `${Math.floor(diffSec / 86400)}d ago`;
 }

@@ -87,20 +87,55 @@ body.win-library { background: var(--glass-base); }
 :root[data-theme] :is(.btn, .seg-btn, .hotkey-chip) > svg { flex-shrink: 0; align-self: center; }
 :root[data-theme] .settings .btn:not(.icon-btn) { min-height: 32px; }
 :root[data-theme] .settings .hotkey-chip { min-height: 30px; padding-inline: 10px; }
+/* Avoid 10+ nested backdrop-filter blur readbacks inside the scrollable
+   Settings container (native DWM acrylic already blurs behind .settings). */
+:root[data-theme] .settings :is(.btn, .hotkey-chip, .seg-btn) {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 :root[data-theme] .segmented-control { background: var(--control-bg); border-color: var(--control-edge); }
 :root[data-theme] .segmented-control .seg-btn.active {
   background: var(--control-selected);
   color: var(--text);
   box-shadow: none;
 }
+:root[data-theme] .segmented-control.has-slider[data-slider-ready="true"] .seg-btn.active {
+  background: transparent;
+}
+:root[data-theme] .segmented-control .seg-slider-thumb {
+  box-sizing: border-box;
+  background: var(--control-selected);
+  border: 1px solid color-mix(in srgb, var(--control-edge) 75%, transparent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
+}
+:root[data-theme] .seg.has-slider[data-slider-ready="true"] .seg-btn.active {
+  background: transparent;
+}
+:root[data-theme] .seg .seg-slider-thumb {
+  box-sizing: border-box;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-ring);
+}
 :root[data-theme] .btn:disabled { opacity: .6; }
 
-/* All floating menus use the same denser, low-saturation frost. No
-   quick-overlay-only alpha override or duplicate translucent slab. */
-:root[data-theme] :is(.c-dropdown-list, .paste-dropdown-menu, .context-menu-popover, .sn-help-pop) {
+/* All floating menus use crisp frosted glass with balanced translucency so
+   the blurred window shines through while options remain effortlessly legible. */
+:root[data-theme] :is(.paste-dropdown-menu, .context-menu-popover, .sn-help-pop) {
   background: var(--surface-float-bg);
   backdrop-filter: var(--inapp-blur);
   -webkit-backdrop-filter: var(--inapp-blur);
+}
+:root[data-theme="dark"]:not([data-material="solid"]):not([data-reduced-transparency="true"]) .c-dropdown-list {
+  background: rgb(22 22 26 / 68%);
+  border: 1px solid rgb(255 255 255 / 13%);
+  backdrop-filter: blur(24px) saturate(125%);
+  -webkit-backdrop-filter: blur(24px) saturate(125%);
+}
+:root[data-theme="light"]:not([data-material="solid"]):not([data-reduced-transparency="true"]) .c-dropdown-list {
+  background: rgb(255 255 255 / 78%);
+  border: 1px solid rgb(0 0 0 / 12%);
+  backdrop-filter: blur(24px) saturate(125%);
+  -webkit-backdrop-filter: blur(24px) saturate(125%);
 }
 :root[data-theme] :is(.hotkey-guide, .settings .capture-rule-row) {
   background: var(--utility-bg);
@@ -123,6 +158,16 @@ body.win-library { background: var(--glass-base); }
   outline: 2px solid var(--focus-color);
   outline-offset: 2px;
 }
+:root[data-theme] .sidebar .side-item:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1.5px var(--focus-color);
+}
+:root[data-theme] .preview-edit:focus,
+:root[data-theme] .preview-edit:focus-visible {
+  outline: none;
+  box-shadow: none;
+  border-color: transparent;
+}
 ::selection { background: var(--accent-soft); color: var(--text); }
 input, textarea { caret-color: var(--accent); }
 .meta-value, .side-count, .row-meta { font-variant-numeric: tabular-nums; }
@@ -141,10 +186,10 @@ input, textarea { caret-color: var(--accent); }
 }
 
 :root[data-theme] :is(.btn.accent, .btn.primary, .update-banner-btn.primary):hover:not(:disabled) { color: var(--accent-fg-hover, var(--accent-fg)); }
-:root[data-theme] :is(.sec-title, .set-hint, .side-section-title, .meta-label) { font-size: 11px; }
+:root[data-theme] :is(.set-hint, .side-section-title, .meta-label) { font-size: 11px; }
 
-/* The editing well is intentionally distinct from the list and pane wash. */
-:root[data-theme] .preview-edit { background: var(--editor-field); }
+/* The editing & snippet content wells are intentionally distinct from the list and pane wash. */
+:root[data-theme] :is(.preview-edit, .sn-content-preview) { background: var(--editor-field); }
 
 /* Quiet content wells; only the text box receives a small lift. The snippet
    textarea stays invisible over its syntax layer, including while focused. */
@@ -186,19 +231,14 @@ input, textarea { caret-color: var(--accent); }
   --text-3: #62626a;
 }
 :root[data-theme="light"] .settings .set-label {
-  font-weight: 600;
-  color: var(--text);
+  font-weight: 500;
+  color: color-mix(in srgb, var(--text) 88%, var(--text-2));
 }
 :root[data-theme="light"] .settings .set-hint {
   color: var(--text-3);
   font-weight: 400;
   margin-top: 3px;
   line-height: 1.45;
-}
-:root[data-theme="light"] .btn:not(.icon-btn) {
-  /* Segoe's visible capitals sit below the line-box center: a half-pixel
-     optical lift keeps labels centered alongside the icons. */
-  padding-block: 0 1px;
 }
 :root[data-theme="light"] :is(.btn.accent, .btn.primary, .update-banner-btn.primary) {
   background-color: color-mix(in srgb, var(--accent-base) 16%, white);
@@ -231,8 +271,12 @@ input, textarea { caret-color: var(--accent); }
   background: var(--surface-float-solid);
 }
 
-/* Settings descriptions should read as supporting text, in either theme. */
-:root[data-theme="dark"] .settings .set-label { font-weight: 600; }
+/* Settings descriptions should read as supporting text, in either theme,
+   while row labels stay calm enough for section headings to lead clearly. */
+:root[data-theme="dark"] .settings .set-label {
+  font-weight: 500;
+  color: color-mix(in srgb, var(--text) 86%, var(--text-2));
+}
 :root[data-theme="dark"] .settings .set-hint {
   font-weight: 400;
   color: var(--text-3);
@@ -250,6 +294,17 @@ input, textarea { caret-color: var(--accent); }
 :root[data-theme="dark"] :is(.btn.accent, .btn.primary, .update-banner-btn.primary):hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 20%, transparent);
   color: var(--accent-text);
+}
+/* Locked collection primary CTA needs crisp foreground contrast over the frosted card. */
+:root[data-theme="dark"] .col-locked-card .btn.primary {
+  background: color-mix(in srgb, var(--accent) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 62%, white);
+  color: #ffffff;
+  font-weight: 600;
+}
+:root[data-theme="dark"] .col-locked-card .btn.primary:hover:not(:disabled) {
+  background: var(--accent);
+  color: #ffffff;
 }
 /* Toggle polarity belongs to the theme, not the button contrast helper. */
 :root[data-theme="dark"] .toggle .knob { background: #15161a; }
@@ -287,17 +342,54 @@ input, textarea { caret-color: var(--accent); }
   background: transparent;
 }
 
-/* Center the visible glyph area rather than Segoe's extra line leading.
-   Preview actions and shared labels retain flex centering as a fallback. */
-:root[data-theme] .btn > .button-label {
+/* Targeted optical alignment per control type (never blanket-shifting
+   unrelated controls that have distinct font sizes / heights). */
+:root[data-theme] :is(
+  .btn > .button-label,
+  .btn > span:not(.key):not(.pin-star):not(.cm-ic):not(.spinner-icon),
+  .carbon-control-label,
+  .seg-btn > span,
+  .ocr-extract-btn > span
+) {
   display: block;
   line-height: 1;
   flex: 0 1 auto;
 }
+:root[data-theme] .sn-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 @supports (text-box-trim: trim-both) {
-  :root[data-theme] .btn > .button-label {
+  :root[data-theme] :is(
+    .btn > .button-label,
+    .btn > span:not(.key):not(.pin-star):not(.cm-ic):not(.spinner-icon),
+    .carbon-control-label,
+    .seg-btn > span,
+    .ocr-extract-btn > span
+  ) {
     text-box-trim: trim-both;
     text-box-edge: cap alphabetic;
+    transform: none;
+  }
+  /* Segmented controls (System/Light/Dark, Glass/Solid): measured 1px low in WebView2. */
+  :root[data-theme] .segmented-control .seg-btn > .carbon-control-label {
+    transform: translateY(-1px);
+  }
+  /* Compact 10px shortcut key pills (.key): measured 1px high at +1px in WebView2; +1.5px centers dead-even. */
+  :root[data-theme] .key > .carbon-control-label {
+    transform: translateY(1.5px);
+  }
+}
+@supports not (text-box-trim: trim-both) {
+  :root[data-theme] :is(
+    .btn > .button-label,
+    .btn > span:not(.key):not(.pin-star):not(.cm-ic):not(.spinner-icon),
+    .carbon-control-label,
+    .seg-btn > span,
+    .ocr-extract-btn > span
+  ) {
+    transform: translateY(-0.5px);
   }
 }
 
@@ -355,10 +447,6 @@ input, textarea { caret-color: var(--accent); }
 :root[data-theme] .btn.danger-solid:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 22%, transparent); }
 :root[data-theme="light"] .btn.danger-solid { color: color-mix(in srgb, var(--danger) 78%, black); }
 :root[data-theme] :is(.segmented-control .seg-btn, .hotkey-chip, .key) { line-height: 1; }
-:root[data-theme] .carbon-control-label { display: block; line-height: 1; }
-@supports (text-box-trim: trim-both) {
-  :root[data-theme] .carbon-control-label { text-box-trim: trim-both; text-box-edge: cap alphabetic; }
-}
 @media (forced-colors: active) {
   ::-webkit-scrollbar-thumb { background: ButtonText; }
   :root[data-theme] .btn.danger-solid { background: ButtonFace; color: ButtonText; border-color: ButtonText; }
@@ -376,13 +464,14 @@ input, textarea { caret-color: var(--accent); }
   --glass-list: rgb(255 255 255 / 4%);
   --glass-overlay-scrim: rgb(255 255 255 / 4%);
 }
-:root[data-theme="dark"] :is(.row, .sidebar .side-item) { border-radius: 12px; }
+:root[data-theme="dark"] :is(.row, .sidebar .side-item) { border-radius: 9px; }
 :root[data-theme] .settings-head .settings-back-btn {
   display: grid; place-items: center; padding: 0; gap: 0; line-height: 0;
 }
 :root[data-theme] .settings-head .settings-back-btn > svg {
   display: block; width: 16px; height: 16px; margin: 0;
   justify-self: center; align-self: center;
+  transform: translate(-0.5px, -0.5px);
 }
 .preview-reveal-file { margin-top: 8px; }
 
@@ -393,4 +482,12 @@ input, textarea { caret-color: var(--accent); }
 }
 :root[data-theme="light"]:not([data-material="solid"]):not([data-reduced-transparency="true"]) {
   --glass-base: rgb(255 255 255 / 48%);
+}
+
+/* Override late primary/accent button blur rules inside Settings so the
+   GPU-composited .settings-body scroll layer never triggers per-button
+   backdrop-filter readbacks on scroll frames. */
+:root[data-theme] .settings :is(.btn, .btn.primary, .btn.accent, .hotkey-chip, .seg-btn, .c-dropdown-trigger, .update-banner-btn) {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }

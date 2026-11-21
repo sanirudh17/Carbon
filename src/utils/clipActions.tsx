@@ -1,6 +1,6 @@
 import React from 'react';
 import { ClipItem } from '../types';
-import { StarIcon, CopyIcon, PasteIcon, DeleteIcon, QueueIcon, OcrIcon, FolderIcon } from '../components/Icons';
+import { StarIcon, CopyIcon, PasteIcon, DeleteIcon, QueueIcon, OcrIcon, FolderIcon, SnippetIcon } from '../components/Icons';
 import { invoke } from '@tauri-apps/api/core';
 
 export interface ActionDefinition {
@@ -21,12 +21,13 @@ export interface ActionDefinition {
     | 'copy'
     | 'copy-ocr'
     | 'copy-qr'
+    | 'save-as-snippet'
     | 'add-to-collection'
     | 'remove-from-collection'
     | 'delete';
   getLabel: (item: ClipItem, targetApp?: string | null) => string;
   shortcut: string;
-  iconType?: 'star' | 'copy' | 'paste' | 'delete' | 'queue' | 'ocr' | 'folder';
+  iconType?: 'star' | 'copy' | 'paste' | 'delete' | 'queue' | 'ocr' | 'folder' | 'snippet';
   danger?: boolean;
   /** Whether this action is a paste variant (shown in the clipboard dropdown). */
   isPasteAction?: boolean;
@@ -42,6 +43,7 @@ export interface ClipActionHandlers {
   onDelete: (item: ClipItem) => void;
   onQueue?: (item: ClipItem) => void;
   onExtractOcr?: (item: ClipItem) => void;
+  onSaveAsSnippet?: (item: ClipItem) => void;
   onAddToCollection?: (item: ClipItem) => void;
   onRemoveFromCollection?: (item: ClipItem) => void;
   isInCollection?: boolean;
@@ -51,7 +53,7 @@ export interface RenderableAction {
   id: string;
   label: string;
   shortcut: string;
-  iconType?: 'star' | 'copy' | 'paste' | 'delete' | 'queue' | 'ocr' | 'folder';
+  iconType?: 'star' | 'copy' | 'paste' | 'delete' | 'queue' | 'ocr' | 'folder' | 'snippet';
   icon?: React.ReactNode;
   danger?: boolean;
   handler: () => void;
@@ -231,6 +233,18 @@ export const CLIP_ACTIONS: ActionDefinition[] = [
     },
   },
   {
+    id: 'save-as-snippet',
+    getLabel: () => 'Save as Snippet…',
+    shortcut: 'Ctrl+Shift+S',
+    iconType: 'snippet',
+    isVisible: (item, h) =>
+      Boolean(h?.onSaveAsSnippet) &&
+      !item.is_sensitive &&
+      Boolean((item.text_content && item.text_content.trim()) || (item.ocr_text && item.ocr_text.trim()) || (item.qr_content && item.qr_content.trim())),
+    matchesKey: (e) => (e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 's',
+    execute: (item, h) => h.onSaveAsSnippet?.(item),
+  },
+  {
     id: 'add-to-collection',
     getLabel: () => 'Add to Collection...',
     shortcut: 'Ctrl+Shift+A',
@@ -242,10 +256,10 @@ export const CLIP_ACTIONS: ActionDefinition[] = [
   {
     id: 'remove-from-collection',
     getLabel: () => 'Remove from Collection',
-    shortcut: 'Ctrl+Shift+R',
+    shortcut: 'Ctrl+Shift+X',
     iconType: 'folder',
     isVisible: (_, h) => Boolean(h?.isInCollection && h?.onRemoveFromCollection),
-    matchesKey: (e) => (e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'r',
+    matchesKey: (e) => (e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'x',
     execute: (item, h) => h.onRemoveFromCollection?.(item),
   },
   {
@@ -260,7 +274,7 @@ export const CLIP_ACTIONS: ActionDefinition[] = [
   },
 ];
 
-function getActionIcon(iconType?: 'star' | 'copy' | 'paste' | 'delete' | 'queue' | 'ocr' | 'folder', item?: ClipItem) {
+function getActionIcon(iconType?: 'star' | 'copy' | 'paste' | 'delete' | 'queue' | 'ocr' | 'folder' | 'snippet', item?: ClipItem) {
   switch (iconType) {
     case 'star':
       return <StarIcon filled={item?.is_pinned} />;
@@ -274,6 +288,8 @@ function getActionIcon(iconType?: 'star' | 'copy' | 'paste' | 'delete' | 'queue'
       return <QueueIcon />;
     case 'folder':
       return <FolderIcon />;
+    case 'snippet':
+      return <SnippetIcon />;
     case 'delete':
       return <DeleteIcon />;
     default:
@@ -307,6 +323,7 @@ const MAIN_ACTION_IDS = new Set([
   'copy',
   'copy-ocr',
   'copy-qr',
+  'save-as-snippet',
   'add-to-collection',
   'remove-from-collection',
   'pin',
@@ -352,7 +369,7 @@ export function handleClipKeyDown(
   handlers: ClipActionHandlers
 ): boolean {
   for (const act of CLIP_ACTIONS) {
-    if (act.isVisible(item) && act.matchesKey(e)) {
+    if (act.isVisible(item, handlers) && act.matchesKey(e)) {
       e.preventDefault();
       act.execute(item, handlers);
       return true;
