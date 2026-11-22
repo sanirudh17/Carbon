@@ -66,7 +66,7 @@ export const setClipDragData = (
  * Sensitive clips never leave natively (DOM decoy only).
  * ═════════════════════════════════════════════════════════════════════ */
 
-const NATIVE_DRAG_TYPES = new Set(['text', 'code', 'link', 'email', 'image', 'file']);
+const NATIVE_DRAG_TYPES = new Set(['text', 'code', 'link', 'email', 'rich_text', 'color', 'image', 'file']);
 
 export function shouldNativeDrag(item: ClipItem): boolean {
   return !item.is_sensitive && NATIVE_DRAG_TYPES.has(item.content_type);

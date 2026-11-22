@@ -23,8 +23,8 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
-    KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VK_C, VK_CONTROL, VK_LEFT, VK_LWIN, VK_MENU, VK_RIGHT,
-    VK_RWIN, VK_SHIFT, VK_V,
+    KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VK_C, VK_CONTROL, VK_INSERT, VK_LEFT, VK_LWIN, VK_MENU,
+    VK_RIGHT, VK_RWIN, VK_SHIFT, VK_V,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, BringWindowToTop, GetAncestor, GetClassNameW, GetCursorPos,
@@ -1143,12 +1143,27 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform, deselect_after: bo
                 ));
             }
         }
-        // Inject Ctrl+V into focused control
-        inject_ctrl_v();
-        log_diag(&format!(
-            "[PASTE_THREAD] keystrokes sent: Ctrl+V (t+{}ms)",
-            paste_elapsed_ms()
-        ));
+        let is_text_clip = !matches!(restage_item.content_type.as_str(), "image" | "file");
+        let chord = if is_text_clip {
+            terminal_paste_chord_for_hwnd(fg_at_send)
+        } else {
+            PasteChord::CtrlV
+        };
+        inject_paste_chord(chord);
+        match chord {
+            PasteChord::CtrlV => log_diag(&format!(
+                "[PASTE_THREAD] keystrokes sent: Ctrl+V (t+{}ms)",
+                paste_elapsed_ms()
+            )),
+            PasteChord::CtrlShiftV => log_diag(&format!(
+                "[PASTE_THREAD] keystrokes sent: Ctrl+Shift+V (t+{}ms)",
+                paste_elapsed_ms()
+            )),
+            PasteChord::ShiftInsert => log_diag(&format!(
+                "[PASTE_THREAD] keystrokes sent: Shift+Insert (t+{}ms)",
+                paste_elapsed_ms()
+            )),
+        }
 
         // v32-B2 post-check at +250ms: our staged unicode must still own
         // the clipboard. Changed content (or a send-time mismatch) is the
@@ -1195,7 +1210,13 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform, deselect_after: bo
                 }
             }
             thread::sleep(Duration::from_millis(150));
-            inject_ctrl_v();
+            let retry_fg = unsafe { GetForegroundWindow() };
+            let retry_chord = if is_text_clip {
+                terminal_paste_chord_for_hwnd(retry_fg)
+            } else {
+                PasteChord::CtrlV
+            };
+            inject_paste_chord(retry_chord);
             did_retry = true;
             log_diag("[PASTE_THREAD] retry 1/1 injected (same content). No further retries.");
         }
@@ -1850,6 +1871,72 @@ mod tests {
         maybe_deselect_after_drop(true, 0x1234, false);
         maybe_deselect_after_drop(true, 0, true);
     }
+
+    #[test]
+    fn terminal_paste_chord_picks_safe_chord_per_terminal_family() {
+        assert_eq!(
+            terminal_paste_chord_for_class("CASCADIA_HOSTING_WINDOW_CLASS", Some("WindowsTerminal.exe")),
+            PasteChord::CtrlShiftV
+        );
+        assert_eq!(
+            terminal_paste_chord_for_class("Alacritty", Some("alacritty.exe")),
+            PasteChord::CtrlShiftV
+        );
+        assert_eq!(
+            terminal_paste_chord_for_class("WezTerm", Some("wezterm-gui.exe")),
+            PasteChord::CtrlShiftV
+        );
+        assert_eq!(
+            terminal_paste_chord_for_class("mintty", Some("mintty.exe")),
+            PasteChord::ShiftInsert
+        );
+        assert_eq!(
+            terminal_paste_chord_for_class("PuTTYWindowClass", Some("putty.exe")),
+            PasteChord::ShiftInsert
+        );
+        assert_eq!(
+            terminal_paste_chord_for_class("VirtualConsoleClass", Some("ConEmu64.exe")),
+            PasteChord::ShiftInsert
+        );
+        assert_eq!(
+            terminal_paste_chord_for_class("ConsoleWindowClass", Some("cmd.exe")),
+            PasteChord::CtrlV
+        );
+        assert_eq!(
+            terminal_paste_chord_for_class("Chrome_WidgetWin_1", Some("chrome.exe")),
+            PasteChord::CtrlV
+        );
+        assert_eq!(
+            terminal_paste_chord_for_class("Notepad", Some("notepad.exe")),
+            PasteChord::CtrlV
+        );
+    }
+
+    #[test]
+    fn external_drop_fallback_class_blocks_desktop_and_taskbar_but_allows_apps() {
+        assert!(!is_external_drop_fallback_class(""));
+        assert!(!is_external_drop_fallback_class("Progman"));
+        assert!(!is_external_drop_fallback_class("WorkerW"));
+        assert!(!is_external_drop_fallback_class("Shell_TrayWnd"));
+        assert!(!is_external_drop_fallback_class("Shell_SecondaryTrayWnd"));
+        assert!(!is_external_drop_fallback_class("Windows.UI.Core.CoreWindow"));
+
+        assert!(is_external_drop_fallback_class("CASCADIA_HOSTING_WINDOW_CLASS"));
+        assert!(is_external_drop_fallback_class("ConsoleWindowClass"));
+        assert!(is_external_drop_fallback_class("Chrome_WidgetWin_1"));
+        assert!(is_external_drop_fallback_class("Notepad"));
+    }
+
+    #[test]
+    fn known_web_browser_exe_covers_modern_browsers_only() {
+        assert!(is_known_web_browser_exe("chrome.exe"));
+        assert!(is_known_web_browser_exe("Comet.exe"));
+        assert!(is_known_web_browser_exe("Dia.exe"));
+        assert!(is_known_web_browser_exe("zen.exe"));
+        assert!(is_known_web_browser_exe("Arc.exe"));
+        assert!(!is_known_web_browser_exe("WindowsTerminal.exe"));
+        assert!(!is_known_web_browser_exe("notepad.exe"));
+    }
 }
 
 fn open_clipboard_with_retry() -> bool {
@@ -2404,12 +2491,483 @@ fn inject_right_arrow() {
     }
 }
 
+/// Paste shortcut chord selected for a target window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PasteChord {
+    /// Standard Windows paste (`Ctrl+V`).
+    CtrlV,
+    /// Modern terminal host paste (`Ctrl+Shift+V`) — bypasses TUI apps like
+    /// Claude Code that intercept `Ctrl+V` for image paste or raw control input.
+    CtrlShiftV,
+    /// Universal terminal/X11/Chromium paste (`Shift+Insert`) — native in
+    /// mintty, PuTTY, ConEmu, and xterm.js without triggering editor chords.
+    ShiftInsert,
+}
+
+/// Pure classifier selecting the safest text-paste chord for a window class
+/// and optional lowercase executable name (e.g. `"windowsterminal.exe"`).
+pub(crate) fn terminal_paste_chord_for_class(class: &str, exe_name: Option<&str>) -> PasteChord {
+    let exe_lower = exe_name.unwrap_or("").to_lowercase();
+    if class.eq_ignore_ascii_case("CASCADIA_HOSTING_WINDOW_CLASS")
+        || class.eq_ignore_ascii_case("TerminalWindowClass")
+        || class.eq_ignore_ascii_case("WezTerm")
+        || class.eq_ignore_ascii_case("Alacritty")
+        || class.eq_ignore_ascii_case("kitty")
+        || class.eq_ignore_ascii_case("XTerm")
+        || matches!(
+            exe_lower.as_str(),
+            "windowsterminal.exe"
+                | "openconsole.exe"
+                | "wezterm-gui.exe"
+                | "alacritty.exe"
+                | "kitty.exe"
+                | "hyper.exe"
+                | "tabby.exe"
+                | "rio.exe"
+                | "ghostty.exe"
+        )
+    {
+        return PasteChord::CtrlShiftV;
+    }
+
+    if class.eq_ignore_ascii_case("mintty")
+        || class.eq_ignore_ascii_case("PuTTYWindowClass")
+        || class.eq_ignore_ascii_case("ConEmu")
+        || class.eq_ignore_ascii_case("VirtualConsoleClass")
+        || matches!(
+            exe_lower.as_str(),
+            "mintty.exe" | "putty.exe" | "conemu64.exe" | "conemuc64.exe"
+        )
+    {
+        return PasteChord::ShiftInsert;
+    }
+
+    PasteChord::CtrlV
+}
+
+fn terminal_paste_chord_for_hwnd(hwnd: HWND) -> PasteChord {
+    if hwnd.0.is_null() {
+        return PasteChord::CtrlV;
+    }
+    let class = get_window_class_name(hwnd);
+    let exe = get_window_exe_name(hwnd);
+    terminal_paste_chord_for_class(&class, exe.as_deref())
+}
+
+/// Selects the paste chord for a universal drop-fallback (where the target
+/// window REJECTED native OLE `CF_UNICODETEXT` with `DROPEFFECT_NONE`).
+///
+/// For `Chrome_WidgetWin_*` targets that rejected OLE text (e.g. xterm.js
+/// terminals running Claude Code TUI inside VS Code / Cursor / GOAT), uses
+/// `Shift+Insert` — handled natively by Chromium/xterm.js as Paste without
+/// sending raw `^V` into the TUI and without triggering `Ctrl+Shift+V` editor
+/// shortcuts like Markdown Preview.
+fn drop_fallback_paste_chord_for_hwnd(hwnd: HWND) -> PasteChord {
+    let class = get_window_class_name(hwnd);
+    let exe = get_window_exe_name(hwnd);
+    let term_chord = terminal_paste_chord_for_class(&class, exe.as_deref());
+    if term_chord != PasteChord::CtrlV {
+        return term_chord;
+    }
+    if class.starts_with("Chrome_WidgetWin_") {
+        return PasteChord::ShiftInsert;
+    }
+    PasteChord::CtrlV
+}
+
+fn inject_paste_chord(chord: PasteChord) {
+    match chord {
+        PasteChord::CtrlV => inject_ctrl_v(),
+        PasteChord::CtrlShiftV => inject_ctrl_shift_v(),
+        PasteChord::ShiftInsert => inject_shift_insert(),
+    }
+}
+
+/// Sends `Ctrl+Shift+V` (releasing stuck modifiers first) for modern terminals
+/// like Windows Terminal running TUI coding agents (e.g. Claude Code).
+fn inject_ctrl_shift_v() {
+    unsafe {
+        let scan_ctrl = MapVirtualKeyW(VK_CONTROL.0 as u32, MAPVK_VK_TO_VSC) as u16;
+        let scan_shift = MapVirtualKeyW(VK_SHIFT.0 as u32, MAPVK_VK_TO_VSC) as u16;
+        let scan_v = MapVirtualKeyW(VK_V.0 as u32, MAPVK_VK_TO_VSC) as u16;
+        let scan_alt = MapVirtualKeyW(VK_MENU.0 as u32, MAPVK_VK_TO_VSC) as u16;
+        let scan_lwin = MapVirtualKeyW(VK_LWIN.0 as u32, MAPVK_VK_TO_VSC) as u16;
+        let scan_rwin = MapVirtualKeyW(VK_RWIN.0 as u32, MAPVK_VK_TO_VSC) as u16;
+
+        let release_modifiers = [
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_LWIN,
+                        wScan: scan_lwin,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_RWIN,
+                        wScan: scan_rwin,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_MENU,
+                        wScan: scan_alt,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_SHIFT,
+                        wScan: scan_shift,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_CONTROL,
+                        wScan: scan_ctrl,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+        ];
+        SendInput(&release_modifiers, std::mem::size_of::<INPUT>() as i32);
+        thread::sleep(Duration::from_millis(20));
+
+        let mods_down = [
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_CONTROL,
+                        wScan: scan_ctrl,
+                        dwFlags: Default::default(),
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_SHIFT,
+                        wScan: scan_shift,
+                        dwFlags: Default::default(),
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+        ];
+        SendInput(&mods_down, std::mem::size_of::<INPUT>() as i32);
+        thread::sleep(Duration::from_millis(15));
+
+        let v_down = [INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_V,
+                    wScan: scan_v,
+                    dwFlags: Default::default(),
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }];
+        SendInput(&v_down, std::mem::size_of::<INPUT>() as i32);
+        thread::sleep(Duration::from_millis(25));
+
+        let v_up = [INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_V,
+                    wScan: scan_v,
+                    dwFlags: KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }];
+        SendInput(&v_up, std::mem::size_of::<INPUT>() as i32);
+        thread::sleep(Duration::from_millis(15));
+
+        let mods_up = [
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_SHIFT,
+                        wScan: scan_shift,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_CONTROL,
+                        wScan: scan_ctrl,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+        ];
+        SendInput(&mods_up, std::mem::size_of::<INPUT>() as i32);
+    }
+}
+
+/// Sends `Shift+Insert` (with `KEYEVENTF_EXTENDEDKEY` on `VK_INSERT` so Windows
+/// treats scan code 0x52 as dedicated Insert rather than Numpad 0).
+fn inject_shift_insert() {
+    unsafe {
+        let scan_shift = MapVirtualKeyW(VK_SHIFT.0 as u32, MAPVK_VK_TO_VSC) as u16;
+        let scan_ins = MapVirtualKeyW(VK_INSERT.0 as u32, MAPVK_VK_TO_VSC) as u16;
+        let scan_ctrl = MapVirtualKeyW(VK_CONTROL.0 as u32, MAPVK_VK_TO_VSC) as u16;
+        let scan_alt = MapVirtualKeyW(VK_MENU.0 as u32, MAPVK_VK_TO_VSC) as u16;
+        let scan_lwin = MapVirtualKeyW(VK_LWIN.0 as u32, MAPVK_VK_TO_VSC) as u16;
+        let scan_rwin = MapVirtualKeyW(VK_RWIN.0 as u32, MAPVK_VK_TO_VSC) as u16;
+
+        let release_modifiers = [
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_LWIN,
+                        wScan: scan_lwin,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_RWIN,
+                        wScan: scan_rwin,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_MENU,
+                        wScan: scan_alt,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_CONTROL,
+                        wScan: scan_ctrl,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_SHIFT,
+                        wScan: scan_shift,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+        ];
+        SendInput(&release_modifiers, std::mem::size_of::<INPUT>() as i32);
+        thread::sleep(Duration::from_millis(20));
+
+        let shift_down = [INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_SHIFT,
+                    wScan: scan_shift,
+                    dwFlags: Default::default(),
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }];
+        SendInput(&shift_down, std::mem::size_of::<INPUT>() as i32);
+        thread::sleep(Duration::from_millis(15));
+
+        let ins_down = [INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_INSERT,
+                    wScan: scan_ins,
+                    dwFlags: KEYEVENTF_EXTENDEDKEY,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }];
+        SendInput(&ins_down, std::mem::size_of::<INPUT>() as i32);
+        thread::sleep(Duration::from_millis(25));
+
+        let ins_up = [INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_INSERT,
+                    wScan: scan_ins,
+                    dwFlags: KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }];
+        SendInput(&ins_up, std::mem::size_of::<INPUT>() as i32);
+        thread::sleep(Duration::from_millis(15));
+
+        let shift_up = [INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_SHIFT,
+                    wScan: scan_shift,
+                    dwFlags: KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }];
+        SendInput(&shift_up, std::mem::size_of::<INPUT>() as i32);
+    }
+}
+
 /// True when the top-level window class belongs to a web/browser/UWP web host
 /// whose input controls can leave pasted or dropped text selected.
 pub(crate) fn is_web_deselect_window_class(class: &str) -> bool {
     class.starts_with("Chrome_WidgetWin_")
         || class.contains("Mozilla")
         || class == "ApplicationFrameWindow"
+}
+
+fn is_known_web_browser_exe(exe_name: &str) -> bool {
+    let lower = exe_name.to_lowercase();
+    matches!(
+        lower.as_str(),
+        "chrome.exe"
+            | "msedge.exe"
+            | "brave.exe"
+            | "firefox.exe"
+            | "zen.exe"
+            | "arc.exe"
+            | "comet.exe"
+            | "dia.exe"
+            | "opera.exe"
+            | "vivaldi.exe"
+            | "floorp.exe"
+            | "waterfox.exe"
+            | "thorium.exe"
+            | "chromium.exe"
+            | "helium.exe"
+    )
+}
+
+fn is_web_deselect_target(hwnd: HWND) -> (bool, String) {
+    let class = get_window_class_name(hwnd);
+    if is_web_deselect_window_class(&class) {
+        return (true, class);
+    }
+    if let Some(exe) = get_window_exe_name(hwnd) {
+        if is_known_web_browser_exe(&exe) {
+            return (true, format!("{class} ({exe})"));
+        }
+    }
+    (false, class)
+}
+
+/// Probes Windows UI Automation to check whether the currently focused control
+/// still holds a non-empty text selection. Used after post-drop deselect so
+/// slow/re-selecting search bars (such as YouTube's watch-page search input)
+/// receive a confirming Right Arrow ONLY when text is genuinely still selected.
+fn focused_element_has_nonempty_selection() -> bool {
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+    };
+    use windows::Win32::UI::Accessibility::{
+        CUIAutomation, IUIAutomation, IUIAutomationTextPattern, UIA_TextPatternId,
+    };
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let Ok(automation) =
+            CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
+        else {
+            return false;
+        };
+        let Ok(focused) = automation.GetFocusedElement() else {
+            return false;
+        };
+        let Ok(tp) = focused.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+        else {
+            return false;
+        };
+        let Ok(selection) = tp.GetSelection() else {
+            return false;
+        };
+        let count = selection.Length().unwrap_or(0);
+        for idx in 0..count.min(4) {
+            if let Ok(range) = selection.GetElement(idx) {
+                if let Ok(text) = range.GetText(1) {
+                    if !text.is_empty() {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
 }
 
 /// v32-C: optional post-paste deselect (setting-gated, default OFF per
@@ -2422,8 +2980,7 @@ fn maybe_deselect_after_paste(enabled: bool) {
         return;
     }
     let fg = unsafe { GetForegroundWindow() };
-    let class = get_window_class_name(fg);
-    let is_web = is_web_deselect_window_class(&class);
+    let (is_web, class) = is_web_deselect_target(fg);
     log_diag(&format!(
         "[DESELECT] setting on: fg class='{class}' web={is_web}"
     ));
@@ -2434,9 +2991,10 @@ fn maybe_deselect_after_paste(enabled: bool) {
 
 /// Optional post-drop deselect for native OLE text drags into web/browser
 /// inputs (e.g. YouTube search bar). Mirrors `maybe_deselect_after_paste`:
-/// strictly opt-in (`paste_deselect_after`), text-payload only, web-class
-/// scoped, never targets Carbon's own windows, and sends at most ONE
-/// `VK_RIGHT` after verifying the drop target owns foreground focus.
+/// strictly opt-in (`paste_deselect_after`), text-payload only, web-target
+/// scoped, never targets Carbon's own windows, verifies foreground focus,
+/// and uses UIA selection verification so slow/re-selecting search bars like
+/// YouTube never stay highlighted in blue.
 pub(crate) fn maybe_deselect_after_drop(
     enabled: bool,
     target_hwnd_raw: isize,
@@ -2460,8 +3018,7 @@ pub(crate) fn maybe_deselect_after_drop(
         if target_pid == 0 || target_pid == std::process::id() {
             return;
         }
-        let class = get_window_class_name(top);
-        let is_web = is_web_deselect_window_class(&class);
+        let (is_web, class) = is_web_deselect_target(top);
         log_diag(&format!(
             "[DESELECT_DROP] drop target hwnd=0x{:X} class='{}' web={}",
             top.0 as usize, class, is_web
@@ -2474,7 +3031,7 @@ pub(crate) fn maybe_deselect_after_drop(
 
     thread::spawn(move || {
         // Wait for the browser's OLE drop handler to insert & highlight text.
-        thread::sleep(Duration::from_millis(90));
+        thread::sleep(Duration::from_millis(110));
         let target = HWND(root_raw as *mut _);
         if unsafe { !IsWindow(target).as_bool() } {
             return;
@@ -2494,7 +3051,9 @@ pub(crate) fn maybe_deselect_after_drop(
         };
         if !is_target_foreground(target) {
             if try_bring_to_foreground(target) {
-                thread::sleep(Duration::from_millis(40));
+                // Allow Chromium IPC + SPA focus handlers (e.g. YouTube search
+                // bar on a live video page) to settle before sending VK_RIGHT.
+                thread::sleep(Duration::from_millis(110));
             }
         }
         if is_target_foreground(target) {
@@ -2503,11 +3062,154 @@ pub(crate) fn maybe_deselect_after_drop(
                 root_raw as usize
             ));
             inject_right_arrow();
+
+            // UIA verification pass: if a heavy SPA search box (like YouTube)
+            // re-selected on focus or finished dropping late, send one
+            // confirming Right Arrow ONLY when UIA proves selection is active.
+            thread::sleep(Duration::from_millis(120));
+            if is_target_foreground(target) && focused_element_has_nonempty_selection() {
+                log_diag(&format!(
+                    "[DESELECT_DROP] UIA confirmed selection still active in 0x{:X} — sending confirming Right Arrow",
+                    root_raw as usize
+                ));
+                inject_right_arrow();
+            }
         } else {
             log_diag(&format!(
                 "[DESELECT_DROP] skipped Right Arrow: target 0x{:X} not foreground",
                 root_raw as usize
             ));
+        }
+    });
+}
+
+/// Pure classifier rejecting Windows desktop/taskbar/shell chrome surfaces so
+/// universal text drop-fallback never pastes onto empty desktop or taskbar.
+pub(crate) fn is_external_drop_fallback_class(class: &str) -> bool {
+    let lower = class.trim().to_lowercase();
+    if lower.is_empty() {
+        return false;
+    }
+    !matches!(
+        lower.as_str(),
+        "progman"
+            | "workerw"
+            | "shell_traywnd"
+            | "shell_secondarytraywnd"
+            | "notifyiconoverflowwindow"
+            | "toplevelwindowforoverflowxamlisland"
+            | "shell_lightdismissoverlay"
+            | "windows.ui.core.corewindow"
+    )
+}
+
+/// True when `hwnd` is a valid, visible, non-minimized external application
+/// window (not Carbon itself, not Desktop/Taskbar) eligible for universal
+/// text drop-fallback when its OLE `IDropTarget` rejects `CF_UNICODETEXT`.
+pub(crate) fn is_external_drop_fallback_window(hwnd: HWND) -> bool {
+    unsafe {
+        if hwnd.0.is_null() || !IsWindow(hwnd).as_bool() {
+            return false;
+        }
+        let root = GetAncestor(hwnd, GA_ROOT);
+        let top = if root.0.is_null() { hwnd } else { root };
+        if !IsWindow(top).as_bool()
+            || !IsWindowVisible(top).as_bool()
+            || IsIconic(top).as_bool()
+        {
+            return false;
+        }
+        let mut target_pid = 0u32;
+        GetWindowThreadProcessId(top, Some(&mut target_pid));
+        if target_pid == 0 || target_pid == std::process::id() {
+            return false;
+        }
+        let class = get_window_class_name(top);
+        is_external_drop_fallback_class(&class)
+    }
+}
+
+/// Universal drop-fallback for text clips released over external apps whose
+/// OLE `IDropTarget` rejects `CF_UNICODETEXT` (such as Windows Terminal,
+/// PowerShell/cmd, Mintty, WezTerm, Alacritty, and xterm.js coding-agent TUIs
+/// like Claude Code). Stages the clip text cleanly, brings the drop target to
+/// foreground, and sends the target-appropriate paste chord.
+pub(crate) fn deliver_text_drop_fallback(
+    item: ClipItem,
+    target_hwnd_raw: isize,
+    deselect_after: bool,
+) {
+    if target_hwnd_raw == 0 {
+        return;
+    }
+    let target = HWND(target_hwnd_raw as *mut _);
+    if !is_external_drop_fallback_window(target) {
+        return;
+    }
+    let text = item
+        .text_content
+        .clone()
+        .unwrap_or_else(|| item.title.clone());
+    if text.is_empty() {
+        return;
+    }
+
+    thread::spawn(move || {
+        let target = HWND(target_hwnd_raw as *mut _);
+        if unsafe { !IsWindow(target).as_bool() } {
+            return;
+        }
+        // Stage text onto the clipboard and mark as our own paste so Carbon's
+        // clipboard watcher does not re-capture or reorder history.
+        if let Err(e) = write_text_to_clipboard(&text) {
+            log_diag(&format!("[DROP_FALLBACK] failed to stage text: {e}"));
+            return;
+        }
+        crate::clipboard_watcher::mark_paste(&item);
+
+        // Focus the drop target window cleanly.
+        let mut confirmed = false;
+        for _ in 0..4 {
+            if try_bring_to_foreground(target) {
+                confirmed = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        thread::sleep(Duration::from_millis(75));
+
+        let fg = unsafe { GetForegroundWindow() };
+        let fg_root = unsafe { GetAncestor(fg, GA_ROOT) };
+        let owns_fg = fg == target || fg_root == target;
+        if !confirmed && !owns_fg {
+            log_diag(&format!(
+                "[DROP_FALLBACK] aborted: target 0x{:X} did not take foreground",
+                target_hwnd_raw as usize
+            ));
+            return;
+        }
+
+        let chord = drop_fallback_paste_chord_for_hwnd(target);
+        log_diag(&format!(
+            "[DROP_FALLBACK] delivering {} chars to 0x{:X} ({}) via {:?}",
+            text.len(),
+            target_hwnd_raw as usize,
+            get_window_class_name(target),
+            chord
+        ));
+        inject_paste_chord(chord);
+
+        if deselect_after && !is_terminal_window(target) {
+            let (is_web, _) = is_web_deselect_target(target);
+            if is_web {
+                thread::sleep(Duration::from_millis(120));
+                if unsafe {
+                    let cur_fg = GetForegroundWindow();
+                    cur_fg == target || GetAncestor(cur_fg, GA_ROOT) == target
+                } {
+                    inject_right_arrow();
+                }
+            }
         }
     });
 }

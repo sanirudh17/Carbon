@@ -41,20 +41,22 @@ use std::{
     collections::VecDeque,
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
-        mpsc, Mutex,
+        mpsc, Arc, Mutex,
     },
     time::Duration,
 };
 
 use tauri::{AppHandle, State};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_SHIFT};
-use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetCursorPos, WindowFromPoint, GA_ROOT};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetAncestor, GetCursorPos, LoadCursorW, SetCursor, WindowFromPoint, GA_ROOT, IDC_ARROW,
+};
 use windows::{
     core::{GUID, HRESULT, IUnknown, IUnknown_Vtbl, Interface, PCWSTR},
     Win32::{
         Foundation::{
-            BOOL, DV_E_TYMED, E_FAIL, E_NOINTERFACE, E_NOTIMPL, E_POINTER, HGLOBAL, POINT, S_FALSE,
-            S_OK, DV_E_FORMATETC, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP,
+            BOOL, DV_E_TYMED, E_FAIL, E_NOINTERFACE, E_NOTIMPL, E_POINTER, HGLOBAL, HWND, POINT,
+            S_FALSE, S_OK, DV_E_FORMATETC, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP,
             DRAGDROP_S_USEDEFAULTCURSORS,
         },
         System::{
@@ -445,7 +447,7 @@ fn offer_html_bytes(kind: &str, text: &str, html_opt: Option<&str>, item_id: &st
             // v34-F1: text/code/link/rich without stored HTML generate
             // from the clip text (div/br shape); email stays duo.
             None => {
-                if matches!(kind, "text" | "code" | "link" | "rich_text") {
+                if matches!(kind, "text" | "code" | "link" | "rich_text" | "color") {
                     build_cf_html_document(&plain_text_fragment(text)).into_bytes()
                 } else {
                     return None;
@@ -505,7 +507,7 @@ fn build_offers(
     // text/code/link offer unicode+text+DropEffect ONLY (no HTML — web
     // composers take the HTML and insert nothing); email keeps stored
     // HTML (mail acceptance); rich offers validated HTML only.
-    if matches!(kind, "text" | "code" | "link" | "email" | "rich_text") {
+    if matches!(kind, "text" | "code" | "link" | "email" | "rich_text" | "color") {
         let text = item.text_content.clone().unwrap_or_else(|| item.title.clone());
         offers.push(Offer {
             cf_format: CF_UNICODETEXT,
@@ -542,7 +544,7 @@ fn build_offers(
         // v26-F1: Preferred DropEffect COPY hint on text/code/link/rich
         // drags (helps targets show the drop affordance). Email keeps its
         // exact set; image/file handled below.
-        if matches!(kind, "text" | "code" | "link" | "rich_text") {
+        if matches!(kind, "text" | "code" | "link" | "rich_text" | "color") {
             offers.push(Offer {
                 cf_format: cf_drop_effect,
                 tymed: TYMED_HGLOBAL.0 as u32,
@@ -825,6 +827,9 @@ static FORMATENUM_VTBL: IEnumFORMATETC_Vtbl = IEnumFORMATETC_Vtbl {
 struct ClipDropSource {
     vtbl: *const IDropSource_Vtbl,
     refs: AtomicU32,
+    allow_text_fallback: bool,
+    cancelled_by_escape: Arc<AtomicBool>,
+    released_by_mouse_up: Arc<AtomicBool>,
 }
 
 com_unknown!(ClipDropSource, src_qi, src_add, src_rel, [IDropSource::IID]);
@@ -832,14 +837,22 @@ com_unknown!(ClipDropSource, src_qi, src_add, src_rel, [IDropSource::IID]);
 // R8: exactly S_OK / DRAGDROP_S_CANCEL / DRAGDROP_S_DROP — Esc cancels,
 // released buttons drop, held buttons continue. Nothing else, ever.
 unsafe extern "system" fn src_query_continue(
-    _this: *mut std::ffi::c_void,
+    this: *mut std::ffi::c_void,
     fescapepressed: BOOL,
     grfkeystate: MODIFIERKEYS_FLAGS,
 ) -> HRESULT {
     guard_hresult("src_query_continue", || {
         if fescapepressed.as_bool() {
+            if !this.is_null() {
+                let src = unsafe { &*(this as *const ClipDropSource) };
+                src.cancelled_by_escape.store(true, Ordering::SeqCst);
+            }
             DRAGDROP_S_CANCEL
         } else if grfkeystate.0 & (MK_LBUTTON.0 | MK_RBUTTON.0) == 0 {
+            if !this.is_null() {
+                let src = unsafe { &*(this as *const ClipDropSource) };
+                src.released_by_mouse_up.store(true, Ordering::SeqCst);
+            }
             DRAGDROP_S_DROP
         } else {
             S_OK
@@ -848,11 +861,30 @@ unsafe extern "system" fn src_query_continue(
 }
 
 unsafe extern "system" fn src_feedback(
-    _this: *mut std::ffi::c_void,
-    _dweffect: DROPEFFECT,
+    this: *mut std::ffi::c_void,
+    dweffect: DROPEFFECT,
 ) -> HRESULT {
-    // Default cursors: the copy cursor shows for our COPY-only drags.
-    DRAGDROP_S_USEDEFAULTCURSORS
+    guard_hresult("src_feedback", || {
+        if !this.is_null() && dweffect == DROPEFFECT_NONE {
+            let src = unsafe { &*(this as *const ClipDropSource) };
+            if src.allow_text_fallback {
+                let mut pt = POINT::default();
+                if unsafe { GetCursorPos(&mut pt) }.is_ok() {
+                    let hit = unsafe { WindowFromPoint(pt) };
+                    if crate::paste::is_external_drop_fallback_window(hit) {
+                        if let Ok(cur) = unsafe { LoadCursorW(None, IDC_ARROW) } {
+                            unsafe {
+                                SetCursor(cur);
+                            }
+                            return S_OK;
+                        }
+                    }
+                }
+            }
+        }
+        // Default cursors: the copy cursor shows for our COPY-only drags.
+        DRAGDROP_S_USEDEFAULTCURSORS
+    })
 }
 
 static DROPSOURCE_VTBL: IDropSource_Vtbl = IDropSource_Vtbl {
@@ -1195,12 +1227,25 @@ fn new_data_object(
     unsafe { IDataObject::from_raw(Box::into_raw(boxed) as *mut std::ffi::c_void) }
 }
 
+#[cfg(test)]
 fn new_drop_source() -> IDropSource {
+    new_drop_source_with_fallback(false).0
+}
+
+fn new_drop_source_with_fallback(
+    allow_text_fallback: bool,
+) -> (IDropSource, Arc<AtomicBool>, Arc<AtomicBool>) {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let released = Arc::new(AtomicBool::new(false));
     let boxed = Box::new(ClipDropSource {
         vtbl: &DROPSOURCE_VTBL,
         refs: AtomicU32::new(1),
+        allow_text_fallback,
+        cancelled_by_escape: Arc::clone(&cancelled),
+        released_by_mouse_up: Arc::clone(&released),
     });
-    unsafe { IDropSource::from_raw(Box::into_raw(boxed) as *mut std::ffi::c_void) }
+    let source = unsafe { IDropSource::from_raw(Box::into_raw(boxed) as *mut std::ffi::c_void) };
+    (source, cancelled, released)
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────
@@ -1269,6 +1314,11 @@ fn begin_clip_drag_inner(
         item.content_type.as_str(),
         "text" | "code" | "link" | "email" | "color" | "rich_text"
     );
+    let fallback_item = if is_text_payload {
+        Some(item.clone())
+    } else {
+        None
+    };
     drag_log(&format!(
         "[NATIVE_DRAG] begin id='{}' type='{}' offering {} formats: {} (staged={})",
         item.id,
@@ -1299,6 +1349,7 @@ fn begin_clip_drag_inner(
                 cf_file_group,
                 deselect_after,
                 is_text_payload,
+                fallback_item,
             )
         }));
         let outcome = match result {
@@ -1341,6 +1392,7 @@ unsafe fn run_modal_drag(
     cf_file_group: u32,
     deselect_after: bool,
     is_text_payload: bool,
+    fallback_item: Option<crate::db::ClipItem>,
 ) -> std::result::Result<String, String> {
     unsafe {
         drag_log("[NATIVE_DRAG] handler entered on main STA thread");
@@ -1365,20 +1417,17 @@ unsafe fn run_modal_drag(
         // Keep the temp staging alive for the whole modal loop.
         let _staged = staged;
         let dataobj = new_data_object(offers, gate_text, cf_html, cf_chromium_mime, cf_file_group);
-        let source = new_drop_source();
+        let (source, cancelled_by_escape, released_by_mouse_up) =
+            new_drop_source_with_fallback(is_text_payload);
         // COPY-only: supported targets always report COPY, so the
         // circle-slash cursor is unreachable for them.
         let mut effect = DROPEFFECT_NONE;
         drag_log("[NATIVE_DRAG] DoDragDrop entered");
         let hr = DoDragDrop(&dataobj, &source, DROPEFFECT_COPY, &mut effect);
         // Resolve the drop target window immediately while cursor is still at
-        // the drop point, so opt-in post-drop deselect can collapse browser
-        // selection highlights cleanly.
-        let drop_root_raw = if deselect_after
-            && is_text_payload
-            && hr == DRAGDROP_S_DROP
-            && effect != DROPEFFECT_NONE
-        {
+        // the drop point, for both post-drop deselect AND universal drop-fallback
+        // into terminals / TUI coding agents whose IDropTarget rejects text.
+        let drop_root_raw = if is_text_payload {
             let mut pt = POINT::default();
             if GetCursorPos(&mut pt).is_ok() {
                 let hit = WindowFromPoint(pt);
@@ -1436,12 +1485,40 @@ unsafe fn run_modal_drag(
         if hr_failed(hr) {
             return Err(format!("native drag failed: {hr:?}"));
         }
-        if drop_root_raw != 0 {
-            crate::paste::maybe_deselect_after_drop(
-                deselect_after,
-                drop_root_raw,
-                is_text_payload,
-            );
+        if hr == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE {
+            if deselect_after && drop_root_raw != 0 {
+                crate::paste::maybe_deselect_after_drop(
+                    deselect_after,
+                    drop_root_raw,
+                    is_text_payload,
+                );
+            }
+            return Ok(effect_name(effect.0).to_string());
+        }
+        // Universal text drop-fallback: when the user intentionally released
+        // the mouse over an external app (e.g. Windows Terminal / Claude Code
+        // TUI / xterm.js / non-OLE input) that rejected CF_UNICODETEXT with
+        // DROPEFFECT_NONE, deliver via clipboard + target-appropriate paste.
+        if is_text_payload
+            && effect == DROPEFFECT_NONE
+            && released_by_mouse_up.load(Ordering::SeqCst)
+            && !cancelled_by_escape.load(Ordering::SeqCst)
+            && drop_root_raw != 0
+        {
+            if let Some(clip_item) = fallback_item {
+                if crate::paste::is_external_drop_fallback_window(HWND(drop_root_raw as *mut _)) {
+                    drag_log(&format!(
+                        "[NATIVE_DRAG] OLE target 0x{:X} returned DROPEFFECT_NONE on release — invoking universal text drop-fallback",
+                        drop_root_raw as usize
+                    ));
+                    crate::paste::deliver_text_drop_fallback(
+                        clip_item,
+                        drop_root_raw,
+                        deselect_after,
+                    );
+                    return Ok("copy".to_string());
+                }
+            }
         }
         Ok(effect_name(effect.0).to_string())
     }

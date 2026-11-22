@@ -212,4 +212,28 @@ test('deselect after paste and drag-drop uses KEYEVENTF_EXTENDEDKEY, web-class m
   assert.ok(dragRs.includes('GetCursorPos') && dragRs.includes('WindowFromPoint') && dragRs.includes('GetAncestor'), 'run_modal_drag must resolve drop target window');
   assert.ok(dragRs.includes('hr == DRAGDROP_S_DROP') && dragRs.includes('effect != DROPEFFECT_NONE'), 'post-drop deselect must only trigger on successful drops');
   assert.ok(dragRs.includes('crate::paste::maybe_deselect_after_drop'), 'run_modal_drag must invoke maybe_deselect_after_drop');
+
+  // UIA verification pass for slow/re-selecting SPA inputs (e.g. YouTube search bar).
+  assert.ok(pasteRs.includes('fn focused_element_has_nonempty_selection'), 'post-drop deselect must verify lingering selection via UIA');
+
+  // Universal text drag-and-drop & terminal/TUI paste support.
+  const clipDragTs = fs.readFileSync(path.join(SRC_DIR, 'utils', 'clipDrag.ts'), 'utf8');
+  assert.ok(
+    clipDragTs.includes("'rich_text'") && clipDragTs.includes("'color'"),
+    'clipDrag.ts must route rich_text and color through native drag alongside text/code/link/email'
+  );
+  assert.ok(
+    pasteRs.includes('fn inject_ctrl_shift_v()') && pasteRs.includes('fn inject_shift_insert()'),
+    'paste.rs must support Ctrl+Shift+V and Shift+Insert for terminals and TUI coding agents'
+  );
+  assert.ok(
+    pasteRs.includes('wVk: VK_INSERT') && pasteRs.includes('dwFlags: KEYEVENTF_EXTENDEDKEY'),
+    'Shift+Insert must mark VK_INSERT with KEYEVENTF_EXTENDEDKEY'
+  );
+  assert.ok(
+    dragRs.includes('crate::paste::deliver_text_drop_fallback') &&
+      dragRs.includes('is_external_drop_fallback_window') &&
+      dragRs.includes('released_by_mouse_up'),
+    'native_drag.rs must provide universal text drop-fallback when a terminal/TUI rejects OLE text'
+  );
 });
