@@ -389,9 +389,27 @@ test('Commit 2 features: caret overlay placement, reorderable paste stack drawer
   const expansionRs = fs.readFileSync(path.join(SRC_TAURI, 'expansion.rs'), 'utf8');
   const libRs = fs.readFileSync(path.join(SRC_TAURI, 'lib.rs'), 'utf8');
 
-  assert.ok(settingsSrc.includes("updateSetting('overlay_position'") && !settingsSrc.includes("{ value: 'cursor'"), 'Settings must expose clean 2-option Center | Caret selector');
-  assert.ok(hotkeyRs.includes('resolve_overlay_position') && hotkeyRs.includes('probe_active_caret_with_source'), 'hotkey.rs must anchor overlay using UIA+Win32 caret probe with cursor fallback');
-  assert.ok(expansionRs.includes('IUIAutomationTextPattern2') && expansionRs.includes('GetCaretRange'), 'expansion.rs must probe modern Chromium/Electron/WinUI carets via UIA TextPattern2');
+  assert.ok(
+    settingsSrc.includes("updateSetting('overlay_position'") &&
+      settingsSrc.includes("{ value: 'center', label: 'Center' }") &&
+      settingsSrc.includes("{ value: 'caret', label: 'Caret' }") &&
+      settingsSrc.includes("{ value: 'cursor', label: 'Cursor' }"),
+    'Settings must expose 3-option Center | Caret | Cursor selector'
+  );
+  assert.ok(
+    hotkeyRs.includes('resolve_overlay_position') &&
+      hotkeyRs.includes('probe_active_caret_with_source') &&
+      hotkeyRs.includes('clamp_cursor_rect') &&
+      hotkeyRs.includes('calculate_cursor_overlay_position') &&
+      hotkeyRs.includes('foreground_window_center_position'),
+    'hotkey.rs must keep Caret (caret + fg-window fallback) and Cursor (centered on mouse pointer) distinct'
+  );
+  assert.ok(
+    expansionRs.includes('IUIAutomationTextPattern2') &&
+      expansionRs.includes('GetCaretRange') &&
+      expansionRs.includes('uia-focus-editor'),
+    'expansion.rs must probe modern Chromium/Electron/WinUI carets and tall multiline editors via UIA'
+  );
   assert.ok(overlaySrc.includes('<PasteStackDrawer') && enlargedSrc.includes('<PasteStackDrawer'), 'Both windows must render interactive PasteStackDrawer');
   assert.ok(enlargedSrc.includes("listen('paste-queue-updated'") && enlargedSrc.includes('onQueueChange={fetchQueue}') && overlaySrc.includes('onQueueChange={fetchQueue}'), 'Both windows must stay in sync with paste-queue-updated and pass onQueueChange');
   assert.ok(drawerSrc.includes('onPointerDown') && !drawerSrc.includes('draggable'), 'PasteStackDrawer must use pointer-event drag-to-reorder instead of HTML5 draggable (prevents red no-drop cursor in WebView2)');

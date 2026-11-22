@@ -155,7 +155,8 @@ fn sanitize_settings(s: &mut AppSettings) {
         s.overlay_default_tab = "clips".to_string();
     }
     s.overlay_position = match s.overlay_position.trim().to_lowercase().as_str() {
-        "caret" | "cursor" => "caret".to_string(),
+        "caret" => "caret".to_string(),
+        "cursor" => "cursor".to_string(),
         _ => "center".to_string(),
     };
     s.clip_merge_window_ms = s.clip_merge_window_ms.clamp(500, 10000);
@@ -501,8 +502,9 @@ mod tests {
             ("center", "center"),
             ("CARET", "caret"),
             (" Caret ", "caret"),
-            ("cursor", "caret"),
-            ("CURSOR", "caret"),
+            ("cursor", "cursor"),
+            ("CURSOR", "cursor"),
+            (" Cursor ", "cursor"),
             ("floating", "center"),
             ("", "center"),
         ] {

@@ -2655,10 +2655,12 @@ impl HotkeyManager {
 
 /// Resolves the Quick Overlay screen position according to `settings.overlay_position`:
 /// - `"center"` (default): centered on the monitor containing the cursor.
-/// - `"caret"`: anchored cleanly beneath (or flipped above) the active text caret,
-///   falling back gracefully to the cursor position when the foreground app does
-///   not expose a native Win32 caret.
-/// - `"cursor"`: anchored cleanly near the current mouse pointer.
+/// - `"caret"`: left-aligned beneath (or flipped above) the active typing caret;
+///   when no text caret or focused text control exists, centers in the active
+///   foreground window (or monitor center if none) — never silently jumping to
+///   the mouse pointer.
+/// - `"cursor"`: horizontally centered beneath (or flipped above) the live
+///   mouse pointer.
 pub(crate) fn resolve_overlay_position(
     app_handle: &AppHandle,
     logical_w: i32,
@@ -2672,14 +2674,22 @@ pub(crate) fn resolve_overlay_position(
 
     let (pos, source, anchor) = match mode.as_str() {
         "caret" => {
-            let ((ax, ay), src) = crate::expansion::probe_active_caret_with_source()
-                .unwrap_or_else(|| (get_cursor_position(), "cursor-fallback"));
-            let p = calculate_anchored_overlay_position(ax, ay, logical_w, logical_h, scale_factor);
-            (p, src, (ax, ay))
+            if let Some(((ax, ay), src)) = crate::expansion::probe_active_caret_with_source() {
+                let p = calculate_anchored_overlay_position(ax, ay, logical_w, logical_h, scale_factor);
+                (p, src, (ax, ay))
+            } else if let Some((p, center)) =
+                foreground_window_center_position(logical_w, logical_h, scale_factor)
+            {
+                (p, "fg-window-center", center)
+            } else {
+                let (cx, cy) = get_cursor_position();
+                let p = calculate_overlay_position(cx, cy, logical_w, logical_h, scale_factor);
+                (p, "monitor-center-fallback", (cx, cy))
+            }
         }
         "cursor" => {
             let (cx, cy) = get_cursor_position();
-            let p = calculate_anchored_overlay_position(cx, cy, logical_w, logical_h, scale_factor);
+            let p = calculate_cursor_overlay_position(cx, cy, logical_w, logical_h, scale_factor);
             (p, "cursor", (cx, cy))
         }
         _ => {
@@ -2693,6 +2703,189 @@ pub(crate) fn resolve_overlay_position(
         mode, source, anchor.0, anchor.1, pos.0, pos.1
     ));
     pos
+}
+
+/// Centers the overlay inside the active foreground application window (falling
+/// back to the saved target window if Carbon itself is currently foreground),
+/// strictly clamped to that window's monitor work area. Returns `None` for the
+/// desktop/shell or invalid/minimized windows so callers can fall back cleanly
+/// to monitor center.
+fn foreground_window_center_position(
+    logical_w: i32,
+    logical_h: i32,
+    scale_factor: f64,
+) -> Option<((i32, i32), (i32, i32))> {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsIconic,
+        IsWindow, IsWindowVisible,
+    };
+
+    unsafe {
+        let my_pid = std::process::id();
+        let mut hwnd = GetForegroundWindow();
+        let mut pid = 0u32;
+        if !hwnd.0.is_null() {
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        }
+        if hwnd.0.is_null() || pid == 0 || pid == my_pid {
+            if let Some(saved) = crate::paste::peek_target_hwnd() {
+                hwnd = HWND(saved as *mut _);
+                pid = 0;
+                if !hwnd.0.is_null() {
+                    GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                }
+            }
+        }
+        if hwnd.0.is_null()
+            || pid == 0
+            || pid == my_pid
+            || !IsWindow(hwnd).as_bool()
+            || !IsWindowVisible(hwnd).as_bool()
+            || IsIconic(hwnd).as_bool()
+        {
+            return None;
+        }
+
+        let mut class_buf = [0u16; 128];
+        let class_len = GetClassNameW(hwnd, &mut class_buf);
+        if class_len > 0 {
+            let class_name = String::from_utf16_lossy(&class_buf[..class_len as usize]);
+            let lower = class_name.to_lowercase();
+            if matches!(
+                lower.as_str(),
+                "progman"
+                    | "workerw"
+                    | "shell_traywnd"
+                    | "shell_secondarytraywnd"
+                    | "shell_lightdismissoverlay"
+            ) {
+                return None;
+            }
+        }
+
+        let mut rc = RECT::default();
+        if GetWindowRect(hwnd, &mut rc).is_err() {
+            return None;
+        }
+        let w = rc.right - rc.left;
+        let h = rc.bottom - rc.top;
+        if w <= 100 || h <= 100 {
+            return None;
+        }
+
+        let wx = rc.left + w / 2;
+        let wy = rc.top + h / 2;
+        let pt = windows::Win32::Foundation::POINT { x: wx, y: wy };
+        let hmon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !GetMonitorInfoW(hmon, &mut info).as_bool() {
+            return None;
+        }
+        let work = info.rcWork;
+        let phys_w = (logical_w as f64 * scale_factor).round() as i32;
+        let phys_h = (logical_h as f64 * scale_factor).round() as i32;
+        let avail_w = work.right - work.left;
+        let avail_h = work.bottom - work.top;
+        if avail_w <= phys_w || avail_h <= phys_h {
+            return Some(((work.left, work.top), (wx, wy)));
+        }
+
+        let margin = (12.0 * scale_factor).round() as i32;
+        let min_x = work.left + margin;
+        let max_x = (work.right - margin - phys_w).max(min_x);
+        let min_y = work.top + margin;
+        let max_y = (work.bottom - margin - phys_h).max(min_y);
+
+        let x = (wx - phys_w / 2).clamp(min_x, max_x);
+        let y = (wy - phys_h / 2).clamp(min_y, max_y);
+        Some(((x, y), (wx, wy)))
+    }
+}
+
+/// Pure work-area clamping for mouse-cursor placement:
+/// horizontally centered on the pointer (`cx - phys_w / 2`) and tucked cleanly
+/// below the pointer (`cy + 18`), flipping cleanly above (`cy - 18 - phys_h`)
+/// near the bottom edge. Always strictly clamped inside the monitor's work area.
+pub(crate) fn clamp_cursor_rect(
+    cx: i32,
+    cy: i32,
+    phys_w: i32,
+    phys_h: i32,
+    work_left: i32,
+    work_top: i32,
+    work_right: i32,
+    work_bottom: i32,
+    scale_factor: f64,
+) -> (i32, i32) {
+    let avail_w = work_right - work_left;
+    let avail_h = work_bottom - work_top;
+    if avail_w <= phys_w || avail_h <= phys_h {
+        return (work_left, work_top);
+    }
+
+    let margin = (12.0 * scale_factor).round() as i32;
+    let offset_y = (18.0 * scale_factor).round() as i32;
+
+    let min_x = work_left + margin;
+    let max_x = (work_right - margin - phys_w).max(min_x);
+    let min_y = work_top + margin;
+    let max_y = (work_bottom - margin - phys_h).max(min_y);
+
+    let ideal_x = (cx - phys_w / 2).clamp(min_x, max_x);
+    let below_y = cy + offset_y;
+    let above_y = cy - offset_y - phys_h;
+    let fits_below = below_y + phys_h <= work_bottom - margin;
+    let fits_above = above_y >= min_y;
+
+    let y = if fits_below {
+        below_y.clamp(min_y, max_y)
+    } else if fits_above {
+        above_y.clamp(min_y, max_y)
+    } else {
+        (cy - phys_h / 2).clamp(min_y, max_y)
+    };
+
+    (ideal_x, y)
+}
+
+pub fn calculate_cursor_overlay_position(
+    cx: i32,
+    cy: i32,
+    logical_w: i32,
+    logical_h: i32,
+    scale_factor: f64,
+) -> (i32, i32) {
+    unsafe {
+        let pt = windows::Win32::Foundation::POINT { x: cx, y: cy };
+        let hmon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+
+        if GetMonitorInfoW(hmon, &mut info).as_bool() {
+            let work = info.rcWork;
+            let phys_w = (logical_w as f64 * scale_factor).round() as i32;
+            let phys_h = (logical_h as f64 * scale_factor).round() as i32;
+            clamp_cursor_rect(
+                cx,
+                cy,
+                phys_w,
+                phys_h,
+                work.left,
+                work.top,
+                work.right,
+                work.bottom,
+                scale_factor,
+            )
+        } else {
+            calculate_overlay_position(cx, cy, logical_w, logical_h, scale_factor)
+        }
+    }
 }
 
 /// Pure work-area clamping for caret/cursor-anchored placement:
@@ -2829,7 +3022,7 @@ pub fn calculate_overlay_position(cx: i32, cy: i32, logical_w: i32, logical_h: i
 
 #[cfg(test)]
 mod present_generation_tests {
-    use super::{clamp_anchored_rect, prepared_generation_matches};
+    use super::{clamp_anchored_rect, clamp_cursor_rect, prepared_generation_matches};
     #[test]
     fn only_the_current_prepared_generation_can_reveal() {
         assert!(prepared_generation_matches(7, 7, 7));
@@ -2859,5 +3052,37 @@ mod present_generation_tests {
         let (xl, yl) = clamp_anchored_rect(1600, 670, 1125, 713, 0, 0, 1920, 1040, 1.5);
         assert!(xl > xh, "right anchor should open further right than left anchor ({xl} vs {xh})");
         assert!(yl > yh, "lower anchor should open lower than upper anchor ({yl} vs {yh})");
+    }
+
+    #[test]
+    fn cursor_overlay_centers_horizontally_and_is_distinct_from_caret_anchor() {
+        // Same coordinate (500, 200) on 1920x1040 work area with 750x475 overlay:
+        // Caret mode left-aligns near the caret; Cursor mode centers horizontally on the pointer.
+        let (caret_x, caret_y) = clamp_anchored_rect(500, 200, 750, 475, 0, 0, 1920, 1040, 1.0);
+        let (cursor_x, cursor_y) = clamp_cursor_rect(500, 200, 750, 475, 0, 0, 1920, 1040, 1.0);
+
+        assert_eq!(caret_x, 484); // 500 - 16
+        assert_eq!(caret_y, 210); // 200 + 10
+        assert_eq!(cursor_x, 125); // 500 - 750/2
+        assert_eq!(cursor_y, 218); // 200 + 18
+        assert_ne!(
+            (caret_x, caret_y),
+            (cursor_x, cursor_y),
+            "Caret and Cursor placements must be unmistakably distinct"
+        );
+
+        // Near bottom edge (960, 900): flips cleanly above pointer (900 - 18 - 475 = 407)
+        let (flip_x, flip_y) = clamp_cursor_rect(960, 900, 750, 475, 0, 0, 1920, 1040, 1.0);
+        assert_eq!(flip_x, 960 - 375);
+        assert_eq!(flip_y, 900 - 18 - 475);
+
+        // Near left & right edges: strictly clamped inside work area with 12px margin
+        let (left_x, left_y) = clamp_cursor_rect(40, 200, 750, 475, 0, 0, 1920, 1040, 1.0);
+        assert_eq!(left_x, 12);
+        assert_eq!(left_y, 218);
+
+        let (right_x, right_y) = clamp_cursor_rect(1900, 200, 750, 475, 0, 0, 1920, 1040, 1.0);
+        assert_eq!(right_x, 1920 - 12 - 750);
+        assert_eq!(right_y, 218);
     }
 }
