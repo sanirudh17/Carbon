@@ -22,14 +22,15 @@ use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
-    KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VK_C, VK_CONTROL, VK_INSERT, VK_LEFT, VK_LWIN, VK_MENU,
+    MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
+    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, MOUSEEVENTF_LEFTDOWN,
+    MOUSEEVENTF_LEFTUP, MOUSEINPUT, VK_C, VK_CONTROL, VK_INSERT, VK_LEFT, VK_LWIN, VK_MENU,
     VK_RIGHT, VK_RWIN, VK_SHIFT, VK_V,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, BringWindowToTop, GetAncestor, GetClassNameW, GetCursorPos,
     GetForegroundWindow, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-    IsWindow, IsWindowVisible, SetForegroundWindow, GA_ROOT,
+    IsWindow, IsWindowVisible, SetCursorPos, SetForegroundWindow, GA_ROOT,
 };
 
 const CF_DIB: u32 = 8;
@@ -1874,9 +1875,11 @@ mod tests {
 
     #[test]
     fn terminal_paste_chord_picks_safe_chord_per_terminal_family() {
+        // Windows Terminal binds Terminal.PasteFromClipboard to Ctrl+V (which
+        // sends bracketed paste universally to Claude Code, OpenCode, Codex, etc.).
         assert_eq!(
             terminal_paste_chord_for_class("CASCADIA_HOSTING_WINDOW_CLASS", Some("WindowsTerminal.exe")),
-            PasteChord::CtrlShiftV
+            PasteChord::CtrlV
         );
         assert_eq!(
             terminal_paste_chord_for_class("Alacritty", Some("alacritty.exe")),
@@ -2505,20 +2508,26 @@ pub(crate) enum PasteChord {
 }
 
 /// Pure classifier selecting the safest text-paste chord for a window class
-/// and optional lowercase executable name (e.g. `"windowsterminal.exe"`).
+/// and optional lowercase executable name (e.g. `"wezterm-gui.exe"`).
+///
+/// - Windows Terminal (`CASCADIA_HOSTING_WINDOW_CLASS`) and Conhost
+///   (`ConsoleWindowClass`) use `Ctrl+V` (Windows Terminal's default &
+///   user-configured `Terminal.PasteFromClipboard` binding, which delivers
+///   bracketed paste universally to Claude Code, OpenCode, Codex, PowerShell,
+///   and WSL).
+/// - Non-Ctrl+V GPU/Unix terminals (WezTerm, Alacritty, Kitty, Hyper, Tabby,
+///   Rio, Ghostty, XTerm) use `Ctrl+Shift+V`.
+/// - Classic Unix-on-Windows terminals (Mintty, PuTTY, ConEmu) use `Shift+Insert`.
+/// - Electron / Chromium / Win32 apps use `Ctrl+V`.
 pub(crate) fn terminal_paste_chord_for_class(class: &str, exe_name: Option<&str>) -> PasteChord {
     let exe_lower = exe_name.unwrap_or("").to_lowercase();
-    if class.eq_ignore_ascii_case("CASCADIA_HOSTING_WINDOW_CLASS")
-        || class.eq_ignore_ascii_case("TerminalWindowClass")
-        || class.eq_ignore_ascii_case("WezTerm")
+    if class.eq_ignore_ascii_case("WezTerm")
         || class.eq_ignore_ascii_case("Alacritty")
         || class.eq_ignore_ascii_case("kitty")
         || class.eq_ignore_ascii_case("XTerm")
         || matches!(
             exe_lower.as_str(),
-            "windowsterminal.exe"
-                | "openconsole.exe"
-                | "wezterm-gui.exe"
+            "wezterm-gui.exe"
                 | "alacritty.exe"
                 | "kitty.exe"
                 | "hyper.exe"
@@ -2556,23 +2565,12 @@ fn terminal_paste_chord_for_hwnd(hwnd: HWND) -> PasteChord {
 
 /// Selects the paste chord for a universal drop-fallback (where the target
 /// window REJECTED native OLE `CF_UNICODETEXT` with `DROPEFFECT_NONE`).
-///
-/// For `Chrome_WidgetWin_*` targets that rejected OLE text (e.g. xterm.js
-/// terminals running Claude Code TUI inside VS Code / Cursor / GOAT), uses
-/// `Shift+Insert` — handled natively by Chromium/xterm.js as Paste without
-/// sending raw `^V` into the TUI and without triggering `Ctrl+Shift+V` editor
-/// shortcuts like Markdown Preview.
+/// Uses the same target-native chord as direct paste (`Ctrl+V` for Windows
+/// Terminal, Conhost, and Electron/Chromium apps like GOAT, VS Code, Cursor,
+/// OpenCode, and Codex; `Ctrl+Shift+V` for WezTerm/Alacritty/Kitty; and
+/// `Shift+Insert` for Mintty/PuTTY/ConEmu).
 fn drop_fallback_paste_chord_for_hwnd(hwnd: HWND) -> PasteChord {
-    let class = get_window_class_name(hwnd);
-    let exe = get_window_exe_name(hwnd);
-    let term_chord = terminal_paste_chord_for_class(&class, exe.as_deref());
-    if term_chord != PasteChord::CtrlV {
-        return term_chord;
-    }
-    if class.starts_with("Chrome_WidgetWin_") {
-        return PasteChord::ShiftInsert;
-    }
-    PasteChord::CtrlV
+    terminal_paste_chord_for_hwnd(hwnd)
 }
 
 fn inject_paste_chord(chord: PasteChord) {
@@ -3053,7 +3051,7 @@ pub(crate) fn maybe_deselect_after_drop(
             if try_bring_to_foreground(target) {
                 // Allow Chromium IPC + SPA focus handlers (e.g. YouTube search
                 // bar on a live video page) to settle before sending VK_RIGHT.
-                thread::sleep(Duration::from_millis(110));
+                thread::sleep(Duration::from_millis(120));
             }
         }
         if is_target_foreground(target) {
@@ -3063,16 +3061,23 @@ pub(crate) fn maybe_deselect_after_drop(
             ));
             inject_right_arrow();
 
-            // UIA verification pass: if a heavy SPA search box (like YouTube)
-            // re-selected on focus or finished dropping late, send one
-            // confirming Right Arrow ONLY when UIA proves selection is active.
-            thread::sleep(Duration::from_millis(120));
-            if is_target_foreground(target) && focused_element_has_nonempty_selection() {
-                log_diag(&format!(
-                    "[DESELECT_DROP] UIA confirmed selection still active in 0x{:X} — sending confirming Right Arrow",
-                    root_raw as usize
-                ));
-                inject_right_arrow();
+            // UIA verification pass (up to 2 checks at +120ms and +160ms): if a
+            // heavy SPA search box (like YouTube during video decode) re-selected
+            // on focus or finished dropping late, send at most ONE confirming
+            // Right Arrow ONLY when UIA proves selection is still non-empty.
+            for wait_ms in [120u64, 160u64] {
+                thread::sleep(Duration::from_millis(wait_ms));
+                if !is_target_foreground(target) {
+                    break;
+                }
+                if focused_element_has_nonempty_selection() {
+                    log_diag(&format!(
+                        "[DESELECT_DROP] UIA confirmed selection still active in 0x{:X} (+{}ms) — sending confirming Right Arrow",
+                        root_raw as usize, wait_ms
+                    ));
+                    inject_right_arrow();
+                    break;
+                }
             }
         } else {
             log_diag(&format!(
@@ -3129,14 +3134,78 @@ pub(crate) fn is_external_drop_fallback_window(hwnd: HWND) -> bool {
     }
 }
 
+/// True when `hwnd` is a terminal emulator or coding-agent / IDE host where
+/// `GiveFeedback` should replace OLE's 🚫 no-drop circle with a clean pointer
+/// during text drags (while leaving image-only browser drop zones untouched).
+pub(crate) fn is_terminal_or_agent_host_window(hwnd: HWND) -> bool {
+    if !is_external_drop_fallback_window(hwnd) {
+        return false;
+    }
+    let root = unsafe {
+        let r = GetAncestor(hwnd, GA_ROOT);
+        if r.0.is_null() { hwnd } else { r }
+    };
+    if is_terminal_window(root) {
+        return true;
+    }
+    if let Some(exe) = get_window_exe_name(root) {
+        let lower = exe.to_lowercase();
+        return matches!(
+            lower.as_str(),
+            "code.exe"
+                | "code - insiders.exe"
+                | "cursor.exe"
+                | "windsurf.exe"
+                | "zed.exe"
+                | "warp.exe"
+                | "hyper.exe"
+                | "tabby.exe"
+                | "rio.exe"
+                | "ghostty.exe"
+                | "opencode.exe"
+                | "codex.exe"
+        ) || lower.starts_with("goat");
+    }
+    false
+}
+
+/// True when `hwnd` should use Carbon's universal text drop-fallback after OLE
+/// `DoDragDrop` returns `DROPEFFECT_NONE`:
+/// - All terminal emulators & coding-agent / IDE hosts (`is_terminal_or_agent_host_window`)
+/// - Non-browser Win32/desktop applications whose text controls lack an OLE drop target
+/// Excludes standalone web browsers (Chrome, Edge, Firefox, Zen, Arc, Comet, Dia, etc.),
+/// where every real `<input>`/`<textarea>`/`contenteditable` already accepts native OLE
+/// `CF_UNICODETEXT` (`DROPEFFECT_COPY`) and `DROPEFFECT_NONE` means non-text / image-only area.
+pub(crate) fn should_use_text_drop_fallback(hwnd: HWND) -> bool {
+    if !is_external_drop_fallback_window(hwnd) {
+        return false;
+    }
+    if is_terminal_or_agent_host_window(hwnd) {
+        return true;
+    }
+    let root = unsafe {
+        let r = GetAncestor(hwnd, GA_ROOT);
+        if r.0.is_null() { hwnd } else { r }
+    };
+    if let Some(exe) = get_window_exe_name(root) {
+        if is_known_web_browser_exe(&exe) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Universal drop-fallback for text clips released over external apps whose
 /// OLE `IDropTarget` rejects `CF_UNICODETEXT` (such as Windows Terminal,
-/// PowerShell/cmd, Mintty, WezTerm, Alacritty, and xterm.js coding-agent TUIs
-/// like Claude Code). Stages the clip text cleanly, brings the drop target to
-/// foreground, and sends the target-appropriate paste chord.
+/// PowerShell/cmd, Mintty, WezTerm, Alacritty, and coding-agent TUIs like
+/// Claude Code, OpenCode, and Codex). Stages the clip text cleanly, brings the
+/// drop target to foreground (clicking the dropped terminal viewport if needed
+/// so multi-pane terminals focus the right pane), and sends the target's
+/// native paste chord.
 pub(crate) fn deliver_text_drop_fallback(
     item: ClipItem,
     target_hwnd_raw: isize,
+    drop_pt: Option<(i32, i32)>,
     deselect_after: bool,
 ) {
     if target_hwnd_raw == 0 {
@@ -3176,7 +3245,49 @@ pub(crate) fn deliver_text_drop_fallback(
             }
             thread::sleep(Duration::from_millis(20));
         }
-        thread::sleep(Duration::from_millis(75));
+        thread::sleep(Duration::from_millis(60));
+
+        // For split-pane terminal emulators, focus the exact pane under the
+        // drop point (strictly inside the terminal body, away from title/tabs)
+        // so dropping onto an inactive OpenCode / Codex / Claude Code pane
+        // lands in the dropped pane rather than an unrelated split.
+        if is_terminal_window(target) {
+            if let Some((dx, dy)) = drop_pt {
+                let mut rect = RECT::default();
+                if unsafe { GetWindowRect(target, &mut rect) }.is_ok()
+                    && dx > rect.left + 8
+                    && dx < rect.right - 8
+                    && dy > rect.top + 48
+                    && dy < rect.bottom - 12
+                {
+                    unsafe {
+                        let _ = SetCursorPos(dx, dy);
+                        let click = [
+                            INPUT {
+                                r#type: INPUT_MOUSE,
+                                Anonymous: INPUT_0 {
+                                    mi: MOUSEINPUT {
+                                        dwFlags: MOUSEEVENTF_LEFTDOWN,
+                                        ..Default::default()
+                                    },
+                                },
+                            },
+                            INPUT {
+                                r#type: INPUT_MOUSE,
+                                Anonymous: INPUT_0 {
+                                    mi: MOUSEINPUT {
+                                        dwFlags: MOUSEEVENTF_LEFTUP,
+                                        ..Default::default()
+                                    },
+                                },
+                            },
+                        ];
+                        SendInput(&click, std::mem::size_of::<INPUT>() as i32);
+                    }
+                    thread::sleep(Duration::from_millis(45));
+                }
+            }
+        }
 
         let fg = unsafe { GetForegroundWindow() };
         let fg_root = unsafe { GetAncestor(fg, GA_ROOT) };

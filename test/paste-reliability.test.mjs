@@ -232,8 +232,9 @@ test('deselect after paste and drag-drop uses KEYEVENTF_EXTENDEDKEY, web-class m
   );
   assert.ok(
     dragRs.includes('crate::paste::deliver_text_drop_fallback') &&
-      dragRs.includes('is_external_drop_fallback_window') &&
+      dragRs.includes('is_terminal_or_agent_host_window') &&
+      dragRs.includes('should_use_text_drop_fallback') &&
       dragRs.includes('released_by_mouse_up'),
-    'native_drag.rs must provide universal text drop-fallback when a terminal/TUI rejects OLE text'
+    'native_drag.rs must provide universal text drop-fallback for terminals/coding agents without hijacking image-only browser zones'
   );
 });

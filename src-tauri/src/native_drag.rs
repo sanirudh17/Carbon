@@ -871,7 +871,7 @@ unsafe extern "system" fn src_feedback(
                 let mut pt = POINT::default();
                 if unsafe { GetCursorPos(&mut pt) }.is_ok() {
                     let hit = unsafe { WindowFromPoint(pt) };
-                    if crate::paste::is_external_drop_fallback_window(hit) {
+                    if crate::paste::is_terminal_or_agent_host_window(hit) {
                         if let Ok(cur) = unsafe { LoadCursorW(None, IDC_ARROW) } {
                             unsafe {
                                 SetCursor(cur);
@@ -1427,25 +1427,26 @@ unsafe fn run_modal_drag(
         // Resolve the drop target window immediately while cursor is still at
         // the drop point, for both post-drop deselect AND universal drop-fallback
         // into terminals / TUI coding agents whose IDropTarget rejects text.
-        let drop_root_raw = if is_text_payload {
+        let (drop_root_raw, drop_pt) = if is_text_payload {
             let mut pt = POINT::default();
             if GetCursorPos(&mut pt).is_ok() {
                 let hit = WindowFromPoint(pt);
                 if !hit.0.is_null() {
                     let root = GetAncestor(hit, GA_ROOT);
-                    if !root.0.is_null() {
+                    let raw = if !root.0.is_null() {
                         root.0 as isize
                     } else {
                         hit.0 as isize
-                    }
+                    };
+                    (raw, Some((pt.x, pt.y)))
                 } else {
-                    0
+                    (0, None)
                 }
             } else {
-                0
+                (0, None)
             }
         } else {
-            0
+            (0, None)
         };
         // Release OUR initial refs via IUnknown (only IUnknown::drop
         // calls Release; dropping the typed wrappers alone would leak).
@@ -1506,7 +1507,7 @@ unsafe fn run_modal_drag(
             && drop_root_raw != 0
         {
             if let Some(clip_item) = fallback_item {
-                if crate::paste::is_external_drop_fallback_window(HWND(drop_root_raw as *mut _)) {
+                if crate::paste::should_use_text_drop_fallback(HWND(drop_root_raw as *mut _)) {
                     drag_log(&format!(
                         "[NATIVE_DRAG] OLE target 0x{:X} returned DROPEFFECT_NONE on release — invoking universal text drop-fallback",
                         drop_root_raw as usize
@@ -1514,6 +1515,7 @@ unsafe fn run_modal_drag(
                     crate::paste::deliver_text_drop_fallback(
                         clip_item,
                         drop_root_raw,
+                        drop_pt,
                         deselect_after,
                     );
                     return Ok("copy".to_string());
