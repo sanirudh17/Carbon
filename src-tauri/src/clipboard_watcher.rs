@@ -128,17 +128,43 @@ pub struct PasteRecord {
 }
 
 static LAST_PASTE: Mutex<Option<PasteRecord>> = Mutex::new(None);
+/// (clipboard sequence number, timestamp ms) recorded right after Carbon writes
+/// to the clipboard for a paste / drop-fallback. Lets the watcher skip its own
+/// `WM_CLIPBOARDUPDATE` WITHOUT ever calling `OpenClipboard()` — critical for
+/// GPUI targets (Pebrel, Zed) whose `OpenClipboard(None)` has zero retries.
+static LAST_PASTE_SEQ: Mutex<Option<(u32, u64)>> = Mutex::new(None);
 
 pub fn mark_paste(item: &ClipItem) {
+    let ts = now_ms();
+    let seq = unsafe { GetClipboardSequenceNumber() };
     let rec = PasteRecord {
-        ts_ms: now_ms(),
+        ts_ms: ts,
         content_type: item.content_type.clone(),
         text_content: item.text_content.clone(),
         file_paths: item.file_paths.clone(),
         image_width: item.image_width,
         image_height: item.image_height,
     };
-    *LAST_PASTE.lock().unwrap() = Some(rec);
+    if let Ok(mut guard) = LAST_PASTE.lock() {
+        *guard = Some(rec);
+    }
+    if seq != 0 {
+        if let Ok(mut guard) = LAST_PASTE_SEQ.lock() {
+            *guard = Some((seq, ts));
+        }
+    }
+}
+
+fn is_own_paste_sequence_at(recorded: Option<(u32, u64)>, seq: u32, now: u64) -> bool {
+    let Some((rec_seq, ts_ms)) = recorded else {
+        return false;
+    };
+    seq != 0 && rec_seq == seq && now.saturating_sub(ts_ms) <= 2500
+}
+
+fn is_own_paste_sequence(seq: u32) -> bool {
+    let recorded = LAST_PASTE_SEQ.lock().ok().and_then(|g| *g);
+    is_own_paste_sequence_at(recorded, seq, now_ms())
 }
 
 /// True when `item` (just read from the clipboard) matches what Carbon itself
@@ -232,6 +258,9 @@ impl ClipboardWatcher {
                                     let seq = GetClipboardSequenceNumber();
                                     if seq != last_seq {
                                         last_seq = seq;
+                                        if is_own_paste_sequence(seq) {
+                                            continue;
+                                        }
                                         let captured = process_clipboard_change(
                                             &app_handle,
                                             &db_state,
@@ -1875,6 +1904,16 @@ mod tests {
         assert!(should_suppress_burst(50, 50, CLIP_BURST_MS));       // same ms: suppress
         assert!(!should_suppress_burst(2000, 50, CLIP_BURST_MS));    // 1950ms later: allow
         assert!(should_suppress_burst(100, 50, 1000));               // generic large window
+    }
+
+    #[test]
+    fn test_own_paste_sequence_skips_watcher_open_clipboard_within_window() {
+        assert!(is_own_paste_sequence_at(Some((42, 1000)), 42, 1050));
+        assert!(is_own_paste_sequence_at(Some((42, 1000)), 42, 3500));
+        assert!(!is_own_paste_sequence_at(Some((42, 1000)), 43, 1050));
+        assert!(!is_own_paste_sequence_at(Some((42, 1000)), 42, 4000));
+        assert!(!is_own_paste_sequence_at(Some((0, 1000)), 0, 1050));
+        assert!(!is_own_paste_sequence_at(None, 42, 1050));
     }
 }
 

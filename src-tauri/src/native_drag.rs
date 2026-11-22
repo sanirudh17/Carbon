@@ -40,17 +40,18 @@
 use std::{
     collections::VecDeque,
     sync::{
-        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering},
         mpsc, Arc, Mutex,
     },
     time::Duration,
 };
 
 use tauri::{AppHandle, State};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetAncestor, GetCursorPos, GetWindowThreadProcessId, LoadCursorW, SetCursor, WindowFromPoint,
-    GA_ROOT, IDC_ARROW,
+    GetAncestor, GetCursorPos, GetWindowThreadProcessId, LoadCursorW, LoadImageW, SetCursor,
+    WindowFromPoint, GA_ROOT, HCURSOR, IDC_ARROW, IMAGE_CURSOR, LR_DEFAULTSIZE, LR_SHARED,
 };
 use windows::{
     core::{GUID, HRESULT, IUnknown, IUnknown_Vtbl, Interface, PCWSTR},
@@ -178,6 +179,15 @@ fn current_external_cursor_root_hwnd() -> Option<isize> {
         let mut pid = 0u32;
         GetWindowThreadProcessId(top, Some(&mut pid));
         if pid == 0 || pid == std::process::id() {
+            return None;
+        }
+        // GPUI's Windows IDropTarget (`Zed::Window` — Pebrel, Seek, Zed, etc.)
+        // ONLY inspects CF_HDROP and NEVER calls GetData for text formats. Any
+        // GetData(CF_UNICODETEXT) arriving while the cursor has just crossed
+        // onto a GPUI window is an in-flight async COM RPC peek from Carbon's
+        // out-of-process WebView2 (`msedgewebview2.exe`) and must never mark
+        // the GPUI window as having consumed text.
+        if crate::paste::is_gpui_window(top) {
             return None;
         }
         Some(top.0 as isize)
@@ -928,6 +938,10 @@ struct ClipDropSource {
     allow_text_fallback: bool,
     cancelled_by_escape: Arc<AtomicBool>,
     released_by_mouse_up: Arc<AtomicBool>,
+    /// Lock-free single-entry cache for `src_feedback` so hovering across the
+    /// same window never repeats `OpenProcess` / `GetClassNameW` per mouse move.
+    last_feedback_root: AtomicIsize,
+    last_feedback_allow: AtomicBool,
 }
 
 com_unknown!(ClipDropSource, src_qi, src_add, src_rel, [IDropSource::IID]);
@@ -958,6 +972,39 @@ unsafe extern "system" fn src_query_continue(
     })
 }
 
+/// Loads and caches Windows' native OLE `DROPEFFECT_COPY` drag cursor (arrow +
+/// small drag square + `+` badge, resource ID 3 inside `ole32.dll`) so fallback
+/// drop targets (Orca, Windows Terminal, OpenCode, Codex, etc.) display the
+/// exact same visual drag affordance as native OLE COPY targets (Pebrel, Chrome,
+/// Notepad). Falls back to `IDC_ARROW` if the resource cannot be loaded.
+fn fallback_copy_cursor() -> HCURSOR {
+    static CACHED: std::sync::OnceLock<isize> = std::sync::OnceLock::new();
+    let raw = *CACHED.get_or_init(|| unsafe {
+        let ole_name = wide_null("ole32.dll");
+        if let Ok(hmod) = GetModuleHandleW(PCWSTR(ole_name.as_ptr())) {
+            // ole32.dll RT_GROUP_CURSOR resource ID 3 = standard OLE COPY cursor
+            // (arrow + small drag square + '+' badge). LR_SHARED + LR_DEFAULTSIZE
+            // respects system cursor DPI/size without allocating per call.
+            if let Ok(handle) = LoadImageW(
+                hmod,
+                PCWSTR(3usize as *const u16),
+                IMAGE_CURSOR,
+                0,
+                0,
+                LR_DEFAULTSIZE | LR_SHARED,
+            ) {
+                if !handle.0.is_null() {
+                    return handle.0 as isize;
+                }
+            }
+        }
+        LoadCursorW(None, IDC_ARROW)
+            .map(|c| c.0 as isize)
+            .unwrap_or(0)
+    });
+    HCURSOR(raw as *mut std::ffi::c_void)
+}
+
 unsafe extern "system" fn src_feedback(
     this: *mut std::ffi::c_void,
     dweffect: DROPEFFECT,
@@ -969,8 +1016,29 @@ unsafe extern "system" fn src_feedback(
                 let mut pt = POINT::default();
                 if unsafe { GetCursorPos(&mut pt) }.is_ok() {
                     let hit = unsafe { WindowFromPoint(pt) };
-                    if crate::paste::should_use_text_drop_fallback(hit) {
-                        if let Ok(cur) = unsafe { LoadCursorW(None, IDC_ARROW) } {
+                    let root_raw = if hit.0.is_null() {
+                        0
+                    } else {
+                        let r = unsafe { GetAncestor(hit, GA_ROOT) };
+                        if r.0.is_null() {
+                            hit.0 as isize
+                        } else {
+                            r.0 as isize
+                        }
+                    };
+                    let allow = if root_raw == 0 {
+                        false
+                    } else if src.last_feedback_root.load(Ordering::Relaxed) == root_raw {
+                        src.last_feedback_allow.load(Ordering::Relaxed)
+                    } else {
+                        let computed = crate::paste::should_use_text_drop_fallback(hit);
+                        src.last_feedback_allow.store(computed, Ordering::Relaxed);
+                        src.last_feedback_root.store(root_raw, Ordering::Relaxed);
+                        computed
+                    };
+                    if allow {
+                        let cur = fallback_copy_cursor();
+                        if !cur.0.is_null() {
                             unsafe {
                                 SetCursor(cur);
                             }
@@ -1342,6 +1410,8 @@ fn new_drop_source_with_fallback(
         allow_text_fallback,
         cancelled_by_escape: Arc::clone(&cancelled),
         released_by_mouse_up: Arc::clone(&released),
+        last_feedback_root: AtomicIsize::new(0),
+        last_feedback_allow: AtomicBool::new(false),
     });
     let source = unsafe { IDropSource::from_raw(Box::into_raw(boxed) as *mut std::ffi::c_void) };
     (source, cancelled, released)
@@ -1357,6 +1427,16 @@ fn effect_name(effect: u32) -> &'static str {
     } else {
         "other"
     }
+}
+
+struct ModalDragOutcome {
+    effect: String,
+    drop_root_raw: isize,
+    drop_pt: Option<(i32, i32)>,
+    pending_fallback: Option<crate::db::ClipItem>,
+    deselect_after: bool,
+    is_text_payload: bool,
+    genuine_ole_drop: bool,
 }
 
 /// Starts a native OLE drag for a clip. Blocks until the drop settles and
@@ -1389,16 +1469,61 @@ pub fn begin_clip_drag(
     if let Ok(mut t) = SERVED_TEXT_TARGETS.lock() {
         t.clear();
     }
-    let outcome = begin_clip_drag_inner(state, app, &id);
+    let modal_res = begin_clip_drag_inner(state, app, &id);
+    // Clear NATIVE_DRAG_ACTIVE BEFORE dismissing Quick Overlay or focusing the
+    // external drop target so WindowEvent::Focused(false) is never suppressed
+    // and the overlay never stays adrift over GPUI apps (Pebrel, Zed, etc.).
     NATIVE_DRAG_ACTIVE.store(false, Ordering::SeqCst);
-    outcome
+
+    match modal_res {
+        Ok(outcome) => {
+            let external_target = outcome.drop_root_raw != 0
+                && crate::paste::is_external_drop_fallback_window(HWND(
+                    outcome.drop_root_raw as *mut _,
+                ));
+            if outcome.effect == "copy" && external_target {
+                if crate::hotkey::is_overlay_visible() {
+                    drag_log(&format!(
+                        "[NATIVE_DRAG] External drop settled COPY on 0x{:X} — dismissing Quick Overlay cleanly",
+                        outcome.drop_root_raw as usize
+                    ));
+                    crate::hotkey::hide_overlay_window_on_blur(app);
+                }
+                if let Some(clip_item) = outcome.pending_fallback {
+                    crate::paste::deliver_text_drop_fallback(
+                        clip_item,
+                        outcome.drop_root_raw,
+                        outcome.drop_pt,
+                        outcome.deselect_after,
+                    );
+                } else if outcome.genuine_ole_drop {
+                    // Apps like GPUI (Pebrel, Seek, Zed) accept CF_HDROP image/file
+                    // drops without calling SetForegroundWindow; gently bring
+                    // the target to foreground after dismissing Quick Overlay.
+                    crate::paste::focus_external_window_async(
+                        outcome.drop_root_raw,
+                        outcome.drop_pt,
+                    );
+                    if outcome.deselect_after {
+                        crate::paste::maybe_deselect_after_drop(
+                            outcome.deselect_after,
+                            outcome.drop_root_raw,
+                            outcome.is_text_payload,
+                        );
+                    }
+                }
+            }
+            Ok(outcome.effect)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 fn begin_clip_drag_inner(
     state: &State<'_, AppState>,
     app: &AppHandle,
     id: &str,
-) -> std::result::Result<String, String> {
+) -> std::result::Result<ModalDragOutcome, String> {
     let item = state
         .db
         .get_entry_by_id(id)?
@@ -1467,15 +1592,16 @@ fn begin_clip_drag_inner(
     }
 
     match rx.recv() {
-        Ok(Ok(effect)) => {
-            if effect != "copy" {
+        Ok(Ok(outcome)) => {
+            if outcome.effect != "copy" {
                 drag_log(&format!(
-                    "[NATIVE_DRAG] VIOLATION: drop settled with effect='{effect}' on a COPY-only drag id='{id}'"
+                    "[NATIVE_DRAG] VIOLATION: drop settled with effect='{}' on a COPY-only drag id='{id}'",
+                    outcome.effect
                 ));
             } else {
                 drag_log(&format!("[NATIVE_DRAG] drop settled COPY id='{id}'"));
             }
-            Ok(effect)
+            Ok(outcome)
         }
         Ok(Err(e)) => Err(e),
         Err(_) => Err("native drag channel vanished".to_string()),
@@ -1495,7 +1621,7 @@ unsafe fn run_modal_drag(
     deselect_after: bool,
     is_text_payload: bool,
     fallback_item: Option<crate::db::ClipItem>,
-) -> std::result::Result<String, String> {
+) -> std::result::Result<ModalDragOutcome, String> {
     unsafe {
         drag_log("[NATIVE_DRAG] handler entered on main STA thread");
         match OleInitialize(None) {
@@ -1527,9 +1653,10 @@ unsafe fn run_modal_drag(
         drag_log("[NATIVE_DRAG] DoDragDrop entered");
         let hr = DoDragDrop(&dataobj, &source, DROPEFFECT_COPY, &mut effect);
         // Resolve the drop target window immediately while cursor is still at
-        // the drop point, for both post-drop deselect AND universal drop-fallback
-        // into terminals / TUI coding agents whose IDropTarget rejects text.
-        let (drop_root_raw, drop_pt) = if is_text_payload {
+        // the drop point — for ALL clip types (text, image, and file) so Quick
+        // Overlay cleanly dismisses even over apps like GPUI (Pebrel, Zed)
+        // whose IDropTarget::Drop does not call SetForegroundWindow.
+        let (drop_root_raw, drop_pt) = {
             let mut pt = POINT::default();
             if GetCursorPos(&mut pt).is_ok() {
                 let hit = WindowFromPoint(pt);
@@ -1547,8 +1674,6 @@ unsafe fn run_modal_drag(
             } else {
                 (0, None)
             }
-        } else {
-            (0, None)
         };
         // Release OUR initial refs via IUnknown (only IUnknown::drop
         // calls Release; dropping the typed wrappers alone would leak).
@@ -1577,8 +1702,10 @@ unsafe fn run_modal_drag(
             .lock()
             .map(|t| t.clone())
             .unwrap_or_default();
+        let is_gpui_target =
+            drop_root_raw != 0 && crate::paste::is_gpui_window(HWND(drop_root_raw as *mut _));
         let target_consumed_text =
-            target_consumed_text_payload(&served_targets_snapshot, drop_root_raw);
+            !is_gpui_target && target_consumed_text_payload(&served_targets_snapshot, drop_root_raw);
         let rendered = {
             let mut v = served_snapshot;
             v.sort_unstable();
@@ -1595,7 +1722,7 @@ unsafe fn run_modal_drag(
             "HWND(NULL)".to_string()
         };
         drag_log(&format!(
-            "[NATIVE_DRAG] DoDragDrop returned hr={hr:?} effect={} rendered=[{}] target_consumed_text={target_consumed_text} targets={:X?} released={released} esc={escaped} drop_target={drop_target_info}",
+            "[NATIVE_DRAG] DoDragDrop returned hr={hr:?} effect={} rendered=[{}] target_consumed_text={target_consumed_text} gpui={is_gpui_target} targets={:X?} released={released} esc={escaped} drop_target={drop_target_info}",
             effect_name(effect.0),
             rendered,
             served_targets_snapshot
@@ -1610,14 +1737,20 @@ unsafe fn run_modal_drag(
             && effect != DROPEFFECT_NONE
             && (!is_text_payload || target_consumed_text);
         if genuine_ole_drop {
-            if deselect_after && drop_root_raw != 0 {
-                crate::paste::maybe_deselect_after_drop(
-                    deselect_after,
-                    drop_root_raw,
-                    is_text_payload,
-                );
+            if drop_root_raw != 0 && is_gpui_target {
+                // Attempt foreground transfer right on the main STA thread while
+                // we still hold WM_LBUTTONUP input privilege, before overlay parks.
+                let _ = crate::paste::try_focus_hwnd_immediate(drop_root_raw);
             }
-            return Ok(effect_name(effect.0).to_string());
+            return Ok(ModalDragOutcome {
+                effect: effect_name(effect.0).to_string(),
+                drop_root_raw,
+                drop_pt,
+                pending_fallback: None,
+                deselect_after,
+                is_text_payload,
+                genuine_ole_drop: true,
+            });
         }
         // Universal text drop-fallback: when the user intentionally released
         // the mouse over an external app that EITHER rejected CF_UNICODETEXT
@@ -1625,8 +1758,9 @@ unsafe fn run_modal_drag(
         // OR returned a phantom DROPEFFECT_COPY without that target ever
         // rendering any text payload format (e.g. GPUI apps like Pebrel and
         // Zed whose IDropTarget::DragOver/Drop unconditionally set
-        // DROPEFFECT_COPY while only consuming CF_HDROP), deliver via
-        // clipboard + target paste chord.
+        // DROPEFFECT_COPY while only consuming CF_HDROP), schedule delivery via
+        // clipboard + target paste chord (run in begin_clip_drag after
+        // NATIVE_DRAG_ACTIVE clears and Quick Overlay dismisses).
         if should_trigger_text_drop_fallback(
             is_text_payload,
             hr,
@@ -1647,17 +1781,27 @@ unsafe fn run_modal_drag(
                         "[NATIVE_DRAG] OLE target 0x{:X} returned {reason} on release — invoking universal text drop-fallback",
                         drop_root_raw as usize
                     ));
-                    crate::paste::deliver_text_drop_fallback(
-                        clip_item,
+                    return Ok(ModalDragOutcome {
+                        effect: "copy".to_string(),
                         drop_root_raw,
                         drop_pt,
+                        pending_fallback: Some(clip_item),
                         deselect_after,
-                    );
-                    return Ok("copy".to_string());
+                        is_text_payload,
+                        genuine_ole_drop: false,
+                    });
                 }
             }
         }
-        Ok(effect_name(effect.0).to_string())
+        Ok(ModalDragOutcome {
+            effect: effect_name(effect.0).to_string(),
+            drop_root_raw,
+            drop_pt,
+            pending_fallback: None,
+            deselect_after,
+            is_text_payload,
+            genuine_ole_drop: false,
+        })
     }
 }
 
@@ -2576,5 +2720,11 @@ mod conformance_tests {
             true,
             false,
         ));
+    }
+
+    #[test]
+    fn fallback_copy_cursor_loads_valid_ole_drag_cursor() {
+        let cur = fallback_copy_cursor();
+        assert!(!cur.0.is_null(), "fallback drag cursor must resolve to a valid HCURSOR");
     }
 }

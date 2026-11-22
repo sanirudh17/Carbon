@@ -244,7 +244,19 @@ test('deselect after paste and drag-drop uses KEYEVENTF_EXTENDEDKEY, web-class m
     pasteRs.includes('fn is_gpui_window_class') &&
       pasteRs.includes('"Zed::Window"') &&
       pasteRs.includes('"pebrel.exe"') &&
-      pasteRs.includes('should_click_drop_point_for_fallback'),
-    'paste.rs must recognize GPUI (Zed::Window) and Pebrel for drop-point pane focus'
+      pasteRs.includes('should_click_drop_point_for_fallback') &&
+      pasteRs.includes('fn focus_external_window_async'),
+    'paste.rs must recognize GPUI (Zed::Window) and Pebrel for drop-point pane focus and external drop focus handoff'
+  );
+  assert.ok(
+    dragRs.includes('crate::hotkey::hide_overlay_window_on_blur') &&
+      dragRs.includes('crate::paste::focus_external_window_async') &&
+      dragRs.includes('fallback_copy_cursor'),
+    'native_drag.rs must dismiss Quick Overlay after external drops (including GPUI image/file drops), focus non-self-activating targets, and render the native OLE COPY drag cursor'
+  );
+  const watcherRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'clipboard_watcher.rs'), 'utf8');
+  assert.ok(
+    watcherRs.includes('LAST_PASTE_SEQ') && watcherRs.includes('is_own_paste_sequence'),
+    'clipboard_watcher.rs must skip OpenClipboard on Carbon own paste sequence to avoid contending with GPUI zero-retry OpenClipboard'
   );
 });

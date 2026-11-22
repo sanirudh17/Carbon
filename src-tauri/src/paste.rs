@@ -2970,13 +2970,22 @@ fn is_web_deselect_target(hwnd: HWND) -> (bool, String) {
 /// receive a confirming Right Arrow ONLY when text is genuinely still selected.
 fn focused_element_has_nonempty_selection() -> bool {
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+        COINIT_MULTITHREADED,
     };
     use windows::Win32::UI::Accessibility::{
         CUIAutomation, IUIAutomation, IUIAutomationTextPattern, UIA_TextPatternId,
     };
+    struct ComUninitGuard(bool);
+    impl Drop for ComUninitGuard {
+        fn drop(&mut self) {
+            if self.0 {
+                unsafe { CoUninitialize() };
+            }
+        }
+    }
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let _com = ComUninitGuard(CoInitializeEx(None, COINIT_MULTITHREADED).is_ok());
         let Ok(automation) =
             CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
         else {
@@ -3179,8 +3188,22 @@ pub(crate) fn is_gpui_window_class(class: &str) -> bool {
     class.eq_ignore_ascii_case("Zed::Window")
 }
 
-fn is_gpui_window(hwnd: HWND) -> bool {
+pub(crate) fn is_gpui_window(hwnd: HWND) -> bool {
     is_gpui_window_class(&get_window_class_name(hwnd))
+}
+
+/// Best-effort synchronous foreground transfer (intended for the main STA
+/// thread immediately after `DoDragDrop` returns, while the thread still owns
+/// the `WM_LBUTTONUP` input event and before parking the Quick Overlay).
+pub(crate) fn try_focus_hwnd_immediate(target_hwnd_raw: isize) -> bool {
+    if target_hwnd_raw == 0 {
+        return false;
+    }
+    let target = HWND(target_hwnd_raw as *mut _);
+    if !is_external_drop_fallback_window(target) {
+        return false;
+    }
+    try_bring_to_foreground(target)
 }
 
 /// True when `deliver_text_drop_fallback` should click at the drop coordinates
@@ -3230,8 +3253,8 @@ pub(crate) fn is_terminal_or_agent_host_window(hwnd: HWND) -> bool {
 }
 
 /// True when `hwnd` should use Carbon's universal text drop-fallback after OLE
-/// `DoDragDrop` returns `DROPEFFECT_NONE`:
-/// - All terminal emulators & coding-agent / IDE hosts (`is_terminal_or_agent_host_window`)
+/// `DoDragDrop` returns `DROPEFFECT_NONE` or a phantom `DROPEFFECT_COPY`:
+/// - All terminal emulators, GPUI windows (`Zed::Window`), & coding-agent / IDE hosts
 /// - Non-browser Win32/desktop applications whose text controls lack an OLE drop target
 /// Excludes standalone web browsers (Chrome, Edge, Firefox, Zen, Arc, Comet, Dia, etc.),
 /// where every real `<input>`/`<textarea>`/`contenteditable` already accepts native OLE
@@ -3240,19 +3263,135 @@ pub(crate) fn should_use_text_drop_fallback(hwnd: HWND) -> bool {
     if !is_external_drop_fallback_window(hwnd) {
         return false;
     }
-    if is_terminal_or_agent_host_window(hwnd) {
-        return true;
-    }
     let root = unsafe {
         let r = GetAncestor(hwnd, GA_ROOT);
         if r.0.is_null() { hwnd } else { r }
     };
+    if is_gpui_window(root) {
+        return true;
+    }
     if let Some(exe) = get_window_exe_name(root) {
         if is_known_web_browser_exe(&exe) {
             return false;
         }
     }
     true
+}
+
+/// Sends a single clean, spaced mouse left-click at `(dx, dy)` ONLY if that
+/// screen point still hits `target` (or a child of `target`) strictly inside
+/// its window body. Returns `true` when the click was sent.
+fn click_point_inside_target(target: HWND, dx: i32, dy: i32, top_margin: i32) -> bool {
+    let mut rect = RECT::default();
+    let point_still_hits_target = unsafe {
+        let hit = WindowFromPoint(POINT { x: dx, y: dy });
+        if hit.0.is_null() {
+            false
+        } else {
+            let root = GetAncestor(hit, GA_ROOT);
+            hit == target || root == target
+        }
+    };
+    if !point_still_hits_target {
+        return false;
+    }
+    if unsafe { GetWindowRect(target, &mut rect) }.is_err()
+        || dx <= rect.left + 8
+        || dx >= rect.right - 8
+        || dy <= rect.top + top_margin
+        || dy >= rect.bottom - 12
+    {
+        return false;
+    }
+    unsafe {
+        let _ = SetCursorPos(dx, dy);
+    }
+    thread::sleep(Duration::from_millis(10));
+    unsafe {
+        let down = [INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dwFlags: MOUSEEVENTF_LEFTDOWN,
+                    ..Default::default()
+                },
+            },
+        }];
+        SendInput(&down, std::mem::size_of::<INPUT>() as i32);
+    }
+    thread::sleep(Duration::from_millis(15));
+    unsafe {
+        let up = [INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dwFlags: MOUSEEVENTF_LEFTUP,
+                    ..Default::default()
+                },
+            },
+        }];
+        SendInput(&up, std::mem::size_of::<INPUT>() as i32);
+    }
+    true
+}
+
+/// Brings an external drop target window to foreground asynchronously after a
+/// native OLE drop (such as dropping an image or file onto GPUI apps like
+/// Pebrel, Seek, or Zed, whose `IDropTarget::Drop` does not call
+/// `SetForegroundWindow`). When Windows rejects `SetForegroundWindow` (leaving
+/// Carbon's parked overlay owning focus), falls back to a genuine click at the
+/// drop point for GPUI windows so subsequent typing/Backspace lands in the app.
+pub(crate) fn focus_external_window_async(target_hwnd_raw: isize, drop_pt: Option<(i32, i32)>) {
+    if target_hwnd_raw == 0 {
+        return;
+    }
+    let target = HWND(target_hwnd_raw as *mut _);
+    if !is_external_drop_fallback_window(target) {
+        return;
+    }
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(35));
+        let target = HWND(target_hwnd_raw as *mut _);
+        if unsafe { !IsWindow(target).as_bool() } {
+            return;
+        }
+        let target_owns_fg = || unsafe {
+            let fg = GetForegroundWindow();
+            if fg.0.is_null() {
+                return false;
+            }
+            if fg == target || GetAncestor(fg, GA_ROOT) == target {
+                return true;
+            }
+            let mut t_pid = 0u32;
+            let mut f_pid = 0u32;
+            GetWindowThreadProcessId(target, Some(&mut t_pid));
+            GetWindowThreadProcessId(fg, Some(&mut f_pid));
+            t_pid != 0 && t_pid == f_pid
+        };
+        if target_owns_fg() {
+            return;
+        }
+        for _ in 0..3 {
+            if try_bring_to_foreground(target) || target_owns_fg() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        // Windows foreground lock rejected SetForegroundWindow (often after
+        // parking the overlay); for GPUI windows, a clean click at the drop
+        // point hands foreground focus to the app so typing never goes into
+        // the hidden parked overlay.
+        if !target_owns_fg() && is_gpui_window(target) {
+            if let Some((dx, dy)) = drop_pt {
+                let clicked = click_point_inside_target(target, dx, dy, 28);
+                log_diag(&format!(
+                    "[FOCUS_DROP] SetForegroundWindow rejected for GPUI 0x{:X}; click-to-activate at ({dx},{dy}) -> {clicked}",
+                    target_hwnd_raw as usize
+                ));
+            }
+        }
+    });
 }
 
 /// Universal drop-fallback for text clips released over external apps whose
@@ -3288,13 +3427,20 @@ pub(crate) fn deliver_text_drop_fallback(
         if unsafe { !IsWindow(target).as_bool() } {
             return;
         }
-        // Stage text onto the clipboard and mark as our own paste so Carbon's
-        // clipboard watcher does not re-capture or reorder history.
+        // Stage text onto the clipboard and mark as our own paste (including
+        // clipboard sequence number so Carbon's watcher skips OpenClipboard
+        // entirely, avoiding contention with GPUI's zero-retry OpenClipboard).
         if let Err(e) = write_text_to_clipboard(&text) {
             log_diag(&format!("[DROP_FALLBACK] failed to stage text: {e}"));
             return;
         }
         crate::clipboard_watcher::mark_paste(&item);
+
+        // Give any dismissing Quick Overlay a brief beat to cloak/park cleanly
+        // before activating the external target.
+        thread::sleep(Duration::from_millis(45));
+
+        let is_gpui = is_gpui_window(target);
 
         // Focus the drop target window cleanly.
         let mut confirmed = false;
@@ -3303,71 +3449,54 @@ pub(crate) fn deliver_text_drop_fallback(
                 confirmed = true;
                 break;
             }
-            thread::sleep(Duration::from_millis(20));
+            thread::sleep(Duration::from_millis(15));
         }
-        thread::sleep(Duration::from_millis(60));
+        // GPUI processes WM_ACTIVATE asynchronously via its foreground executor;
+        // let activation settle before clicking the target pane when already active.
+        thread::sleep(Duration::from_millis(if confirmed {
+            if is_gpui { 90 } else { 60 }
+        } else {
+            15
+        }));
 
-        // For terminals, GPUI windows (Pebrel, Zed), and multi-pane CLI/agent
+        // For terminals, GPUI windows (Pebrel, Seek, Zed), and multi-pane CLI/agent
         // hosts (Orca, VS Code, Cursor, GOAT, OpenCode, Codex), click the exact
         // drop point strictly inside the body (away from title/tabs) when that
         // screen point still hits `target`. This both guarantees OS foreground
-        // activation and focuses the exact pane/xterm/input under the cursor.
+        // activation (even when SetForegroundWindow hit the foreground lock) and
+        // focuses the exact pane/xterm/search input under the cursor.
         if should_click_drop_point_for_fallback(target) {
             if let Some((dx, dy)) = drop_pt {
-                let mut rect = RECT::default();
-                let point_still_hits_target = unsafe {
-                    let hit = WindowFromPoint(POINT { x: dx, y: dy });
-                    if hit.0.is_null() {
-                        false
+                // Compact GPUI apps like Seek place their search field near the
+                // top of the client area; use a 28px caption margin for GPUI.
+                let top_margin = if is_gpui { 28 } else { 48 };
+                if click_point_inside_target(target, dx, dy, top_margin) {
+                    // GPUI needs a full frame after MouseDown (and async
+                    // WM_ACTIVATE if the click itself activated the window) for
+                    // FocusHandle and KEY_CONTEXT to become active for Ctrl+V.
+                    let settle_ms = if is_gpui {
+                        if confirmed { 110 } else { 145 }
+                    } else if confirmed {
+                        80
                     } else {
-                        let root = GetAncestor(hit, GA_ROOT);
-                        hit == target || root == target
-                    }
-                };
-                if point_still_hits_target
-                    && unsafe { GetWindowRect(target, &mut rect) }.is_ok()
-                    && dx > rect.left + 8
-                    && dx < rect.right - 8
-                    && dy > rect.top + 48
-                    && dy < rect.bottom - 12
-                {
-                    unsafe {
-                        let _ = SetCursorPos(dx, dy);
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                    unsafe {
-                        let down = [INPUT {
-                            r#type: INPUT_MOUSE,
-                            Anonymous: INPUT_0 {
-                                mi: MOUSEINPUT {
-                                    dwFlags: MOUSEEVENTF_LEFTDOWN,
-                                    ..Default::default()
-                                },
-                            },
-                        }];
-                        SendInput(&down, std::mem::size_of::<INPUT>() as i32);
-                    }
-                    thread::sleep(Duration::from_millis(15));
-                    unsafe {
-                        let up = [INPUT {
-                            r#type: INPUT_MOUSE,
-                            Anonymous: INPUT_0 {
-                                mi: MOUSEINPUT {
-                                    dwFlags: MOUSEEVENTF_LEFTUP,
-                                    ..Default::default()
-                                },
-                            },
-                        }];
-                        SendInput(&up, std::mem::size_of::<INPUT>() as i32);
-                    }
-                    thread::sleep(Duration::from_millis(80));
+                        95
+                    };
+                    thread::sleep(Duration::from_millis(settle_ms));
                 }
             }
         }
 
         let fg = unsafe { GetForegroundWindow() };
         let fg_root = unsafe { GetAncestor(fg, GA_ROOT) };
-        let owns_fg = fg == target || fg_root == target;
+        let mut target_pid = 0u32;
+        let mut fg_pid = 0u32;
+        unsafe {
+            GetWindowThreadProcessId(target, Some(&mut target_pid));
+            if !fg.0.is_null() {
+                GetWindowThreadProcessId(fg, Some(&mut fg_pid));
+            }
+        }
+        let owns_fg = fg == target || fg_root == target || (target_pid != 0 && fg_pid == target_pid);
         if !confirmed && !owns_fg {
             log_diag(&format!(
                 "[DROP_FALLBACK] aborted: target 0x{:X} did not take foreground",
