@@ -49,7 +49,8 @@ use std::{
 use tauri::{AppHandle, State};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetAncestor, GetCursorPos, LoadCursorW, SetCursor, WindowFromPoint, GA_ROOT, IDC_ARROW,
+    GetAncestor, GetCursorPos, GetWindowThreadProcessId, LoadCursorW, SetCursor, WindowFromPoint,
+    GA_ROOT, IDC_ARROW,
 };
 use windows::{
     core::{GUID, HRESULT, IUnknown, IUnknown_Vtbl, Interface, PCWSTR},
@@ -128,6 +129,16 @@ const CF_HDROP: u32 = 15;
 /// v26-F2: per-drag served-format set for the drop-result line.
 static SERVED_FORMATS: Mutex<Vec<u16>> = Mutex::new(Vec::new());
 
+/// Per-drag set of external (non-Carbon) top-level root HWNDs under the cursor
+/// when a text payload format (`CF_UNICODETEXT`, `CF_TEXT`, or `HTML Format`)
+/// was actually rendered via `GetData` / `GetDataHere`.
+///
+/// Tracking per-target HWNDs (instead of a drag-wide boolean) prevents Carbon's
+/// own WebView2 (or any Chromium/Electron window crossed along the drag path)
+/// from poisoning phantom-COPY detection when it calls `GetData(CF_UNICODETEXT)`
+/// during `DragEnter` before the cursor ever reaches a GPUI window (Pebrel, Zed).
+static SERVED_TEXT_TARGETS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+
 /// v26-F2: escaped preview of the first bytes for serve proof lines.
 fn escape_preview(bytes: &[u8]) -> String {
     let mut s = String::new();
@@ -145,12 +156,59 @@ fn escape_preview(bytes: &[u8]) -> String {
     s
 }
 
-fn record_served_format(cf: u16) {
+fn is_text_payload_format(cf: u32, cf_html: u32) -> bool {
+    cf == CF_UNICODETEXT || cf == CF_TEXT || (cf_html != 0 && cf == cf_html)
+}
+
+fn current_external_cursor_root_hwnd() -> Option<isize> {
+    unsafe {
+        let mut pt = POINT::default();
+        if GetCursorPos(&mut pt).is_err() {
+            return None;
+        }
+        let hit = WindowFromPoint(pt);
+        if hit.0.is_null() {
+            return None;
+        }
+        let root = GetAncestor(hit, GA_ROOT);
+        let top = if root.0.is_null() { hit } else { root };
+        if top.0.is_null() {
+            return None;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(top, Some(&mut pid));
+        if pid == 0 || pid == std::process::id() {
+            return None;
+        }
+        Some(top.0 as isize)
+    }
+}
+
+fn record_served_format(cf: u16, cf_html: u32) {
     if let Ok(mut s) = SERVED_FORMATS.lock() {
         if !s.contains(&cf) {
             s.push(cf);
         }
     }
+    if is_text_payload_format(cf as u32, cf_html) {
+        if let Some(root_raw) = current_external_cursor_root_hwnd() {
+            if let Ok(mut targets) = SERVED_TEXT_TARGETS.lock() {
+                if !targets.contains(&root_raw) {
+                    targets.push(root_raw);
+                }
+            }
+        }
+    }
+}
+
+/// True when the specific drop target root HWND (`drop_root_raw`) actually
+/// rendered a text payload format (`CF_UNICODETEXT`, `CF_TEXT`, or
+/// `HTML Format`) via `GetData` / `GetDataHere`. Metadata-only reads (e.g.
+/// `Preferred DropEffect` from `IDropTargetHelper`) and `DragEnter` peeks by
+/// Carbon's own WebView2 or unrelated windows crossed along the drag path do
+/// NOT count as consumption by `drop_root_raw`.
+fn target_consumed_text_payload(served_text_targets: &[isize], drop_root_raw: isize) -> bool {
+    drop_root_raw != 0 && served_text_targets.contains(&drop_root_raw)
 }
 
 /// True when the OLE drop target actually rendered a text payload format
@@ -158,11 +216,11 @@ fn record_served_format(cf: u16) {
 /// Metadata formats like `Preferred DropEffect` (often read by Windows'
 /// `IDropTargetHelper` even when a target only supports `CF_HDROP`, such as
 /// GPUI apps like Pebrel and Zed) do NOT count as text consumption.
+#[cfg(test)]
 fn served_any_text_payload(served: &[u16], cf_html: u32) -> bool {
-    served.iter().any(|&cf| {
-        let cf32 = cf as u32;
-        cf32 == CF_UNICODETEXT || cf32 == CF_TEXT || (cf_html != 0 && cf32 == cf_html)
-    })
+    served
+        .iter()
+        .any(|&cf| is_text_payload_format(cf as u32, cf_html))
 }
 
 /// Decides whether Carbon's universal text drop-fallback should run after
@@ -170,23 +228,23 @@ fn served_any_text_payload(served: &[u16], cf_html: u32) -> bool {
 /// mouse (not Escape-cancelled) over an eligible target and EITHER:
 /// 1. The target explicitly rejected text (`effect == DROPEFFECT_NONE`), OR
 /// 2. The target returned a "phantom COPY" (`hr == DRAGDROP_S_DROP`,
-///    `effect != DROPEFFECT_NONE`) without ever calling `GetData`/`GetDataHere`
-///    for any text payload format — the exact behavior of GPUI's Windows
-///    `IDropTarget` (`Zed::Window`, used by Pebrel, Zed, and peer GPUI apps),
-///    whose `DragOver`/`Drop` unconditionally set `DROPEFFECT_COPY` while only
-///    inspecting `CF_HDROP` in `DragEnter`.
+///    `effect != DROPEFFECT_NONE`) without that target ever calling
+///    `GetData`/`GetDataHere` for any text payload format — the exact behavior
+///    of GPUI's Windows `IDropTarget` (`Zed::Window`, used by Pebrel, Zed, and
+///    peer GPUI apps), whose `DragOver`/`Drop` unconditionally set
+///    `DROPEFFECT_COPY` while only inspecting `CF_HDROP` in `DragEnter`.
 fn should_trigger_text_drop_fallback(
     is_text_payload: bool,
     hr: HRESULT,
     effect: DROPEFFECT,
-    served_text_payload: bool,
+    target_consumed_text: bool,
     released_by_mouse_up: bool,
     cancelled_by_escape: bool,
 ) -> bool {
     if !is_text_payload || !released_by_mouse_up || cancelled_by_escape {
         return false;
     }
-    effect == DROPEFFECT_NONE || (hr == DRAGDROP_S_DROP && !served_text_payload)
+    effect == DROPEFFECT_NONE || (hr == DRAGDROP_S_DROP && !target_consumed_text)
 }
 
 /// v26-F2: serve-time structural proof. Unicode mediums must be even-
@@ -232,7 +290,7 @@ fn serve_proof(cf: u32, cf_html: u32, bytes: &[u8], h: HGLOBAL) {
             "[NATIVE_DRAG] GetData served cf={cf} tymed=1 (fresh hGlobal)"
         ));
     }
-    record_served_format(cf as u16);
+    record_served_format(cf as u16, cf_html);
 }
 
 fn hr_failed(hr: HRESULT) -> bool {
@@ -1127,7 +1185,7 @@ unsafe extern "system" fn data_getdata_here(
                     }
                     std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
                     let _ = GlobalUnlock(med.u.hGlobal);
-                    record_served_format(fmt.cfFormat);
+                    record_served_format(fmt.cfFormat, o.cf_html);
                     S_OK
                 }
             }
@@ -1324,9 +1382,12 @@ pub fn begin_clip_drag(
         return Err("native drag already in progress".to_string());
     }
     sweep_stale_staging();
-    // v26-F2: fresh served-set for this drag's drop-result line.
+    // v26-F2: fresh served-set + per-target text-render tracker for this drag.
     if let Ok(mut s) = SERVED_FORMATS.lock() {
         s.clear();
+    }
+    if let Ok(mut t) = SERVED_TEXT_TARGETS.lock() {
+        t.clear();
     }
     let outcome = begin_clip_drag_inner(state, app, &id);
     NATIVE_DRAG_ACTIVE.store(false, Ordering::SeqCst);
@@ -1512,7 +1573,12 @@ unsafe fn run_modal_drag(
             .lock()
             .map(|s| s.clone())
             .unwrap_or_default();
-        let served_text_payload = served_any_text_payload(&served_snapshot, cf_html);
+        let served_targets_snapshot = SERVED_TEXT_TARGETS
+            .lock()
+            .map(|t| t.clone())
+            .unwrap_or_default();
+        let target_consumed_text =
+            target_consumed_text_payload(&served_targets_snapshot, drop_root_raw);
         let rendered = {
             let mut v = served_snapshot;
             v.sort_unstable();
@@ -1521,16 +1587,28 @@ unsafe fn run_modal_drag(
                 .collect::<Vec<_>>()
                 .join(", ")
         };
+        let released = released_by_mouse_up.load(Ordering::SeqCst);
+        let escaped = cancelled_by_escape.load(Ordering::SeqCst);
+        let drop_target_info = if drop_root_raw != 0 {
+            crate::paste::get_window_diag_info(HWND(drop_root_raw as *mut _))
+        } else {
+            "HWND(NULL)".to_string()
+        };
         drag_log(&format!(
-            "[NATIVE_DRAG] DoDragDrop returned hr={hr:?} effect={} rendered=[{}] served_text={served_text_payload}",
+            "[NATIVE_DRAG] DoDragDrop returned hr={hr:?} effect={} rendered=[{}] target_consumed_text={target_consumed_text} targets={:X?} released={released} esc={escaped} drop_target={drop_target_info}",
             effect_name(effect.0),
             rendered,
+            served_targets_snapshot
+                .iter()
+                .map(|h| *h as usize)
+                .collect::<Vec<_>>(),
         ));
         if hr_failed(hr) {
             return Err(format!("native drag failed: {hr:?}"));
         }
-        let genuine_ole_drop =
-            hr == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE && (!is_text_payload || served_text_payload);
+        let genuine_ole_drop = hr == DRAGDROP_S_DROP
+            && effect != DROPEFFECT_NONE
+            && (!is_text_payload || target_consumed_text);
         if genuine_ole_drop {
             if deselect_after && drop_root_raw != 0 {
                 crate::paste::maybe_deselect_after_drop(
@@ -1544,17 +1622,18 @@ unsafe fn run_modal_drag(
         // Universal text drop-fallback: when the user intentionally released
         // the mouse over an external app that EITHER rejected CF_UNICODETEXT
         // with DROPEFFECT_NONE (e.g. Windows Terminal, Orca, OpenCode, Codex)
-        // OR returned a phantom DROPEFFECT_COPY without ever rendering any
-        // text payload format (e.g. GPUI apps like Pebrel and Zed whose
-        // IDropTarget::DragOver/Drop unconditionally set DROPEFFECT_COPY while
-        // only consuming CF_HDROP), deliver via clipboard + target paste chord.
+        // OR returned a phantom DROPEFFECT_COPY without that target ever
+        // rendering any text payload format (e.g. GPUI apps like Pebrel and
+        // Zed whose IDropTarget::DragOver/Drop unconditionally set
+        // DROPEFFECT_COPY while only consuming CF_HDROP), deliver via
+        // clipboard + target paste chord.
         if should_trigger_text_drop_fallback(
             is_text_payload,
             hr,
             effect,
-            served_text_payload,
-            released_by_mouse_up.load(Ordering::SeqCst),
-            cancelled_by_escape.load(Ordering::SeqCst),
+            target_consumed_text,
+            released,
+            escaped,
         ) && drop_root_raw != 0
         {
             if let Some(clip_item) = fallback_item {
@@ -1562,7 +1641,7 @@ unsafe fn run_modal_drag(
                     let reason = if effect == DROPEFFECT_NONE {
                         "DROPEFFECT_NONE"
                     } else {
-                        "phantom COPY (0 text payload formats rendered)"
+                        "phantom COPY (target rendered 0 text payload formats)"
                     };
                     drag_log(&format!(
                         "[NATIVE_DRAG] OLE target 0x{:X} returned {reason} on release — invoking universal text drop-fallback",
@@ -2419,6 +2498,27 @@ mod conformance_tests {
         assert!(served_any_text_payload(&[CF_TEXT as u16], cf_html));
         assert!(served_any_text_payload(&[cf_html as u16], cf_html));
         assert!(served_any_text_payload(&[cf_drop_effect, CF_UNICODETEXT as u16], cf_html));
+    }
+
+    #[test]
+    fn target_consumed_text_payload_is_scoped_to_final_drop_target_hwnd() {
+        let crossed_browser_hwnd: isize = 0x1001;
+        let pebrel_gpui_hwnd: isize = 0x2002;
+        let notepad_hwnd: isize = 0x3003;
+        // Even if another window crossed along the drag path (or Carbon's own
+        // WebView2, which is excluded entirely) read CF_UNICODETEXT on DragEnter,
+        // Pebrel's HWND never read text and MUST still trigger phantom-COPY fallback.
+        assert!(!target_consumed_text_payload(
+            &[crossed_browser_hwnd],
+            pebrel_gpui_hwnd
+        ));
+        assert!(!target_consumed_text_payload(&[], pebrel_gpui_hwnd));
+        assert!(!target_consumed_text_payload(&[notepad_hwnd], 0));
+        // When the actual drop target itself rendered text, it counts as consumed.
+        assert!(target_consumed_text_payload(
+            &[crossed_browser_hwnd, notepad_hwnd],
+            notepad_hwnd
+        ));
     }
 
     #[test]

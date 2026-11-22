@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
-use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HANDLE, HGLOBAL, HWND, POINT, RECT};
+use windows::core::{PCWSTR, PWSTR};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HGLOBAL, HWND, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::Graphics::Gdi::BITMAPINFOHEADER;
 use windows::Win32::System::DataExchange::{
@@ -17,9 +17,9 @@ use windows::Win32::System::DataExchange::{
 use windows::Win32::System::Memory::{
     GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT,
 };
-use windows::Win32::System::ProcessStatus::K32GetModuleFileNameExW;
 use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_INFORMATION,
+    PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
@@ -30,7 +30,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, BringWindowToTop, GetAncestor, GetClassNameW, GetCursorPos,
     GetForegroundWindow, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-    IsWindow, IsWindowVisible, SetCursorPos, SetForegroundWindow, GA_ROOT,
+    IsWindow, IsWindowVisible, SetCursorPos, SetForegroundWindow, WindowFromPoint, GA_ROOT,
 };
 
 const CF_DIB: u32 = 8;
@@ -426,16 +426,29 @@ fn get_window_exe_name(hwnd: HWND) -> Option<String> {
             return None;
         }
 
-        let process_handle = OpenProcess(
-            PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
-            false,
-            pid,
-        )
-        .ok()?;
+        let process_handle =
+            OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        struct HandleGuard(HANDLE);
+        impl Drop for HandleGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    let _ = CloseHandle(self.0);
+                }
+            }
+        }
+        let _guard = HandleGuard(process_handle);
 
         let mut buf = vec![0u16; 1024];
-        let len = K32GetModuleFileNameExW(process_handle, None, &mut buf);
-        if len > 0 {
+        let mut len = buf.len() as u32;
+        if QueryFullProcessImageNameW(
+            process_handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(buf.as_mut_ptr()),
+            &mut len,
+        )
+        .is_ok()
+            && len > 0
+        {
             let path_str = String::from_utf16_lossy(&buf[..len as usize]);
             let path = PathBuf::from(path_str);
             if let Some(file_name) = path.file_name() {
@@ -3172,9 +3185,11 @@ fn is_gpui_window(hwnd: HWND) -> bool {
 
 /// True when `deliver_text_drop_fallback` should click at the drop coordinates
 /// inside the target body before sending the paste chord, ensuring the exact
-/// terminal split pane or GPUI pane/input under the cursor owns keyboard focus.
+/// terminal split pane, GPUI pane/input (Pebrel, Zed), or multi-pane CLI/agent
+/// host (Orca, VS Code, Cursor, GOAT, OpenCode, Codex) under the cursor owns
+/// keyboard focus and foreground activation.
 fn should_click_drop_point_for_fallback(hwnd: HWND) -> bool {
-    is_terminal_window(hwnd) || is_gpui_window(hwnd)
+    is_terminal_or_agent_host_window(hwnd)
 }
 
 /// True when `hwnd` is a terminal emulator or coding-agent / IDE host where
@@ -3292,14 +3307,25 @@ pub(crate) fn deliver_text_drop_fallback(
         }
         thread::sleep(Duration::from_millis(60));
 
-        // For split-pane terminal emulators and GPUI windows (Pebrel, Zed, etc.),
-        // focus the exact pane under the drop point (strictly inside the body,
-        // away from title/tabs) so dropping onto an inactive pane lands in the
-        // dropped pane rather than an unrelated split or unfocused chrome.
+        // For terminals, GPUI windows (Pebrel, Zed), and multi-pane CLI/agent
+        // hosts (Orca, VS Code, Cursor, GOAT, OpenCode, Codex), click the exact
+        // drop point strictly inside the body (away from title/tabs) when that
+        // screen point still hits `target`. This both guarantees OS foreground
+        // activation and focuses the exact pane/xterm/input under the cursor.
         if should_click_drop_point_for_fallback(target) {
             if let Some((dx, dy)) = drop_pt {
                 let mut rect = RECT::default();
-                if unsafe { GetWindowRect(target, &mut rect) }.is_ok()
+                let point_still_hits_target = unsafe {
+                    let hit = WindowFromPoint(POINT { x: dx, y: dy });
+                    if hit.0.is_null() {
+                        false
+                    } else {
+                        let root = GetAncestor(hit, GA_ROOT);
+                        hit == target || root == target
+                    }
+                };
+                if point_still_hits_target
+                    && unsafe { GetWindowRect(target, &mut rect) }.is_ok()
                     && dx > rect.left + 8
                     && dx < rect.right - 8
                     && dy > rect.top + 48
@@ -3307,29 +3333,34 @@ pub(crate) fn deliver_text_drop_fallback(
                 {
                     unsafe {
                         let _ = SetCursorPos(dx, dy);
-                        let click = [
-                            INPUT {
-                                r#type: INPUT_MOUSE,
-                                Anonymous: INPUT_0 {
-                                    mi: MOUSEINPUT {
-                                        dwFlags: MOUSEEVENTF_LEFTDOWN,
-                                        ..Default::default()
-                                    },
-                                },
-                            },
-                            INPUT {
-                                r#type: INPUT_MOUSE,
-                                Anonymous: INPUT_0 {
-                                    mi: MOUSEINPUT {
-                                        dwFlags: MOUSEEVENTF_LEFTUP,
-                                        ..Default::default()
-                                    },
-                                },
-                            },
-                        ];
-                        SendInput(&click, std::mem::size_of::<INPUT>() as i32);
                     }
-                    thread::sleep(Duration::from_millis(45));
+                    thread::sleep(Duration::from_millis(10));
+                    unsafe {
+                        let down = [INPUT {
+                            r#type: INPUT_MOUSE,
+                            Anonymous: INPUT_0 {
+                                mi: MOUSEINPUT {
+                                    dwFlags: MOUSEEVENTF_LEFTDOWN,
+                                    ..Default::default()
+                                },
+                            },
+                        }];
+                        SendInput(&down, std::mem::size_of::<INPUT>() as i32);
+                    }
+                    thread::sleep(Duration::from_millis(15));
+                    unsafe {
+                        let up = [INPUT {
+                            r#type: INPUT_MOUSE,
+                            Anonymous: INPUT_0 {
+                                mi: MOUSEINPUT {
+                                    dwFlags: MOUSEEVENTF_LEFTUP,
+                                    ..Default::default()
+                                },
+                            },
+                        }];
+                        SendInput(&up, std::mem::size_of::<INPUT>() as i32);
+                    }
+                    thread::sleep(Duration::from_millis(80));
                 }
             }
         }
