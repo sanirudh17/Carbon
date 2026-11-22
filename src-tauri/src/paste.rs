@@ -22,14 +22,14 @@ use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
-    KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VK_C, VK_CONTROL, VK_LEFT, VK_LWIN, VK_MENU, VK_RIGHT, VK_RWIN,
-    VK_SHIFT, VK_V,
+    MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
+    KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VK_C, VK_CONTROL, VK_LEFT, VK_LWIN, VK_MENU, VK_RIGHT,
+    VK_RWIN, VK_SHIFT, VK_V,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, BringWindowToTop, GetClassNameW, GetCursorPos, GetForegroundWindow,
-    GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
-    SetForegroundWindow,
+    AllowSetForegroundWindow, BringWindowToTop, GetAncestor, GetClassNameW, GetCursorPos,
+    GetForegroundWindow, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+    IsWindow, IsWindowVisible, SetForegroundWindow, GA_ROOT,
 };
 
 const CF_DIB: u32 = 8;
@@ -1179,6 +1179,7 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform, deselect_after: bo
                 }
             },
         };
+        let mut did_retry = false;
         if send_mismatch || post_changed {
             log_diag("[PASTE_THREAD] retry 1/1: re-staging identical content + re-focusing...");
             if write_item_to_clipboard(&restage_item, restage_plain).is_ok() {
@@ -1195,6 +1196,7 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform, deselect_after: bo
             }
             thread::sleep(Duration::from_millis(150));
             inject_ctrl_v();
+            did_retry = true;
             log_diag("[PASTE_THREAD] retry 1/1 injected (same content). No further retries.");
         }
 
@@ -1204,6 +1206,12 @@ pub fn paste_item(item: &ClipItem, transform: PasteTransform, deselect_after: bo
         // aborts the moment focus leaves this target, so it is safe to
         // run unguarded alongside a following paste.
         PASTE_IN_FLIGHT.store(false, Ordering::SeqCst);
+
+        // Give the target browser a brief beat to process the retry Ctrl+V
+        // before sending the optional deselect keystroke.
+        if did_retry && deselect_after {
+            thread::sleep(Duration::from_millis(60));
+        }
 
         // v32-C: optional deselect (setting-gated, web-class only, one
         // Right). Default configuration sends NO post-paste keystroke.
@@ -1821,6 +1829,27 @@ mod tests {
         let extracted = extract_html_fragment(&cf_html);
         assert_eq!(extracted, frag);
     }
+
+    #[test]
+    fn web_deselect_window_class_matches_browsers_and_rejects_native_apps() {
+        assert!(is_web_deselect_window_class("Chrome_WidgetWin_1"));
+        assert!(is_web_deselect_window_class("Chrome_WidgetWin_0"));
+        assert!(is_web_deselect_window_class("MozillaWindowClass"));
+        assert!(is_web_deselect_window_class("MozillaDialogClass"));
+        assert!(is_web_deselect_window_class("ApplicationFrameWindow"));
+
+        assert!(!is_web_deselect_window_class("Notepad"));
+        assert!(!is_web_deselect_window_class("CASCADIA_HOSTING_WINDOW_CLASS"));
+        assert!(!is_web_deselect_window_class("OpusApp"));
+        assert!(!is_web_deselect_window_class(""));
+    }
+
+    #[test]
+    fn maybe_deselect_after_drop_noops_when_disabled_or_nontext_or_zero_hwnd() {
+        maybe_deselect_after_drop(false, 0x1234, true);
+        maybe_deselect_after_drop(true, 0x1234, false);
+        maybe_deselect_after_drop(true, 0, true);
+    }
 }
 
 fn open_clipboard_with_retry() -> bool {
@@ -2336,9 +2365,11 @@ fn inject_ctrl_c() {
 }
 
 /// Sends a single Right-arrow press (down+up, batched into one SendInput).
-/// Collapses a post-paste selection to its end so pasted text lands
-/// unhighlighted. At an unselected caret it is at most a one-char nudge —
-/// hence browser-gated by definition, never unconditional.
+/// Collapses a post-paste/post-drop selection to its end so inserted text lands
+/// unhighlighted. Includes `KEYEVENTF_EXTENDEDKEY` so Windows/Chromium treats
+/// scan code 0x4D as the dedicated Right Arrow rather than Numpad 6.
+/// At an unselected caret it is at most a one-char nudge — hence browser-gated
+/// by definition, never unconditional.
 fn inject_right_arrow() {
     unsafe {
         let scan_right = MapVirtualKeyW(VK_RIGHT.0 as u32, MAPVK_VK_TO_VSC) as u16;
@@ -2349,7 +2380,7 @@ fn inject_right_arrow() {
                     ki: KEYBDINPUT {
                         wVk: VK_RIGHT,
                         wScan: scan_right,
-                        dwFlags: Default::default(),
+                        dwFlags: KEYEVENTF_EXTENDEDKEY,
                         time: 0,
                         dwExtraInfo: 0,
                     },
@@ -2361,7 +2392,7 @@ fn inject_right_arrow() {
                     ki: KEYBDINPUT {
                         wVk: VK_RIGHT,
                         wScan: scan_right,
-                        dwFlags: KEYEVENTF_KEYUP,
+                        dwFlags: KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP,
                         time: 0,
                         dwExtraInfo: 0,
                     },
@@ -2373,18 +2404,26 @@ fn inject_right_arrow() {
     }
 }
 
+/// True when the top-level window class belongs to a web/browser/UWP web host
+/// whose input controls can leave pasted or dropped text selected.
+pub(crate) fn is_web_deselect_window_class(class: &str) -> bool {
+    class.starts_with("Chrome_WidgetWin_")
+        || class.contains("Mozilla")
+        || class == "ApplicationFrameWindow"
+}
+
 /// v32-C: optional post-paste deselect (setting-gated, default OFF per
 /// C2 — the default configuration sends NO post-paste keystroke). When the
 /// `paste_deselect_after` setting is on AND the foreground window is a
-/// web-class target (Chromium Widget / Mozilla), send ONE VK_RIGHT to
-/// collapse a selection the paste left behind. Never enabled otherwise.
+/// web-class target (Chromium Widget / Mozilla / ApplicationFrameWindow),
+/// send ONE VK_RIGHT to collapse a selection the paste left behind.
 fn maybe_deselect_after_paste(enabled: bool) {
     if !enabled {
         return;
     }
     let fg = unsafe { GetForegroundWindow() };
     let class = get_window_class_name(fg);
-    let is_web = class.starts_with("Chrome_WidgetWin_") || class.contains("Mozilla");
+    let is_web = is_web_deselect_window_class(&class);
     log_diag(&format!(
         "[DESELECT] setting on: fg class='{class}' web={is_web}"
     ));
@@ -2393,7 +2432,86 @@ fn maybe_deselect_after_paste(enabled: bool) {
     }
 }
 
-/// Window class name (empty when unreadable).
+/// Optional post-drop deselect for native OLE text drags into web/browser
+/// inputs (e.g. YouTube search bar). Mirrors `maybe_deselect_after_paste`:
+/// strictly opt-in (`paste_deselect_after`), text-payload only, web-class
+/// scoped, never targets Carbon's own windows, and sends at most ONE
+/// `VK_RIGHT` after verifying the drop target owns foreground focus.
+pub(crate) fn maybe_deselect_after_drop(
+    enabled: bool,
+    target_hwnd_raw: isize,
+    is_text_payload: bool,
+) {
+    if !enabled || !is_text_payload || target_hwnd_raw == 0 {
+        return;
+    }
+    let root_raw = unsafe {
+        let raw_hwnd = HWND(target_hwnd_raw as *mut _);
+        if raw_hwnd.0.is_null() || !IsWindow(raw_hwnd).as_bool() {
+            return;
+        }
+        let root = GetAncestor(raw_hwnd, GA_ROOT);
+        let top = if root.0.is_null() { raw_hwnd } else { root };
+        if !IsWindow(top).as_bool() {
+            return;
+        }
+        let mut target_pid = 0u32;
+        GetWindowThreadProcessId(top, Some(&mut target_pid));
+        if target_pid == 0 || target_pid == std::process::id() {
+            return;
+        }
+        let class = get_window_class_name(top);
+        let is_web = is_web_deselect_window_class(&class);
+        log_diag(&format!(
+            "[DESELECT_DROP] drop target hwnd=0x{:X} class='{}' web={}",
+            top.0 as usize, class, is_web
+        ));
+        if !is_web {
+            return;
+        }
+        top.0 as isize
+    };
+
+    thread::spawn(move || {
+        // Wait for the browser's OLE drop handler to insert & highlight text.
+        thread::sleep(Duration::from_millis(90));
+        let target = HWND(root_raw as *mut _);
+        if unsafe { !IsWindow(target).as_bool() } {
+            return;
+        }
+        let is_target_foreground = |hwnd: HWND| -> bool {
+            unsafe {
+                let fg = GetForegroundWindow();
+                if fg.0.is_null() {
+                    return false;
+                }
+                if fg == hwnd {
+                    return true;
+                }
+                let fg_root = GetAncestor(fg, GA_ROOT);
+                fg_root == hwnd
+            }
+        };
+        if !is_target_foreground(target) {
+            if try_bring_to_foreground(target) {
+                thread::sleep(Duration::from_millis(40));
+            }
+        }
+        if is_target_foreground(target) {
+            log_diag(&format!(
+                "[DESELECT_DROP] foreground confirmed for 0x{:X} — sending Right Arrow",
+                root_raw as usize
+            ));
+            inject_right_arrow();
+        } else {
+            log_diag(&format!(
+                "[DESELECT_DROP] skipped Right Arrow: target 0x{:X} not foreground",
+                root_raw as usize
+            ));
+        }
+    });
+}
+
 /// Window class name (empty when unreadable).
 fn get_window_class_name(hwnd: HWND) -> String {
     unsafe {
@@ -2420,7 +2538,7 @@ fn inject_left_arrows(count: usize) {
                     ki: KEYBDINPUT {
                         wVk: VK_LEFT,
                         wScan: scan_left,
-                        dwFlags: Default::default(),
+                        dwFlags: KEYEVENTF_EXTENDEDKEY,
                         time: 0,
                         dwExtraInfo: 0,
                     },
@@ -2432,7 +2550,7 @@ fn inject_left_arrows(count: usize) {
                     ki: KEYBDINPUT {
                         wVk: VK_LEFT,
                         wScan: scan_left,
-                        dwFlags: KEYEVENTF_KEYUP,
+                        dwFlags: KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP,
                         time: 0,
                         dwExtraInfo: 0,
                     },

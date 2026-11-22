@@ -174,3 +174,42 @@ test('v33-D2 - hwnd-less path gets the same B2 settle', () => {
   const settle80 = rs.indexOf('Duration::from_millis(80)', noneIdx);
   assert.ok(settle80 !== -1 && settle80 - noneIdx < 600, 'None path must settle 80ms');
 });
+
+test('deselect after paste and drag-drop uses KEYEVENTF_EXTENDEDKEY, web-class matcher, and OLE drop wiring', () => {
+  const pasteRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'paste.rs'), 'utf8');
+  const dragRs = fs.readFileSync(path.join(SRC_TAURI_DIR, 'native_drag.rs'), 'utf8');
+
+  // Extended key flag must be set on Right Arrow (and Left Arrow) so Chromium treats 0x4D as Right Arrow, not Numpad 6.
+  const rightArrowIdx = pasteRs.indexOf('fn inject_right_arrow()');
+  assert.ok(rightArrowIdx !== -1, 'inject_right_arrow must exist');
+  const rightArrowBody = pasteRs.slice(rightArrowIdx, rightArrowIdx + 1200);
+  assert.ok(
+    rightArrowBody.includes('dwFlags: KEYEVENTF_EXTENDEDKEY,'),
+    'inject_right_arrow key-down must include KEYEVENTF_EXTENDEDKEY'
+  );
+  assert.ok(
+    rightArrowBody.includes('dwFlags: KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP,'),
+    'inject_right_arrow key-up must include KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP'
+  );
+
+  // Web-class helper covers Chromium, Mozilla, and ApplicationFrameWindow (Edge/UWP web hosts).
+  assert.ok(pasteRs.includes('pub(crate) fn is_web_deselect_window_class'), 'web-class helper must be exposed');
+  assert.ok(pasteRs.includes('ApplicationFrameWindow'), 'web-class helper must include ApplicationFrameWindow');
+
+  // Retry 1/1 path gives the browser ~60ms before optional deselect.
+  assert.ok(
+    pasteRs.includes('if did_retry && deselect_after') && pasteRs.includes('Duration::from_millis(60)'),
+    'retry path must sleep ~60ms before optional deselect'
+  );
+
+  // Post-drop deselect helper exists and guards against disabled/non-text/self-process targets.
+  assert.ok(pasteRs.includes('pub(crate) fn maybe_deselect_after_drop'), 'post-drop deselect helper must exist');
+  assert.ok(pasteRs.includes('GetAncestor(raw_hwnd, GA_ROOT)'), 'post-drop deselect must resolve top-level root HWND');
+  assert.ok(pasteRs.includes('target_pid == std::process::id()'), 'post-drop deselect must never target Carbon itself');
+
+  // native_drag.rs captures paste_deselect_after and wires successful text drops into maybe_deselect_after_drop.
+  assert.ok(dragRs.includes('state.settings.get().paste_deselect_after'), 'begin_clip_drag must capture paste_deselect_after');
+  assert.ok(dragRs.includes('GetCursorPos') && dragRs.includes('WindowFromPoint') && dragRs.includes('GetAncestor'), 'run_modal_drag must resolve drop target window');
+  assert.ok(dragRs.includes('hr == DRAGDROP_S_DROP') && dragRs.includes('effect != DROPEFFECT_NONE'), 'post-drop deselect must only trigger on successful drops');
+  assert.ok(dragRs.includes('crate::paste::maybe_deselect_after_drop'), 'run_modal_drag must invoke maybe_deselect_after_drop');
+});

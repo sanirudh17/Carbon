@@ -48,12 +48,14 @@ use std::{
 
 use tauri::{AppHandle, State};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_SHIFT};
+use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetCursorPos, WindowFromPoint, GA_ROOT};
 use windows::{
     core::{GUID, HRESULT, IUnknown, IUnknown_Vtbl, Interface, PCWSTR},
     Win32::{
         Foundation::{
-            BOOL, DV_E_TYMED, E_FAIL, E_NOINTERFACE, E_NOTIMPL, E_POINTER, HGLOBAL, S_FALSE, S_OK,
-            DV_E_FORMATETC, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS,
+            BOOL, DV_E_TYMED, E_FAIL, E_NOINTERFACE, E_NOTIMPL, E_POINTER, HGLOBAL, POINT, S_FALSE,
+            S_OK, DV_E_FORMATETC, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP,
+            DRAGDROP_S_USEDEFAULTCURSORS,
         },
         System::{
             Com::{
@@ -1262,6 +1264,11 @@ fn begin_clip_drag_inner(
     let (offers, staged) = build_offers(&item, cf_html, cf_drop_effect);
     // v31-F1: text gating applies to image/file clips (HDROP carriers).
     let gate_text = matches!(item.content_type.as_str(), "image" | "file");
+    let deselect_after = state.settings.get().paste_deselect_after;
+    let is_text_payload = matches!(
+        item.content_type.as_str(),
+        "text" | "code" | "link" | "email" | "color" | "rich_text"
+    );
     drag_log(&format!(
         "[NATIVE_DRAG] begin id='{}' type='{}' offering {} formats: {} (staged={})",
         item.id,
@@ -1283,7 +1290,16 @@ fn begin_clip_drag_inner(
         // Contain OUR panics: unwinding through the wry event loop would
         // abort the process. COM callbacks carry their own per-entry guards.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-            run_modal_drag(offers, staged, gate_text, cf_html, cf_chromium_mime, cf_file_group)
+            run_modal_drag(
+                offers,
+                staged,
+                gate_text,
+                cf_html,
+                cf_chromium_mime,
+                cf_file_group,
+                deselect_after,
+                is_text_payload,
+            )
         }));
         let outcome = match result {
             Ok(r) => r,
@@ -1323,6 +1339,8 @@ unsafe fn run_modal_drag(
     cf_html: u32,
     cf_chromium_mime: u32,
     cf_file_group: u32,
+    deselect_after: bool,
+    is_text_payload: bool,
 ) -> std::result::Result<String, String> {
     unsafe {
         drag_log("[NATIVE_DRAG] handler entered on main STA thread");
@@ -1353,6 +1371,33 @@ unsafe fn run_modal_drag(
         let mut effect = DROPEFFECT_NONE;
         drag_log("[NATIVE_DRAG] DoDragDrop entered");
         let hr = DoDragDrop(&dataobj, &source, DROPEFFECT_COPY, &mut effect);
+        // Resolve the drop target window immediately while cursor is still at
+        // the drop point, so opt-in post-drop deselect can collapse browser
+        // selection highlights cleanly.
+        let drop_root_raw = if deselect_after
+            && is_text_payload
+            && hr == DRAGDROP_S_DROP
+            && effect != DROPEFFECT_NONE
+        {
+            let mut pt = POINT::default();
+            if GetCursorPos(&mut pt).is_ok() {
+                let hit = WindowFromPoint(pt);
+                if !hit.0.is_null() {
+                    let root = GetAncestor(hit, GA_ROOT);
+                    if !root.0.is_null() {
+                        root.0 as isize
+                    } else {
+                        hit.0 as isize
+                    }
+                } else {
+                    0
+                }
+            } else {
+                0
+            }
+        } else {
+            0
+        };
         // Release OUR initial refs via IUnknown (only IUnknown::drop
         // calls Release; dropping the typed wrappers alone would leak).
         // OLE has already released its own references by now.
@@ -1390,6 +1435,13 @@ unsafe fn run_modal_drag(
         ));
         if hr_failed(hr) {
             return Err(format!("native drag failed: {hr:?}"));
+        }
+        if drop_root_raw != 0 {
+            crate::paste::maybe_deselect_after_drop(
+                deselect_after,
+                drop_root_raw,
+                is_text_payload,
+            );
         }
         Ok(effect_name(effect.0).to_string())
     }

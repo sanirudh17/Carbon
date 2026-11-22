@@ -77,7 +77,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, onThe
     snippet_expansion_enabled: false,
     show_snippets: true,
     overlay_animation: 'soft' as 'full' | 'soft',
-    overlay_position: 'center' as 'center' | 'caret',
+    overlay_position: 'center' as 'center' | 'caret' | 'cursor',
     dismissedUpdateVersion: '',
   });
 
@@ -842,7 +842,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, onThe
           <div className="set-row">
             <div className="set-label">
               Deselect after paste
-              <div className="set-hint">Sends Right Arrow after pasting into web or chat inputs that leave text selected · Off by default</div>
+              <div className="set-hint">Sends Right Arrow after pasting or dropping text into web inputs that leave it selected · Off by default</div>
             </div>
             <div className="set-control">
               <button
@@ -1415,20 +1415,23 @@ export const Settings: React.FC<SettingsProps> = ({ onBack, onThemeToggle, onThe
             <div className="set-label">
               Quick Overlay position
               <div className="set-hint">
-                {(settings.overlay_position ?? 'center') === 'caret'
-                  ? 'Caret: opens near your typing cursor, falling back to mouse pointer outside text fields'
-                  : 'Center: always opens centered on your active display'}
+                Center: screen center · Caret: active typing cursor · Cursor: mouse pointer
               </div>
             </div>
             <div className="set-control">
               <SlidingSegmentedControl
                 ariaLabel="Quick Overlay position"
-                value={((settings.overlay_position || 'center') === 'caret' ? 'caret' : 'center')}
+                value={
+                  settings.overlay_position === 'caret' || settings.overlay_position === 'cursor'
+                    ? settings.overlay_position
+                    : 'center'
+                }
                 options={[
                   { value: 'center', label: 'Center' },
                   { value: 'caret', label: 'Caret' },
+                  { value: 'cursor', label: 'Cursor' },
                 ]}
-                onChange={(next) => updateSetting('overlay_position', next as any)}
+                onChange={(next) => updateSetting('overlay_position', next as 'center' | 'caret' | 'cursor')}
               />
             </div>
           </div>

@@ -2154,7 +2154,8 @@ pub(crate) fn probe_active_caret_with_source() -> Option<((i32, i32), &'static s
                 }
 
                 // 2c. Focused text input / edit box bounding rectangle (when control
-                // doesn't publish TextPattern, e.g. search bars & single-line inputs).
+                // doesn't publish TextPattern, e.g. search bars, single-line inputs,
+                // or tall multiline editors/textareas).
                 if let Ok(ctrl_type) = element.CurrentControlType() {
                     let is_text_input = ctrl_type == UIA_EditControlTypeId
                         || ctrl_type == UIA_DocumentControlTypeId
@@ -2163,8 +2164,37 @@ pub(crate) fn probe_active_caret_with_source() -> Option<((i32, i32), &'static s
                         if let Ok(rect) = element.CurrentBoundingRectangle() {
                             let w = rect.right - rect.left;
                             let h = rect.bottom - rect.top;
-                            if w > 0 && h > 0 && h <= 360 && within_fg(rect.left, rect.bottom) {
-                                return Some(((rect.left + 12, rect.bottom), "uia-focus-input"));
+                            if w > 0 && h > 0 {
+                                if h <= 360 {
+                                    let ax = rect.left + 12;
+                                    let ay = rect.bottom;
+                                    if within_fg(ax, ay) {
+                                        return Some(((ax, ay), "uia-focus-input"));
+                                    }
+                                } else {
+                                    let overlaps_fg = !has_fg_rect
+                                        || (rect.right > fg_rect.left
+                                            && rect.left < fg_rect.right
+                                            && rect.bottom > fg_rect.top
+                                            && rect.top < fg_rect.bottom);
+                                    if overlaps_fg {
+                                        let visible_left = if has_fg_rect {
+                                            rect.left.max(fg_rect.left)
+                                        } else {
+                                            rect.left
+                                        };
+                                        let visible_top = if has_fg_rect {
+                                            rect.top.max(fg_rect.top)
+                                        } else {
+                                            rect.top
+                                        };
+                                        let ax = visible_left + 16;
+                                        let ay = visible_top + 36;
+                                        if within_fg(ax, ay) {
+                                            return Some(((ax, ay), "uia-focus-editor"));
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
