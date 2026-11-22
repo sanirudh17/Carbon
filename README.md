@@ -24,7 +24,7 @@ Carbon is a local-first clipboard manager for Windows. Press a hotkey to summon 
 
 Everything lives in a local SQLite database (`carbon_history.db`) with image files on disk in `%APPDATA%\com.carbon.clipboard\`. History, snippets, collections, and settings never leave your computer.
 
-> **New here?** Install `Carbon_0.1.21_x64-setup.exe` from [Releases](https://github.com/sanirudh17/Carbon/releases/latest) — no extra dependencies, PP-OCRv6 Small is already bundled.
+> **New here?** Install `Carbon_0.1.22_x64-setup.exe` from [Releases](https://github.com/sanirudh17/Carbon/releases/latest) — no extra dependencies, PP-OCRv6 Small is already bundled.
 
 ## Contents
 
@@ -52,7 +52,9 @@ Everything lives in a local SQLite database (`carbon_history.db`) with image fil
 
 **Overlay & Library**
 
-- **Quick Overlay** (`Ctrl+Shift+Z`) — fixed split-frame overlay with permanent preview pane, `1–9` quick-paste, native Windows Desktop Acrylic translucency (`Glass` or `Solid`), type &amp; app filters, Paste Queue (`Shift+Enter` / `Ctrl+V` advance), and paste transforms (plain text, markdown, JSON, uppercase/lowercase/title, base64, URL encode/decode).
+- **Quick Overlay** (`Ctrl+Shift+Z`) — fixed split-frame overlay with permanent preview pane, **Center or Caret-anchored placement** (probes Win32 & Windows UI Automation text carets with cursor fallback), `1–9` quick-paste, native Windows Desktop Acrylic translucency (`Glass` or `Solid`), type &amp; app filters, smooth GPU-composited sliding selection indicators, and paste transforms (plain text, markdown, JSON, uppercase/lowercase/title, base64, URL encode/decode).
+- **Reorderable Paste Stack Drawer** (`Shift+Enter` / `Ctrl+V` advance) — floating frosted drawer in both the Quick Overlay and Full Library with live pointer drag-to-reorder, up/down/reverse controls, and instant queue sync.
+- **Opt-in Smart Content Inspector** — local, deterministic payload inspector toggled on demand via the Sparkles button beside `Render | Raw` (off by default). Decodes JWTs (bare, `Bearer`, `Authorization:`, or embedded), Unix timestamps (`s`/`ms`/`µs`/`ns`), ISO-8601 &amp; RFC 2822 dates, CSS colors (HEX/RGB/HSL/CSS4/alpha), UUIDs &amp; ULIDs, emails, URLs &amp; query strings (with 1-click tracking-param cleanup), 5/6-field &amp; preset Cron schedules, IPv4 CIDR subnets, cURL commands, raw/fenced/escaped JSON (1-click Pretty/Minify), `.env` configs, Base64 (`Basic` auth, data URIs, wrapped MIME), and Unicode/HTML escapes — including scanned QR/OCR image text in the Library.
 - **Full Library** (`Ctrl+Alt+X`) — searchable history with collections sidebar, syntax-highlighted code previews, rich-text/Markdown rendering, image &amp; video previews, and snippet management.
 
 **Snippets & Expansion**
@@ -118,7 +120,7 @@ Everything lives in a local SQLite database (`carbon_history.db`) with image fil
 ## Settings Reference
 
 - **Shortcuts** — Quick overlay (`Ctrl+Shift+Z`) · Library window (`Ctrl+Alt+X`).
-- **Behavior** — Start with Windows · Move pasted clip to top · Deselect after paste (web inputs) · ClipMerge + window (`500–10000 ms`).
+- **Behavior** — Start with Windows · Quick Overlay position (`Center` or `Caret`) · Move pasted clip to top · Deselect after paste (web inputs) · ClipMerge + window (`500–10000 ms`).
 - **Snippets** — Inline snippet expansion (consent-gated, `WH_KEYBOARD_LL`) · Show snippets.
 - **Capture Rules** — Strip URL tracking parameters · Find &amp; Replace rules (plain/regex, ordered).
 - **Privacy** — Auto-expire sensitive clips · Ignored apps list (add/remove `.exe` names).
@@ -132,7 +134,7 @@ Download the latest installer from the [**Releases**](https://github.com/sanirud
 
 | Installer | Notes |
 |---|---|
-| **`Carbon_0.1.21_x64-setup.exe`** | NSIS installer — single executable, bundles PP-OCRv6 Small &amp; ONNX Runtime CPU. |
+| **`Carbon_0.1.22_x64-setup.exe`** | NSIS installer — single executable, bundles PP-OCRv6 Small &amp; ONNX Runtime CPU. |
 
 Everything Carbon needs is bundled — no extra dependencies. The installer is currently unsigned, so Windows SmartScreen may show *“Windows protected your PC”* → **More info → Run anyway**.
 
@@ -175,7 +177,7 @@ npm run tauri dev
 
 ```bash
 npm run tauri build
-# → src-tauri/target/release/bundle/nsis/Carbon_0.1.21_x64-setup.exe
+# → src-tauri/target/release/bundle/nsis/Carbon_0.1.22_x64-setup.exe
 ```
 
 ### 5. Run the test suite
@@ -201,8 +203,9 @@ npm run build
 
 ```
 src/               React + TypeScript frontend (Vite)
-  components/      QuickOverlay, EnlargedWindow, Settings, ClipPreview, SnippetsView, Icons (HugeIcons)
-  lib/             choreo, richText, syntaxHighlight, searchHighlights, accentContrast
+  components/      QuickOverlay, EnlargedWindow, Settings, ClipPreview, PasteStackDrawer, SmartContentInspector, SnippetsView, Icons (HugeIcons)
+  hooks/           useSlidingIndicator
+  lib/             choreo, richText, syntaxHighlight, smartInspector, searchHighlights, accentContrast
   utils/           clipActions, clipDrag, snippets, collections, hotkeys
 src-tauri/
   src/             Rust core (clipboard_watcher, db, hotkey, shortcuts, expansion, ocr, paste, native_drag, vibrancy, settings)

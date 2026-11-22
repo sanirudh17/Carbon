@@ -54,7 +54,7 @@ import {
   Shield01Icon,
   SparklesIcon as HugeSparklesIcon,
 } from '@hugeicons/core-free-icons';
-import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { ClipItem, ContentType } from '../types';
 import carbonBadgeDarkPng from '../assets/carbon-badge-dark.png';
 import carbonBadgeLightPng from '../assets/carbon-badge-light.png';
@@ -279,44 +279,67 @@ function runThumbQueue() {
   }
 }
 
-async function downscaleThumbnail(dataUrl: string): Promise<string> {
+async function downscaleThumbnail(src: string, isAssetUrl = false): Promise<string | null> {
   try {
-    if (typeof document === 'undefined' || typeof Image === 'undefined') return dataUrl;
-    return await new Promise<string>((resolve) => {
+    if (typeof document === 'undefined' || typeof Image === 'undefined') {
+      return isAssetUrl ? null : src;
+    }
+    return await new Promise<string | null>((resolve) => {
       const img = new Image();
+      if (isAssetUrl) img.crossOrigin = 'anonymous';
       img.decoding = 'async';
+      const cleanup = () => {
+        img.onload = null;
+        img.onerror = null;
+        img.src = '';
+      };
       img.onload = () => {
+        let canvas: HTMLCanvasElement | null = null;
         try {
           const maxSide = 64;
           const nw = img.naturalWidth || 0;
           const nh = img.naturalHeight || 0;
-          if (!nw || !nh || (nw <= maxSide && nh <= maxSide)) {
-            resolve(dataUrl);
+          if (!nw || !nh) {
+            resolve(isAssetUrl ? null : src);
             return;
           }
-          const scale = Math.min(maxSide / nw, maxSide / nh);
+          if (!isAssetUrl && nw <= maxSide && nh <= maxSide) {
+            resolve(src);
+            return;
+          }
+          const scale = Math.min(1, maxSide / nw, maxSide / nh);
           const w = Math.max(1, Math.round(nw * scale));
           const h = Math.max(1, Math.round(nh * scale));
-          const canvas = document.createElement('canvas');
+          canvas = document.createElement('canvas');
           canvas.width = w;
           canvas.height = h;
           const ctx = canvas.getContext('2d');
           if (!ctx) {
-            resolve(dataUrl);
+            resolve(isAssetUrl ? null : src);
             return;
           }
           ctx.drawImage(img, 0, 0, w, h);
           const small = canvas.toDataURL('image/webp', 0.8);
           resolve(small.startsWith('data:image/') ? small : canvas.toDataURL('image/png'));
         } catch {
-          resolve(dataUrl);
+          // Tainted canvas on asset protocol -> let caller fall back cleanly to IPC data URL
+          resolve(isAssetUrl ? null : src);
+        } finally {
+          if (canvas) {
+            canvas.width = 0;
+            canvas.height = 0;
+          }
+          cleanup();
         }
       };
-      img.onerror = () => resolve(dataUrl);
-      img.src = dataUrl;
+      img.onerror = () => {
+        cleanup();
+        resolve(isAssetUrl ? null : src);
+      };
+      img.src = src;
     });
   } catch {
-    return dataUrl;
+    return isAssetUrl ? null : src;
   }
 }
 
@@ -329,13 +352,28 @@ function loadThumbnail(filePath: string): Promise<string | null> {
 
   const promise = new Promise<string | null>((resolve) => {
     const start = () => {
-      invoke<string>('get_image_data_url', { filePath })
-        .then(async (dataUrl) => {
-          if (!dataUrl) return null;
-          const compact = await downscaleThumbnail(dataUrl);
-          setCachedThumbnail(filePath, compact);
-          return compact;
-        })
+      (async () => {
+        // Fast zero-IPC path: stream via Tauri's asset protocol first, downscaling
+        // immediately and releasing the decoded bitmap. Falls back to async IPC
+        // only when asset protocol fails or taints the canvas.
+        let compact: string | null = null;
+        try {
+          const assetUrl = convertFileSrc(filePath);
+          if (assetUrl) {
+            compact = await downscaleThumbnail(assetUrl, true);
+          }
+        } catch {
+          compact = null;
+        }
+        if (!compact) {
+          const dataUrl = await invoke<string>('get_image_data_url', { filePath });
+          if (dataUrl) {
+            compact = await downscaleThumbnail(dataUrl, false);
+          }
+        }
+        if (compact) setCachedThumbnail(filePath, compact);
+        return compact;
+      })()
         .catch(() => null)
         .then((res) => {
           thumbnailInflight.delete(filePath);

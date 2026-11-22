@@ -56,7 +56,6 @@ struct TrieNode {
 struct TrieTerminal {
     snippet_id: String,
     keyword: String, // original case
-    keyword_lower: String,
 }
 
 pub struct KeywordTrie {
@@ -118,7 +117,6 @@ impl KeywordTrie {
         self.nodes[idx].terminal = Some(TrieTerminal {
             snippet_id: snippet_id.clone(),
             keyword: keyword.to_string(),
-            keyword_lower: lower.clone(),
         });
         self.keywords.insert(lower, snippet_id);
     }
@@ -132,7 +130,7 @@ impl KeywordTrie {
         let rev: Vec<char> = buffer_lower.chars().rev().collect();
         let mut idx = 0usize;
         let mut best: Option<(usize, String, String)> = None;
-        for (i, ch) in rev.iter().enumerate() {
+        for ch in &rev {
             let next = {
                 let node = &self.nodes[idx];
                 node.children.get(ch).copied()
@@ -158,10 +156,6 @@ impl KeywordTrie {
             }
         }
         false
-    }
-
-    fn contains(&self, keyword_lower: &str) -> bool {
-        self.keywords.contains_key(keyword_lower)
     }
 }
 
@@ -245,6 +239,7 @@ struct ArgPromptEntry {
 }
 
 #[derive(serde::Serialize, Clone, Debug)]
+#[allow(non_snake_case)]
 pub struct ArgPromptRequest {
     pub id: u64,
     pub name: String,
@@ -768,21 +763,6 @@ pub fn on_snippets_changed() {
     }
 }
 
-pub fn set_expansion_enabled(enabled: bool) -> Result<(), String> {
-    ENABLED.store(enabled, Ordering::SeqCst);
-    // Persist to settings.json (without triggering full save_settings hotkey re-register)
-    if let Some(ctx) = EXPANSION_CTX.lock().unwrap().as_ref() {
-        let mut s = ctx.settings.get();
-        if s.snippet_expansion_enabled != enabled {
-            s.snippet_expansion_enabled = enabled;
-            ctx.settings.update(s).map_err(|e| e.to_string())?;
-            let _ = ctx.app_handle.emit("settings-updated", &ctx.settings.get());
-        }
-    }
-    set_hook_enabled(enabled);
-    Ok(())
-}
-
 /// Install/uninstall the hook to match `enabled` without touching settings.json.
 /// Used when `save_settings` has already persisted the flag.
 pub fn set_hook_enabled(enabled: bool) {
@@ -1186,8 +1166,7 @@ fn handle_key_quick(vk_code: u32, _flags: KBDLLHOOKSTRUCT_FLAGS) {
 
     // Append to buffer (lowercased for matching, but keep original case for deletion length? keyword_len is in chars, case-insensitive)
     let ch_lower = ch.to_lowercase().next().unwrap_or(ch);
-    let mut matched: Option<(usize, String, String)> = None;
-    {
+    let matched = {
         let mut buf = TYPING_BUFFER.lock().unwrap();
         buf.push(ch_lower);
         // Cap at 256 chars: keep most recent 256
@@ -1197,8 +1176,8 @@ fn handle_key_quick(vk_code: u32, _flags: KBDLLHOOKSTRUCT_FLAGS) {
         }
         // Check for match (blocking read — rebuild holds write for <1ms, must not miss first keystroke)
         let trie = TRIE.read().unwrap();
-        matched = trie.find_longest_suffix(&buf);
-    }
+        trie.find_longest_suffix(&buf)
+    };
 
     if let Some((kw_len, snippet_id, keyword)) = matched {
         crate::paste::log_diag(&format!("[EXPANSION] Matched keyword '{}' len {} -> snippet {}", keyword, kw_len, snippet_id));
@@ -1516,13 +1495,6 @@ fn post_expansion_success(snippet: &Snippet, expanded_text: &str) {
 // Placeholder resolution (Rust port of snippets.ts logic, minimal for Phase B)
 // ---------------------------------------------------------------------------
 
-fn resolve_snippet_content(snippet: &Snippet) -> Result<String, String> {
-    // For now, simple pass-through with cursor handling via expand_with_cursor
-    // This wrapper exists for future full placeholder support.
-    let (text, _off) = expand_with_cursor(snippet)?;
-    Ok(text)
-}
-
 fn expand_with_cursor(snippet: &Snippet) -> Result<(String, Option<usize>), String> {
     // Load recent clips and selection for placeholder context
     let (recent_texts, selection) = {
@@ -1630,7 +1602,6 @@ fn expand_content_with_placeholders(
                     continue;
                 }
                 // Try known placeholders
-                let lower_inner = inner.to_lowercase();
                 // Split on '|' for modifiers
                 let parts: Vec<&str> = inner.split('|').collect();
                 let head = parts[0].trim();
@@ -2026,7 +1997,7 @@ pub fn try_get_uia_selection() -> Option<String> {
     }
 }
 
-fn is_password_field(hwnd: HWND) -> bool {
+fn is_password_field(_hwnd: HWND) -> bool {
     // Best approximation via UI Automation where feasible
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
@@ -2267,7 +2238,7 @@ fn get_caret_screen_position() -> (i32, i32) {
     }
 }
 
-fn try_uia_replace(hwnd: HWND, keyword: &str, keyword_len: usize, pre: &str, post: Option<&str>) -> bool {
+fn try_uia_replace(_hwnd: HWND, keyword: &str, keyword_len: usize, pre: &str, post: Option<&str>) -> bool {
     // Small delay to let the target app process the final WM_CHAR for the keyword
     std::thread::sleep(std::time::Duration::from_millis(35));
     unsafe {
@@ -2466,13 +2437,12 @@ fn send_left_arrows(count: usize) {
     }
 }
 
-fn try_clipboard_paste(pre: &str, post: Option<&str>, keyword_len: usize) -> bool {
+fn try_clipboard_paste(pre: &str, post: Option<&str>, _keyword_len: usize) -> bool {
     use windows::Win32::System::DataExchange::{
         CloseClipboard, GetClipboardData, GetClipboardSequenceNumber, IsClipboardFormatAvailable,
         OpenClipboard,
     };
-    use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 
     let full_text = match post {
         Some(p) => format!("{}{}", pre, p),

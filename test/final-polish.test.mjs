@@ -319,7 +319,61 @@ test('smartInspector decodes JWTs, Unix timestamps, URL query params, percent st
   assert.equal(plainUrlRes?.kind, 'url_info');
   assert.equal(plainUrlRes?.copyValue, 'github.com');
 
-  // 8. Reject ordinary prose, hex hashes, and short numbers
+  // 8. Universal real-world inputs (not just canonical demo strings)
+  // Embedded JWT inside Authorization header or log block
+  const authJwt = inspectClipContent(`Authorization: ${activeJwt}`, nowMs);
+  assert.equal(authJwt?.kind, 'jwt');
+  const embeddedJwt = inspectClipContent(`user=alice\ntoken=${expiredJwt}`, nowMs);
+  assert.equal(embeddedJwt?.kind, 'jwt');
+
+  // Microsecond & nanosecond timestamps, ISO date-only, RFC 2822 HTTP date
+  assert.equal(inspectClipContent('1700000000123456', nowMs)?.title, 'Unix Timestamp (µs)');
+  assert.equal(inspectClipContent('1700000000123456789', nowMs)?.title, 'Unix Timestamp (ns)');
+  assert.equal(inspectClipContent('2026-11-22', nowMs)?.kind, 'iso_date');
+  assert.equal(inspectClipContent('Sun, 22 Nov 2026 05:12:21 GMT', nowMs)?.kind, 'iso_date');
+
+  // CSS4 space-separated colors with alpha, 8-digit hex, and CSS declarations
+  const css4Color = inspectClipContent('rgb(91 124 250 / 80%)', nowMs);
+  assert.equal(css4Color?.kind, 'color');
+  assert.equal(css4Color?.badge?.text, '#5B7CFACC');
+  assert.equal(inspectClipContent('color: #5B7CFA;', nowMs)?.kind, 'color');
+
+  // Braced UUID, ULID, Email with plus-tag
+  assert.equal(inspectClipContent('{01934f5e-8a10-7abc-9123-456789abcdef}', nowMs)?.kind, 'uuid');
+  assert.equal(inspectClipContent('01ARZ3NDEKTSV4RRFFQ69G5FAV', nowMs)?.title, 'ULID Inspector');
+  const emailRes = inspectClipContent('Alice <alice+news@example.com>', nowMs);
+  assert.equal(emailRes?.kind, 'email');
+  assert.equal(emailRes?.copyValue, 'alice@example.com');
+
+  // URL with tracking params offers Copy Clean URL; markdown link & standalone query string
+  const trackedUrl = inspectClipContent('https://www.youtube.com/watch?v=abc123&utm_source=chatgpt.com', nowMs);
+  assert.equal(trackedUrl?.kind, 'url_params');
+  assert.equal(trackedUrl?.copyLabel, 'Copy Clean URL');
+  assert.equal(trackedUrl?.copyValue, 'https://www.youtube.com/watch?v=abc123');
+  assert.equal(inspectClipContent('[Carbon](https://github.com/sanirudh17/Carbon)', nowMs)?.kind, 'url_info');
+  assert.equal(inspectClipContent('foo=1&bar=hello%20world', nowMs)?.kind, 'url_params');
+
+  // 6-field cron, @daily preset, CIDR subnet, cURL command, fenced & escaped JSON, .env, HTTP Basic, Unicode/HTML escapes
+  assert.equal(inspectClipContent('0 */15 * * * MON-FRI', nowMs)?.badge?.text, '6-field');
+  assert.equal(inspectClipContent('@daily', nowMs)?.copyValue, 'Daily at 00:00');
+  const cidrRes = inspectClipContent('192.168.1.0/24', nowMs);
+  assert.equal(cidrRes?.kind, 'cidr');
+  assert.equal(cidrRes?.copyValue, '192.168.1.1 – 192.168.1.254');
+  const curlRes = inspectClipContent('curl -X POST https://api.example.com/v1/items -H "Accept: application/json" -d \'{"a":1}\'', nowMs);
+  assert.equal(curlRes?.kind, 'curl');
+  assert.equal(curlRes?.badge?.text, 'POST');
+  assert.equal(inspectClipContent('```json\n{"ok":true}\n```', nowMs)?.kind, 'json');
+  assert.equal(inspectClipContent('"{\\"nested\\":1}"', nowMs)?.title, 'Escaped JSON');
+  const envRes = inspectClipContent('PORT=3000\nNODE_ENV=production\nAPI_HOST=localhost', nowMs);
+  assert.equal(envRes?.kind, 'env');
+  assert.equal(JSON.parse(envRes?.copyValue || '{}').PORT, '3000');
+  const basicAuth = inspectClipContent(`Basic ${Buffer.from('admin:s3cr3t', 'utf8').toString('base64')}`, nowMs);
+  assert.equal(basicAuth?.title, 'HTTP Basic Auth');
+  assert.equal(basicAuth?.copyValue, 'admin:s3cr3t');
+  assert.equal(inspectClipContent('\\u0048\\u0065\\u006c\\u006c\\u006f', nowMs)?.copyValue, 'Hello');
+  assert.equal(inspectClipContent('&lt;div&gt;Hi &amp; bye&lt;/div&gt;', nowMs)?.copyValue, '<div>Hi & bye</div>');
+
+  // 9. Reject ordinary prose, hex hashes, and short numbers
   assert.equal(inspectClipContent('Please do so', nowMs), null);
   assert.equal(inspectClipContent('deadbeefcafe0123456789abcdef0123', nowMs), null);
   assert.equal(inspectClipContent('42', nowMs), null);

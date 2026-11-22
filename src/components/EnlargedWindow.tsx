@@ -231,9 +231,12 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
 
   // Keep editingContent in sync with selectedItem text_content so the edit pane
   // never shows empty content when a valid text item is selected.
-  // W1.3: never clobber an uncommitted buffer — the buffer wins until flush.
   useEffect(() => {
     setInspectorOpen(false);
+  }, [selectedItem?.id]);
+
+  // W1.3: never clobber an uncommitted buffer — the buffer wins until flush.
+  useEffect(() => {
     if (editDirtyRef.current && selectedItem && editDirtyRef.current.id === selectedItem.id) return;
     setEditingContent(selectedItem?.text_content || '');
   }, [selectedItem?.id, selectedItem?.text_content]);
@@ -315,6 +318,26 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
   const [actionIndex, setActionIndex] = useState(0);
   const [renderMode, setRenderMode] = useState(true);
   const [pasteMenuOpen, setPasteMenuOpen] = useState(false);
+
+  const mainSmartInspectText = useMemo(() => {
+    if (!selectedItem || selectedItem.content_type === 'file') return null;
+    if (selectedItem.content_type === 'image') {
+      return selectedItem.qr_content || selectedItem.ocr_text || null;
+    }
+    const hasRendered =
+      !!search.trim() ||
+      selectedItem.content_type === 'rich_text' ||
+      (selectedItem.content_type === 'code' && Boolean(selectedItem.text_content)) ||
+      (selectedItem.content_type === 'text' && Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!));
+    return hasRendered && renderMode
+      ? selectedItem.text_content || null
+      : editingContent || selectedItem.text_content || null;
+  }, [selectedItem, search, renderMode, editingContent]);
+
+  const mainSmartInspection = useMemo(
+    () => (mainSmartInspectText ? inspectClipContent(mainSmartInspectText) : null),
+    [mainSmartInspectText],
+  );
 
   // Collections State
   const [collections, setCollections] = useState<Collection[]>([]);
@@ -2824,15 +2847,6 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
             selectedItem.content_type === 'rich_text' ||
             (selectedItem.content_type === 'code' && Boolean(selectedItem.text_content)) ||
             (selectedItem.content_type === 'text' && Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!));
-          const mainInspectText =
-            selectedItem.is_sensitive ||
-            selectedItem.content_type === 'image' ||
-            selectedItem.content_type === 'file'
-              ? null
-              : hasMainRenderedVersion && renderMode
-                ? selectedItem.text_content
-                : editingContent || selectedItem.text_content;
-          const mainSmartInspection = mainInspectText ? inspectClipContent(mainInspectText) : null;
           const showMainInspector = Boolean(inspectorOpen && mainSmartInspection);
 
           return (
@@ -2848,9 +2862,9 @@ export const EnlargedWindow: React.FC<EnlargedWindowProps> = ({ onOpenSettings, 
                 </span>
               )}
               <div className="preview-head-right">
-                {!['image', 'file'].includes(selectedItem.content_type) && (hasMainRenderedVersion || mainSmartInspection) && (
+                {((!['image', 'file'].includes(selectedItem.content_type) && hasMainRenderedVersion) || mainSmartInspection) && (
                   <>
-                    {hasMainRenderedVersion && (
+                    {!['image', 'file'].includes(selectedItem.content_type) && hasMainRenderedVersion && (
                       <SlidingSegmentedControl
                         variant="preview"
                         ariaLabel="Preview mode"

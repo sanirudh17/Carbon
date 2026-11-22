@@ -76,9 +76,12 @@ async fn get_today_clips(
     category: Option<String>,
     collection_id: Option<String>,
 ) -> Result<Vec<ClipItem>, String> {
-    state
-        .db
-        .get_today_entries(search.as_deref(), category.as_deref(), collection_id.as_deref())
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        db.get_today_entries(search.as_deref(), category.as_deref(), collection_id.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -985,21 +988,25 @@ fn reveal_file_in_explorer(file_path: String) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-fn get_image_data_url(file_path: String) -> Result<String, String> {
-    use base64::Engine;
-    let bytes = std::fs::read(&file_path).map_err(|e| e.to_string())?;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    let mime = if file_path.ends_with(".png") {
-        "image/png"
-    } else if file_path.ends_with(".jpg") || file_path.ends_with(".jpeg") {
-        "image/jpeg"
-    } else if file_path.ends_with(".webp") {
-        "image/webp"
-    } else {
-        "image/png"
-    };
-    Ok(format!("data:{};base64,{}", mime, b64))
+#[tauri::command(async)]
+async fn get_image_data_url(file_path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use base64::Engine;
+        let bytes = std::fs::read(&file_path).map_err(|e| e.to_string())?;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let mime = if file_path.ends_with(".png") {
+            "image/png"
+        } else if file_path.ends_with(".jpg") || file_path.ends_with(".jpeg") {
+            "image/jpeg"
+        } else if file_path.ends_with(".webp") {
+            "image/webp"
+        } else {
+            "image/png"
+        };
+        Ok(format!("data:{};base64,{}", mime, b64))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command(async)]
@@ -1401,7 +1408,8 @@ pub fn run() {
                                 eprintln!("[SINGLETON] Duplicate carbon.exe detected — exiting so the first instance keeps the hotkeys.");
                                 std::process::exit(0);
                             }
-                            std::mem::forget(handle);
+                            // Keep the OS mutex handle open for the process lifetime so Windows releases it on exit.
+                            let _ = handle;
                         }
                         Err(e) => {
                             eprintln!("[SINGLETON] CreateMutexW failed ({e:?}) — continuing without singleton guard.");

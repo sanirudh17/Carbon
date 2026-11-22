@@ -1441,9 +1441,31 @@ export const QuickOverlay: React.FC = () => {
   // W1.3: never clobber an uncommitted buffer — the buffer wins until blur/selection flush.
   useEffect(() => {
     setInspectorOpen(false);
+  }, [selectedItem?.id]);
+
+  useEffect(() => {
     if (editDirtyRef.current && selectedItem && editDirtyRef.current.id === selectedItem.id) return;
     setEditingContent(selectedItem?.text_content || '');
   }, [selectedItem?.id, selectedItem?.text_content]);
+
+  const overlaySmartInspectText = useMemo(() => {
+    if (!selectedItem || selectedItem.content_type === 'image' || selectedItem.content_type === 'file') {
+      return null;
+    }
+    const hasRendered =
+      !!search.trim() ||
+      selectedItem.content_type === 'rich_text' ||
+      (selectedItem.content_type === 'code' && Boolean(selectedItem.text_content)) ||
+      (selectedItem.content_type === 'text' && Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!));
+    return hasRendered && renderMode
+      ? selectedItem.text_content || null
+      : editingContent || selectedItem.text_content || null;
+  }, [selectedItem, search, renderMode, editingContent]);
+
+  const overlaySmartInspection = useMemo(
+    () => (overlaySmartInspectText ? inspectClipContent(overlaySmartInspectText) : null),
+    [overlaySmartInspectText],
+  );
 
   const handleExtractOrCopyOcr = async (item: ClipItem) => {
     try {
@@ -2264,15 +2286,7 @@ export const QuickOverlay: React.FC = () => {
                   (selectedItem.content_type === 'code' && Boolean(selectedItem.text_content)) ||
                   (selectedItem.content_type === 'text' && Boolean(selectedItem.text_content) && isMarkdownContent(selectedItem.text_content!));
 
-                const inspectText =
-                  selectedItem.is_sensitive ||
-                  selectedItem.content_type === 'image' ||
-                  selectedItem.content_type === 'file'
-                    ? null
-                    : hasRenderedVersion && renderMode
-                      ? selectedItem.text_content
-                      : editingContent || selectedItem.text_content;
-                const smartInspection = inspectText ? inspectClipContent(inspectText) : null;
+                const smartInspection = overlaySmartInspection;
                 const showInspector = Boolean(inspectorOpen && smartInspection);
 
                 return (

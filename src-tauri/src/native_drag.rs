@@ -1828,7 +1828,7 @@ mod conformance_tests {
             let med_t = obj
                 .GetData(&fmtetc(CF_TEXT, HGLOBAL_TYMED, -1))
                 .expect("R2/R3: supported GetData must succeed");
-            for (cf, med) in [(CF_UNICODETEXT, &med_u), (CF_TEXT, &med_t)] {
+            for (_cf, med) in [(CF_UNICODETEXT, &med_u), (CF_TEXT, &med_t)] {
                 assert_eq!(med.tymed, HGLOBAL_TYMED, "R3: medium tymed must match");
                 assert!(!med.u.hGlobal.0.is_null(), "R3: hGlobal must be set");
             }

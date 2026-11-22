@@ -2,6 +2,24 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
+## [0.1.22] - 2026-11-22
+
+A major polish and feature release introducing Caret-anchored Quick Overlay placement, an interactive Reorderable Paste Stack Drawer, an opt-in universal Smart Content Inspector, TinyCast/Linear-inspired frosted-glass refinements, smoother content search, and zero-warning native performance hardening.
+
+### Added
+
+- **Caret-anchored Quick Overlay placement** — Choose between `Center` and `Caret` in `Settings → Behavior`. Caret mode probes the active text insertion point across Win32 and Windows UI Automation (`IUIAutomationTextPattern2::GetCaretRange` / `TextPattern::GetSelection` / focused control bounds) with cursor fallback and automatic screen-edge clamping.
+- **Floating Reorderable Paste Stack Drawer** — Manage queued clips in both the Quick Overlay and Full Library with live pointer drag-to-reorder, up/down, reverse order, remove, and cross-window live sync (`paste-queue-updated`).
+- **Opt-in Smart Content Inspector** — Toggled on demand via the Sparkles button beside `Render | Raw` (off by default). Deterministically inspects JWTs (bare, `Bearer`, `Authorization:`, or embedded), Unix timestamps (`s`/`ms`/`µs`/`ns`), ISO-8601 & RFC 2822 dates, CSS colors (HEX/RGB/HSL/CSS4/alpha), UUIDs & ULIDs, emails, URLs & query strings (with 1-click tracking-param cleanup), 5/6-field & preset Cron schedules, IPv4 CIDR subnets, cURL commands, raw/fenced/escaped JSON, `.env` configs, Base64 (`Basic` auth, data URIs, wrapped MIME), and Unicode/HTML escapes — including scanned QR/OCR image text in the Library.
+- **Follow System Theme, Ignored Apps & Syntax Highlighting** — Automatic Windows light/dark theme tracking, editable Ignored Apps list in Settings, pure-DOM sliding selection indicators, and theme-aware syntax highlighting for 11 languages.
+
+### Fixed & Improved
+
+- **Smooth content search** — Fixed mid-typing stalls caused by async `startTransition` prop catch-up resetting the input draft or cancelling pending debounce timers; bounded snippet slicing, added `idx_clip_collections_clip`, added CSS `contain: layout style` on list rows, and passed settled `resultSearch` to `ClipPreview`.
+- **Capture classification & Glint screenshots** — Eliminated false-positive Code, Link, and Formatted Text classifications on plain prose/filenames; captured Glint image files as true image clips with startup repair for existing rows.
+- **`Win+Shift+S` compatibility** — Blur-hide skips restoring the previous foreground window so Windows Snipping Tool / Glint overlays are never stolen, and `Ctrl+S` ignores shifted/alt combos.
+- **Performance, memory & compiler cleanup** — Offloaded `get_image_data_url` and `get_today_clips` to `spawn_blocking`, added asset-protocol-first thumbnailing with immediate decoded bitmap/canvas cleanup, memoized Smart Content Inspector evaluation, and cleared all Rust compiler warnings.
+
 ## [0.1.21] - 2026-11-02
 
 A focused fix for first-open and idle-reopen white flashes, with the slightly clearer glass approved in development review.

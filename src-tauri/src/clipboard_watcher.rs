@@ -869,11 +869,11 @@ fn process_clipboard_change(
                                             let size = GlobalSize(hglobal);
                                             if size > std::mem::size_of::<BITMAPINFOHEADER>() {
                                                 let header_ptr = ptr as *const BITMAPINFOHEADER;
-                                                let header = unsafe { *header_ptr };
+                                                let header = *header_ptr;
                                                 let width = header.biWidth.abs() as u32;
                                                 let height = header.biHeight.abs() as u32;
                                                 if width > 0 && height > 0 {
-                                                    let data_slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, size as usize) };
+                                                    let data_slice = std::slice::from_raw_parts(ptr as *const u8, size as usize);
                                                     if let Some(img_buf) = parse_dib_to_image(data_slice, width, height) {
                                                         let _ = std::fs::create_dir_all(media_dir);
                                                         let img_id = uuid_v4();
@@ -1195,23 +1195,6 @@ pub fn is_rich_rtf(rtf: &str) -> bool {
         || rtf.contains("\\ul ") || rtf.contains("\\ul1") || rtf.contains("\\strike")
         || rtf.contains("\\highlight") || rtf.contains("\\cf1") || rtf.contains("\\cf2")
         || rtf.contains("\\bullet") || rtf.contains("\\trowd") || rtf.contains("\\cell")
-}
-
-fn strip_html_to_text(html: &str) -> String {
-    // Very small tag stripper for the plain-wrapper check — not a full parser,
-    // just enough to compare HTML textContent with plain text.
-    let re = Regex::new(r"<[^>]*>").unwrap();
-    let stripped = re.replace_all(html, "");
-    // Decode a few common entities that Notepad/Chromium emit
-    stripped
-        .replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .trim()
-        .to_string()
 }
 
 fn html_contains_formatting(html: &str) -> bool {

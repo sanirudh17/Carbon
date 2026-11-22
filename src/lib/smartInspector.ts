@@ -1,20 +1,24 @@
 /**
  * Deterministic, zero-dependency Smart Content Inspector for Carbon.
  *
- * Inspects clipboard text locally (zero AI, zero network) and returns a
- * structured read-only inspection card when the text matches a recognized
- * developer or power-user payload:
- *   1. JWT tokens (with optional `Bearer ` prefix) — alg, expiry status, claims
- *   2. Unix timestamps (10-digit s / 13-digit ms) — Local, UTC ISO, relative
- *   3. ISO-8601 timestamps — Local, Unix (s/ms), relative
- *   4. URLs — Query parameters table, URL breakdown (host/path/hash), or percent-decoded text
- *   5. Colors (#hex, rgb(), hsl()) — cross-format HEX / RGB / HSL conversions
- *   6. UUIDs (v1–v7) — version, variant, and embedded UTC timestamp for UUIDv7
- *   7. Cron expressions (5-field) — human-readable schedule summary
- *   8. JSON objects/arrays — structural summary + 1-click Minify / Pretty copy
- *   9. Readable UTF-8 Base64 — decoded text (auto-pretty JSON when valid)
+ * Inspects clipboard text locally (zero AI, zero network) across real-world
+ * developer and power-user payloads — never limited to synthetic samples:
+ *   1. JWT tokens (bare, `Bearer`, `Authorization:`, quoted, or embedded in a short block)
+ *   2. Unix timestamps (10s / 13ms / 16µs / 19ns) — Local, UTC ISO, relative
+ *   3. ISO-8601 & RFC 2822 / HTTP dates — Local, Unix (s/ms), relative
+ *   4. Colors (#rgb/#rgba/#rrggbb/#rrggbbaa, rgb/rgba, hsl/hsla, CSS4 space syntax, CSS declarations)
+ *   5. UUIDs (v1–v8, braced/URN, UUIDv7 timestamp) & ULIDs (embedded UTC timestamp)
+ *   6. Email addresses (bare, `mailto:`, `Name <addr>`, plus-tag parsing)
+ *   7. URLs & query strings (http/https/ws/ftp/db URIs, `www.`, Markdown links, tracking-param cleaner, percent-decoded)
+ *   8. Cron schedules (5-field, 6-field with seconds, named days/months, `@daily` presets)
+ *   9. IPv4 CIDR subnets (network, broadcast, netmask, usable range, host count)
+ *  10. cURL commands (method, target URL, headers, body preview)
+ *  11. JSON objects/arrays (raw up to 128 KB, Markdown ```json fences, or escaped JSON strings)
+ *  12. `.env` / KEY=VALUE config blocks (variable summary + 1-click Copy as JSON)
+ *  13. Readable UTF-8 Base64 (standard/URL-safe, `Basic` auth, `data:...;base64,`, wrapped multiline)
+ *  14. Unicode `\uXXXX` and HTML entity encoded text
  *
- * Returns `null` for ordinary text so regular clips stay completely uncluttered.
+ * Returns `null` for ordinary prose and plain numbers so regular clips stay uncluttered.
  */
 
 export type SmartInspectionKind =
@@ -24,11 +28,16 @@ export type SmartInspectionKind =
   | 'url_params'
   | 'url_info'
   | 'url_encoded'
+  | 'email'
   | 'color'
   | 'uuid'
   | 'cron'
+  | 'cidr'
+  | 'curl'
   | 'json'
-  | 'base64';
+  | 'env'
+  | 'base64'
+  | 'escaped';
 
 export interface SmartInspectionRow {
   label: string;
@@ -49,6 +58,38 @@ export interface SmartInspection {
   codeBlock?: string;
   copyLabel: string;
   copyValue: string;
+}
+
+const MAX_INSPECT_CHARS = 131_072; // 128 KB ceiling (e.g. real API JSON payloads)
+const MIN_EPOCH_MS = 1_000_000_000_000; // 2001-09-09
+const MAX_EPOCH_MS = 4_102_444_800_000; // 2100-01-01
+
+const TRACKING_PARAM_PATTERNS = [
+  /^utm_/i,
+  /^fbclid$/i,
+  /^gclid$/i,
+  /^dclid$/i,
+  /^msclkid$/i,
+  /^igshid$/i,
+  /^mc_cid$/i,
+  /^mc_eid$/i,
+  /^_hsenc$/i,
+  /^_hsmi$/i,
+  /^yclid$/i,
+  /^si$/i,
+];
+
+function stripOuterQuotes(s: string): string {
+  const t = s.trim();
+  if (
+    t.length >= 2 &&
+    ((t.startsWith('"') && t.endsWith('"')) ||
+      (t.startsWith("'") && t.endsWith("'")) ||
+      (t.startsWith('`') && t.endsWith('`')))
+  ) {
+    return t.slice(1, -1).trim();
+  }
+  return t;
 }
 
 function decodeBase64UrlToUtf8(segment: string): string | null {
@@ -84,8 +125,7 @@ function formatRelativeDuration(deltaMs: number): string {
   return wrap(`${(abs / (365 * 86_400_000)).toFixed(1)}y`);
 }
 
-function tryInspectJwt(trimmed: string, nowMs: number): SmartInspection | null {
-  const token = trimmed.replace(/^Bearer\s+/i, '').trim();
+function inspectJwtToken(token: string, nowMs: number): SmartInspection | null {
   const parts = token.split('.');
   if (parts.length !== 3) return null;
   if (parts.some((p) => p.length < 4 || !/^[A-Za-z0-9_-]+$/.test(p))) return null;
@@ -117,6 +157,9 @@ function tryInspectJwt(trimmed: string, nowMs: number): SmartInspection | null {
   if (typeof payload.iss === 'string') {
     rows.push({ label: 'Issuer', value: payload.iss, mono: true });
   }
+  if (typeof payload.aud === 'string') {
+    rows.push({ label: 'Audience', value: payload.aud, mono: true });
+  }
 
   let badge: SmartInspectionBadge | undefined;
   if (typeof payload.exp === 'number' && Number.isFinite(payload.exp)) {
@@ -145,17 +188,51 @@ function tryInspectJwt(trimmed: string, nowMs: number): SmartInspection | null {
   };
 }
 
-function tryInspectTimestamp(trimmed: string, nowMs: number): SmartInspection | null {
-  if (!/^\d{10}(\d{3})?$/.test(trimmed)) return null;
-  const raw = Number(trimmed);
-  if (!Number.isSafeInteger(raw)) return null;
+function tryInspectJwt(trimmed: string, nowMs: number): SmartInspection | null {
+  if (trimmed.length > 8192) return null;
+  // Direct token, Authorization header, Bearer prefix, or quoted value
+  const stripped = stripOuterQuotes(
+    trimmed
+      .replace(/^Authorization\s*:\s*/i, '')
+      .replace(/^Bearer\s+/i, '')
+      .replace(/[,;]+$/, ''),
+  );
+  const direct = inspectJwtToken(stripped, nowMs);
+  if (direct) return direct;
 
-  const isMs = trimmed.length === 13;
-  const epochMs = isMs ? raw : raw * 1000;
-  // Year 2001-09-09 through 2100-01-01 to avoid arbitrary phone/account numbers
-  const MIN_MS = 1_000_000_000_000;
-  const MAX_MS = 4_102_444_800_000;
-  if (epochMs < MIN_MS || epochMs > MAX_MS) return null;
+  // Embedded JWT inside a short header/env/log snippet (e.g. `TOKEN=eyJ...`)
+  if (trimmed.length <= 4096 && trimmed.includes('eyJ')) {
+    const match = trimmed.match(/\b(eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,})\b/);
+    if (match) {
+      return inspectJwtToken(match[1], nowMs);
+    }
+  }
+  return null;
+}
+
+function tryInspectTimestamp(trimmed: string, nowMs: number): SmartInspection | null {
+  const clean = stripOuterQuotes(trimmed.replace(/[,;]+$/, ''));
+  if (!/^\d{10}(?:\d{3}|\d{6}|\d{9})?$/.test(clean)) return null;
+
+  let epochMs: number;
+  let unitLabel: string;
+  if (clean.length === 10) {
+    epochMs = Number(clean) * 1000;
+    unitLabel = 's';
+  } else if (clean.length === 13) {
+    epochMs = Number(clean);
+    unitLabel = 'ms';
+  } else if (clean.length === 16) {
+    epochMs = Math.floor(Number(clean.slice(0, 13)));
+    unitLabel = 'µs';
+  } else {
+    epochMs = Math.floor(Number(clean.slice(0, 13)));
+    unitLabel = 'ns';
+  }
+
+  if (!Number.isFinite(epochMs) || epochMs < MIN_EPOCH_MS || epochMs > MAX_EPOCH_MS) {
+    return null;
+  }
 
   const d = new Date(epochMs);
   if (isNaN(d.getTime())) return null;
@@ -164,7 +241,7 @@ function tryInspectTimestamp(trimmed: string, nowMs: number): SmartInspection | 
 
   return {
     kind: 'timestamp',
-    title: isMs ? 'Unix Timestamp (ms)' : 'Unix Timestamp (s)',
+    title: `Unix Timestamp (${unitLabel})`,
     badge: { text: rel, tone: 'muted' },
     rows: [
       { label: 'Local', value: d.toLocaleString(), mono: true },
@@ -176,10 +253,21 @@ function tryInspectTimestamp(trimmed: string, nowMs: number): SmartInspection | 
 }
 
 function tryInspectIsoDate(trimmed: string, nowMs: number): SmartInspection | null {
-  if (!/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:?\d{2})?$/.test(trimmed)) {
-    return null;
-  }
-  const d = new Date(trimmed.includes(' ') ? trimmed.replace(' ', 'T') : trimmed);
+  const clean = stripOuterQuotes(trimmed.replace(/[,;]+$/, ''));
+  if (clean.length > 64 || clean.includes('\n')) return null;
+
+  const isIsoDateTime = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?$/.test(clean);
+  const isIsoDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(clean);
+  const isRfc2822 = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}\s+\d{2}:\d{2}(?::\d{2})?\s+(?:GMT|UTC|[+-]\d{4})$/i.test(clean);
+
+  if (!isIsoDateTime && !isIsoDateOnly && !isRfc2822) return null;
+
+  const parsedInput = isIsoDateOnly
+    ? `${clean}T00:00:00Z`
+    : isIsoDateTime && clean.includes(' ')
+      ? clean.replace(' ', 'T')
+      : clean;
+  const d = new Date(parsedInput);
   if (isNaN(d.getTime())) return null;
   const epochMs = d.getTime();
   const epochSec = Math.floor(epochMs / 1000);
@@ -187,10 +275,10 @@ function tryInspectIsoDate(trimmed: string, nowMs: number): SmartInspection | nu
 
   return {
     kind: 'iso_date',
-    title: 'ISO Timestamp',
+    title: isRfc2822 ? 'HTTP / RFC 2822 Date' : isIsoDateOnly ? 'ISO Date' : 'ISO Timestamp',
     badge: { text: rel, tone: 'muted' },
     rows: [
-      { label: 'Local', value: d.toLocaleString(), mono: true },
+      { label: 'Local', value: isIsoDateOnly ? d.toLocaleDateString() : d.toLocaleString(), mono: true },
       { label: 'Unix (s)', value: String(epochSec), mono: true },
       { label: 'Unix (ms)', value: String(epochMs), mono: true },
     ],
@@ -199,11 +287,71 @@ function tryInspectIsoDate(trimmed: string, nowMs: number): SmartInspection | nu
   };
 }
 
+function tryInspectEmail(trimmed: string): SmartInspection | null {
+  if (trimmed.length > 254 || trimmed.includes('\n')) return null;
+  let displayName: string | null = null;
+  let candidate = stripOuterQuotes(trimmed);
+  if (/^mailto:/i.test(candidate)) {
+    candidate = candidate.replace(/^mailto:/i, '').split('?')[0].trim();
+  }
+  const angleMatch = candidate.match(/^([^<>]{1,80})\s*<([^<>\s@]+@[^<>\s@]+\.[^<>\s@]+)>$/);
+  if (angleMatch) {
+    displayName = stripOuterQuotes(angleMatch[1]);
+    candidate = angleMatch[2].trim();
+  }
+  if (!/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(candidate)) {
+    return null;
+  }
+  const atIdx = candidate.lastIndexOf('@');
+  const local = candidate.slice(0, atIdx);
+  const domain = candidate.slice(atIdx + 1).toLowerCase();
+  const plusIdx = local.indexOf('+');
+  const baseMailbox = plusIdx > 0 ? local.slice(0, plusIdx) : local;
+  const plusTag = plusIdx > 0 ? local.slice(plusIdx + 1) : null;
+
+  const rows: SmartInspectionRow[] = [];
+  if (displayName) rows.push({ label: 'Name', value: displayName });
+  rows.push({ label: 'Mailbox', value: baseMailbox, mono: true });
+  if (plusTag) rows.push({ label: 'Tag', value: `+${plusTag}`, mono: true });
+  rows.push({ label: 'Domain', value: domain, mono: true });
+
+  const cleanEmail = plusTag ? `${baseMailbox}@${domain}` : candidate;
+  const copyClean = Boolean(plusTag || displayName || /^mailto:/i.test(trimmed));
+
+  return {
+    kind: 'email',
+    title: 'Email Inspector',
+    badge: { text: domain, tone: 'muted' },
+    rows,
+    copyLabel: copyClean ? 'Copy Clean Email' : 'Copy Domain',
+    copyValue: copyClean ? cleanEmail : domain,
+  };
+}
+
+function isTrackingParam(key: string): boolean {
+  return TRACKING_PARAM_PATTERNS.some((re) => re.test(key));
+}
+
 function tryInspectUrl(trimmed: string): SmartInspection | null {
-  if (trimmed.includes('\n') || trimmed.includes(' ')) return null;
-  if (/^https?:\/\//i.test(trimmed)) {
+  if (trimmed.includes('\n')) return null;
+
+  let candidate = stripOuterQuotes(trimmed);
+  // Markdown link `[label](https://...)`
+  const mdLink = candidate.match(/^\[[^\]]{1,120}\]\((https?:\/\/[^\s)]+)\)$/i);
+  if (mdLink) {
+    candidate = mdLink[1];
+  } else if (candidate.startsWith('<') && candidate.endsWith('>')) {
+    candidate = candidate.slice(1, -1).trim();
+  }
+  if (candidate.includes(' ')) return null;
+
+  const hasKnownScheme = /^(?:https?|wss?|ftp|ftps|postgres(?:ql)?|mysql|redis|rediss|mongodb(?:\+srv)?):\/\//i.test(candidate);
+  const isBareWww = /^www\.[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:[/:?#].*)?$/i.test(candidate);
+
+  if (hasKnownScheme || isBareWww) {
     try {
-      const u = new URL(trimmed);
+      const normalized = isBareWww ? `https://${candidate}` : candidate;
+      const u = new URL(normalized);
       const entries = Array.from(u.searchParams.entries());
       if (entries.length > 0) {
         const rows: SmartInspectionRow[] = entries.slice(0, 10).map(([k, v]) => ({
@@ -211,11 +359,24 @@ function tryInspectUrl(trimmed: string): SmartInspection | null {
           value: v || '(empty)',
           mono: true,
         }));
+        const trackingKeys = entries.filter(([k]) => isTrackingParam(k));
+        if (trackingKeys.length > 0) {
+          const cleanUrl = new URL(normalized);
+          for (const [k] of trackingKeys) cleanUrl.searchParams.delete(k);
+          return {
+            kind: 'url_params',
+            title: `URL Parameters (${entries.length})`,
+            badge: { text: `${trackingKeys.length} tracking`, tone: 'warn' },
+            rows,
+            copyLabel: 'Copy Clean URL',
+            copyValue: cleanUrl.toString(),
+          };
+        }
         const decodedUrl = (() => {
           try {
-            return decodeURIComponent(trimmed);
+            return decodeURIComponent(normalized);
           } catch {
-            return trimmed;
+            return normalized;
           }
         })();
         return {
@@ -227,42 +388,67 @@ function tryInspectUrl(trimmed: string): SmartInspection | null {
         };
       }
 
-      // Plain URL with non-trivial path, percent-encoding, or hash
-      const hasPath = u.pathname && u.pathname !== '/';
+      const hasPath = Boolean(u.pathname && u.pathname !== '/');
       const hasHash = Boolean(u.hash);
-      if (hasPath || hasHash) {
-        const decodedPath = (() => {
-          try {
-            return decodeURIComponent(u.pathname);
-          } catch {
-            return u.pathname;
-          }
-        })();
-        const rows: SmartInspectionRow[] = [
-          { label: 'Host', value: u.host, mono: true },
-        ];
-        if (hasPath) rows.push({ label: 'Path', value: decodedPath, mono: true });
-        if (hasHash) rows.push({ label: 'Fragment', value: u.hash, mono: true });
-        return {
-          kind: 'url_info',
-          title: 'URL Inspector',
-          badge: { text: u.protocol.replace(':', '').toUpperCase(), tone: 'muted' },
-          rows,
-          copyLabel: 'Copy Host',
-          copyValue: u.host,
-        };
-      }
+      const hasPort = Boolean(u.port);
+      const decodedPath = (() => {
+        try {
+          return decodeURIComponent(u.pathname);
+        } catch {
+          return u.pathname;
+        }
+      })();
+      const rows: SmartInspectionRow[] = [
+        { label: 'Host', value: u.hostname, mono: true },
+      ];
+      if (hasPort) rows.push({ label: 'Port', value: u.port, mono: true });
+      if (u.username) rows.push({ label: 'User', value: decodeURIComponent(u.username), mono: true });
+      if (hasPath) rows.push({ label: 'Path', value: decodedPath, mono: true });
+      if (hasHash) rows.push({ label: 'Fragment', value: u.hash, mono: true });
+      return {
+        kind: 'url_info',
+        title: 'URL Inspector',
+        badge: { text: u.protocol.replace(':', '').toUpperCase(), tone: 'muted' },
+        rows,
+        copyLabel: 'Copy Host',
+        copyValue: u.host,
+      };
     } catch {
       /* invalid URL */
     }
   }
 
+  // Standalone query string (e.g. `?foo=1&bar=hello%20world` or `a=1&b=2`)
+  if (/^\??[A-Za-z0-9_.~%-]+=[^&\s]*(?:&[A-Za-z0-9_.~%-]+=[^&\s]*)+$/.test(candidate)) {
+    try {
+      const params = new URLSearchParams(candidate.startsWith('?') ? candidate.slice(1) : candidate);
+      const entries = Array.from(params.entries());
+      if (entries.length >= 2) {
+        const obj: Record<string, string> = {};
+        for (const [k, v] of entries) obj[k] = v;
+        return {
+          kind: 'url_params',
+          title: `Query String (${entries.length})`,
+          rows: entries.slice(0, 10).map(([k, v]) => ({
+            label: k,
+            value: v || '(empty)',
+            mono: true,
+          })),
+          copyLabel: 'Copy as JSON',
+          copyValue: JSON.stringify(obj, null, 2),
+        };
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   // Percent-encoded string (at least 2 `%XX` triplets)
-  const pctMatches = trimmed.match(/%[0-9a-fA-F]{2}/g);
+  const pctMatches = candidate.match(/%[0-9a-fA-F]{2}/g);
   if (pctMatches && pctMatches.length >= 2) {
     try {
-      const decoded = decodeURIComponent(trimmed);
-      if (decoded !== trimmed && decoded.trim().length > 0) {
+      const decoded = decodeURIComponent(candidate);
+      if (decoded !== candidate && decoded.trim().length > 0) {
         return {
           kind: 'url_encoded',
           title: 'URL Decoded',
@@ -326,42 +512,87 @@ function toHexByte(n: number): string {
     .toUpperCase();
 }
 
+function parseAlpha(raw?: string): number {
+  if (!raw) return 1;
+  const trimmed = raw.trim();
+  if (trimmed.endsWith('%')) {
+    const pct = parseFloat(trimmed.slice(0, -1));
+    return Number.isFinite(pct) ? Math.max(0, Math.min(1, pct / 100)) : 1;
+  }
+  const num = parseFloat(trimmed);
+  return Number.isFinite(num) ? Math.max(0, Math.min(1, num)) : 1;
+}
+
 function tryInspectColor(trimmed: string): SmartInspection | null {
+  if (trimmed.length > 96 || trimmed.includes('\n')) return null;
+
+  // Allow CSS property declarations like `color: #5B7CFA;` or `--accent: rgb(47 111 235 / 80%);`
+  const cleaned = stripOuterQuotes(
+    trimmed
+      .replace(/^(?:--[a-z0-9-]+|[a-z-]+)\s*:\s*/i, '')
+      .replace(/;+\s*$/, ''),
+  );
+
   let r: number, g: number, b: number;
+  let alpha = 1;
   let inputKind: 'hex' | 'rgb' | 'hsl';
 
-  const hexMatch = trimmed.match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
-  const rgbMatch = trimmed.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*[\d.]+)?\s*\)$/i);
-  const hslMatch = trimmed.match(/^hsla?\(\s*(\d{1,3})\s*,\s*(\d{1,3})%\s*,\s*(\d{1,3})%(?:\s*,\s*[\d.]+)?\s*\)$/i);
+  const hexMatch = cleaned.match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/);
+  const rgbCommaMatch = cleaned.match(
+    /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*([\d.]+%?))?\s*\)$/i,
+  );
+  const rgbSpaceMatch = cleaned.match(
+    /^rgba?\(\s*(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})(?:\s*\/\s*([\d.]+%?))?\s*\)$/i,
+  );
+  const hslCommaMatch = cleaned.match(
+    /^hsla?\(\s*(\d{1,3})(?:deg)?\s*,\s*(\d{1,3})%\s*,\s*(\d{1,3})%(?:\s*,\s*([\d.]+%?))?\s*\)$/i,
+  );
+  const hslSpaceMatch = cleaned.match(
+    /^hsla?\(\s*(\d{1,3})(?:deg)?\s+(\d{1,3})%\s+(\d{1,3})%(?:\s*\/\s*([\d.]+%?))?\s*\)$/i,
+  );
 
   if (hexMatch) {
     inputKind = 'hex';
     const raw = hexMatch[1];
-    const full = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw;
-    r = parseInt(full.slice(0, 2), 16);
-    g = parseInt(full.slice(2, 4), 16);
-    b = parseInt(full.slice(4, 6), 16);
-  } else if (rgbMatch) {
+    if (raw.length === 3 || raw.length === 4) {
+      r = parseInt(raw[0] + raw[0], 16);
+      g = parseInt(raw[1] + raw[1], 16);
+      b = parseInt(raw[2] + raw[2], 16);
+      if (raw.length === 4) alpha = parseInt(raw[3] + raw[3], 16) / 255;
+    } else {
+      r = parseInt(raw.slice(0, 2), 16);
+      g = parseInt(raw.slice(2, 4), 16);
+      b = parseInt(raw.slice(4, 6), 16);
+      if (raw.length === 8) alpha = parseInt(raw.slice(6, 8), 16) / 255;
+    }
+  } else if (rgbCommaMatch || rgbSpaceMatch) {
     inputKind = 'rgb';
-    r = Number(rgbMatch[1]);
-    g = Number(rgbMatch[2]);
-    b = Number(rgbMatch[3]);
+    const m = (rgbCommaMatch || rgbSpaceMatch)!;
+    r = Number(m[1]);
+    g = Number(m[2]);
+    b = Number(m[3]);
     if (r > 255 || g > 255 || b > 255) return null;
-  } else if (hslMatch) {
+    alpha = parseAlpha(m[4]);
+  } else if (hslCommaMatch || hslSpaceMatch) {
     inputKind = 'hsl';
-    const h = Number(hslMatch[1]) % 360;
-    const s = Number(hslMatch[2]);
-    const l = Number(hslMatch[3]);
+    const m = (hslCommaMatch || hslSpaceMatch)!;
+    const h = Number(m[1]) % 360;
+    const s = Number(m[2]);
+    const l = Number(m[3]);
     if (s > 100 || l > 100) return null;
     [r, g, b] = hslToRgb(h, s, l);
+    alpha = parseAlpha(m[4]);
   } else {
     return null;
   }
 
-  const hex = `#${toHexByte(r)}${toHexByte(g)}${toHexByte(b)}`;
-  const rgb = `rgb(${r}, ${g}, ${b})`;
+  const hasAlpha = alpha < 0.999;
+  const alphaRounded = Math.round(alpha * 100) / 100;
+  const hexBase = `#${toHexByte(r)}${toHexByte(g)}${toHexByte(b)}`;
+  const hex = hasAlpha ? `${hexBase}${toHexByte(alpha * 255)}` : hexBase;
+  const rgb = hasAlpha ? `rgba(${r}, ${g}, ${b}, ${alphaRounded})` : `rgb(${r}, ${g}, ${b})`;
   const [h, s, l] = rgbToHsl(r, g, b);
-  const hsl = `hsl(${h}, ${s}%, ${l}%)`;
+  const hsl = hasAlpha ? `hsla(${h}, ${s}%, ${l}%, ${alphaRounded})` : `hsl(${h}, ${s}%, ${l}%)`;
 
   return {
     kind: 'color',
@@ -377,145 +608,420 @@ function tryInspectColor(trimmed: string): SmartInspection | null {
   };
 }
 
-function tryInspectUuid(trimmed: string, nowMs: number): SmartInspection | null {
-  const m = trimmed.match(
+const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+function tryInspectUuidOrUlid(trimmed: string, nowMs: number): SmartInspection | null {
+  if (trimmed.length > 64 || trimmed.includes('\n')) return null;
+  let clean = stripOuterQuotes(trimmed.replace(/[,;]+$/, ''));
+  if (/^urn:uuid:/i.test(clean)) clean = clean.slice(9);
+  if (clean.startsWith('{') && clean.endsWith('}')) clean = clean.slice(1, -1);
+
+  const m = clean.match(
     /^([0-9a-fA-F]{8})-([0-9a-fA-F]{4})-([1-8][0-9a-fA-F]{3})-([89abAB][0-9a-fA-F]{3})-([0-9a-fA-F]{12})$/,
   );
-  if (!m) return null;
-  const version = parseInt(m[3][0], 16);
-  const rows: SmartInspectionRow[] = [
-    { label: 'Version', value: `UUID v${version}`, mono: true },
-    { label: 'Compact', value: trimmed.replace(/-/g, '').toLowerCase(), mono: true },
-  ];
+  if (m) {
+    const version = parseInt(m[3][0], 16);
+    const compact = clean.replace(/-/g, '').toLowerCase();
+    const rows: SmartInspectionRow[] = [
+      { label: 'Version', value: `UUID v${version}`, mono: true },
+      { label: 'Compact', value: compact, mono: true },
+    ];
 
-  // UUIDv7 embeds a 48-bit big-endian Unix millisecond timestamp in the first 12 hex digits
-  if (version === 7) {
-    const hexTs = `${m[1]}${m[2]}`;
-    const epochMs = parseInt(hexTs, 16);
-    if (epochMs >= 1_000_000_000_000 && epochMs <= 4_102_444_800_000) {
+    if (version === 7) {
+      const hexTs = `${m[1]}${m[2]}`;
+      const epochMs = parseInt(hexTs, 16);
+      if (epochMs >= MIN_EPOCH_MS && epochMs <= MAX_EPOCH_MS) {
+        const d = new Date(epochMs);
+        rows.push({
+          label: 'Created',
+          value: `${d.toLocaleString()} (${formatRelativeDuration(epochMs - nowMs)})`,
+          mono: true,
+        });
+      }
+    }
+
+    return {
+      kind: 'uuid',
+      title: 'UUID Inspector',
+      badge: { text: `v${version}`, tone: 'muted' },
+      rows,
+      copyLabel: 'Copy Compact',
+      copyValue: compact,
+    };
+  }
+
+  // Crockford Base32 26-char ULID (first 10 chars encode a 48-bit Unix ms timestamp)
+  if (/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/.test(clean) && /[0-9]/.test(clean) && /[A-Z]/.test(clean)) {
+    let epochMs = 0;
+    for (let i = 0; i < 10; i++) {
+      const v = CROCKFORD.indexOf(clean[i]);
+      if (v < 0) return null;
+      epochMs = epochMs * 32 + v;
+    }
+    if (epochMs >= MIN_EPOCH_MS && epochMs <= MAX_EPOCH_MS) {
       const d = new Date(epochMs);
-      rows.push({
-        label: 'Created',
-        value: `${d.toLocaleString()} (${formatRelativeDuration(epochMs - nowMs)})`,
-        mono: true,
-      });
+      const iso = d.toISOString();
+      return {
+        kind: 'uuid',
+        title: 'ULID Inspector',
+        badge: { text: formatRelativeDuration(epochMs - nowMs), tone: 'muted' },
+        rows: [
+          { label: 'Created', value: d.toLocaleString(), mono: true },
+          { label: 'UTC ISO', value: iso, mono: true },
+          { label: 'Unix (ms)', value: String(epochMs), mono: true },
+        ],
+        copyLabel: 'Copy ISO',
+        copyValue: iso,
+      };
     }
   }
 
-  return {
-    kind: 'uuid',
-    title: 'UUID Inspector',
-    badge: { text: `v${version}`, tone: 'muted' },
-    rows,
-    copyLabel: 'Copy Compact',
-    copyValue: trimmed.replace(/-/g, '').toLowerCase(),
-  };
+  return null;
 }
 
-function describeCron(fields: string[]): string | null {
+const CRON_PRESETS: Record<string, string> = {
+  '@yearly': 'Once a year (Jan 1 at 00:00)',
+  '@annually': 'Once a year (Jan 1 at 00:00)',
+  '@monthly': 'Once a month (1st at 00:00)',
+  '@weekly': 'Once a week (Sunday at 00:00)',
+  '@daily': 'Daily at 00:00',
+  '@midnight': 'Daily at 00:00',
+  '@hourly': 'Hourly at :00',
+};
+
+function describeCron5(fields: string[], secPrefix?: string): string | null {
   const [min, hr, dom, mon, dow] = fields;
-  const validField = (f: string) => /^(\*|\d+(-\d+)?(,\d+(-\d+)?)*)(\/\d+)?$/.test(f);
-  if (!fields.every(validField)) return null;
+  const validNumField = (f: string) =>
+    /^(\*|\d+(-\d+)?(,\d+(-\d+)?)*)(\/\d+)?$/.test(f);
+  const validNameOrNumField = (f: string) =>
+    /^(\*|([0-9]{1,2}|[A-Z]{3})(-([0-9]{1,2}|[A-Z]{3}))?(,([0-9]{1,2}|[A-Z]{3})(-([0-9]{1,2}|[A-Z]{3}))?)*)(\/\d+)?$/i.test(f);
+
+  if (!validNumField(min) || !validNumField(hr) || !validNumField(dom)) return null;
+  if (!validNameOrNumField(mon) || !validNameOrNumField(dow)) return null;
+
+  const secNote = secPrefix && secPrefix !== '0' ? ` (sec ${secPrefix})` : '';
   if (min === '*' && hr === '*' && dom === '*' && mon === '*' && dow === '*') {
-    return 'Every minute';
+    return secPrefix?.startsWith('*/')
+      ? `Every ${secPrefix.slice(2)} seconds`
+      : `Every minute${secNote}`;
   }
   if (min.startsWith('*/') && hr === '*' && dom === '*' && mon === '*' && dow === '*') {
-    return `Every ${min.slice(2)} minutes`;
+    return `Every ${min.slice(2)} minutes${secNote}`;
   }
   if (/^\d+$/.test(min) && hr === '*' && dom === '*' && mon === '*' && dow === '*') {
-    return `Hourly at :${min.padStart(2, '0')}`;
+    return `Hourly at :${min.padStart(2, '0')}${secNote}`;
   }
   if (/^\d+$/.test(min) && /^\d+$/.test(hr) && dom === '*' && mon === '*') {
     const time = `${hr.padStart(2, '0')}:${min.padStart(2, '0')}`;
-    if (dow === '*') return `Daily at ${time}`;
-    if (dow === '1-5') return `Weekdays (Mon–Fri) at ${time}`;
-    if (dow === '0,6' || dow === '6,0') return `Weekends at ${time}`;
-    return `At ${time} on day-of-week ${dow}`;
+    const dowUpper = dow.toUpperCase();
+    if (dow === '*') return `Daily at ${time}${secNote}`;
+    if (dow === '1-5' || dowUpper === 'MON-FRI') return `Weekdays (Mon–Fri) at ${time}${secNote}`;
+    if (dow === '0,6' || dow === '6,0' || dowUpper === 'SAT,SUN' || dowUpper === 'SUN,SAT') {
+      return `Weekends at ${time}${secNote}`;
+    }
+    return `At ${time} on day-of-week ${dow}${secNote}`;
   }
-  return `min=${min}, hr=${hr}, dom=${dom}, mon=${mon}, dow=${dow}`;
+  return secPrefix
+    ? `sec=${secPrefix}, min=${min}, hr=${hr}, dom=${dom}, mon=${mon}, dow=${dow}`
+    : `min=${min}, hr=${hr}, dom=${dom}, mon=${mon}, dow=${dow}`;
 }
 
 function tryInspectCron(trimmed: string): SmartInspection | null {
-  if (trimmed.includes('\n')) return null;
-  const fields = trimmed.split(/\s+/);
-  if (fields.length !== 5) return null;
-  // Require at least one cron-specific token (*, /, -) so plain 5 numbers don't trigger
-  if (!/[*/,-]/.test(trimmed)) return null;
-  const summary = describeCron(fields);
+  if (trimmed.includes('\n') || trimmed.length > 80) return null;
+  const clean = stripOuterQuotes(trimmed);
+  const preset = CRON_PRESETS[clean.toLowerCase()];
+  if (preset) {
+    return {
+      kind: 'cron',
+      title: 'Cron Schedule',
+      badge: { text: 'preset', tone: 'muted' },
+      rows: [
+        { label: 'Schedule', value: preset },
+        { label: 'Expression', value: clean.toLowerCase(), mono: true },
+      ],
+      copyLabel: 'Copy Schedule',
+      copyValue: preset,
+    };
+  }
+
+  const fields = clean.split(/\s+/);
+  if (fields.length !== 5 && fields.length !== 6) return null;
+  // Require at least one cron-specific token (*, /, -) so plain numbers don't trigger
+  if (!/[*/,-]/.test(clean)) return null;
+
+  const is6 = fields.length === 6;
+  if (is6 && !/^(\*|\d+(-\d+)?(,\d+(-\d+)?)*)(\/\d+)?$/.test(fields[0])) return null;
+  const five = is6 ? fields.slice(1) : fields;
+  const summary = describeCron5(five, is6 ? fields[0] : undefined);
   if (!summary) return null;
+
   return {
     kind: 'cron',
     title: 'Cron Schedule',
-    badge: { text: '5-field', tone: 'muted' },
+    badge: { text: is6 ? '6-field' : '5-field', tone: 'muted' },
     rows: [
       { label: 'Schedule', value: summary },
-      { label: 'Fields', value: `min ${fields[0]} · hr ${fields[1]} · dom ${fields[2]} · mon ${fields[3]} · dow ${fields[4]}`, mono: true },
+      {
+        label: 'Fields',
+        value: is6
+          ? `sec ${fields[0]} · min ${five[0]} · hr ${five[1]} · dom ${five[2]} · mon ${five[3]} · dow ${five[4]}`
+          : `min ${five[0]} · hr ${five[1]} · dom ${five[2]} · mon ${five[3]} · dow ${five[4]}`,
+        mono: true,
+      },
     ],
     copyLabel: 'Copy Schedule',
     copyValue: summary,
   };
 }
 
-function tryInspectJson(trimmed: string): SmartInspection | null {
-  if (trimmed.length < 2 || trimmed.length > 16_000) return null;
-  const first = trimmed[0];
-  const last = trimmed[trimmed.length - 1];
-  if (!((first === '{' && last === '}') || (first === '[' && last === ']'))) {
-    return null;
+function intToIpv4(n: number): string {
+  return `${(n >>> 24) & 255}.${(n >>> 16) & 255}.${(n >>> 8) & 255}.${n & 255}`;
+}
+
+function tryInspectCidr(trimmed: string): SmartInspection | null {
+  if (trimmed.includes('\n') || trimmed.length > 24) return null;
+  const clean = stripOuterQuotes(trimmed);
+  const m = clean.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/);
+  if (!m) return null;
+  const octets = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
+  const prefix = Number(m[5]);
+  if (octets.some((o) => o > 255) || prefix > 32) return null;
+
+  const ipInt = (((octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]) >>> 0);
+  const mask = prefix === 0 ? 0 : ((0xffffffff << (32 - prefix)) >>> 0);
+  const network = (ipInt & mask) >>> 0;
+  const broadcast = (network | (~mask >>> 0)) >>> 0;
+  const totalHosts = Math.pow(2, 32 - prefix);
+  const usableHosts = prefix >= 31 ? totalHosts : Math.max(0, totalHosts - 2);
+  const firstUsable = prefix >= 31 ? network : (network + 1) >>> 0;
+  const lastUsable = prefix >= 31 ? broadcast : (broadcast - 1) >>> 0;
+  const rangeStr = `${intToIpv4(firstUsable)} – ${intToIpv4(lastUsable)}`;
+
+  return {
+    kind: 'cidr',
+    title: 'IPv4 CIDR Subnet',
+    badge: { text: `${usableHosts.toLocaleString()} usable`, tone: 'muted' },
+    rows: [
+      { label: 'Network', value: `${intToIpv4(network)}/${prefix}`, mono: true },
+      { label: 'Netmask', value: intToIpv4(mask), mono: true },
+      { label: 'Range', value: rangeStr, mono: true },
+      { label: 'Broadcast', value: intToIpv4(broadcast), mono: true },
+    ],
+    copyLabel: 'Copy Range',
+    copyValue: rangeStr,
+  };
+}
+
+function tryInspectCurl(trimmed: string): SmartInspection | null {
+  if (trimmed.length > 16_000) return null;
+  if (!/^curl(?:\.exe)?\s+/i.test(trimmed)) return null;
+
+  const flattened = trimmed.replace(/\\\r?\n\s*/g, ' ');
+  const urlMatch = flattened.match(/(?:^|\s)['"]?(https?:\/\/[^\s'"]+)['"]?/i);
+  if (!urlMatch) return null;
+
+  const url = urlMatch[1];
+  const methodMatch = flattened.match(/(?:^|\s)(?:-X|--request)\s+['"]?([A-Z]+)['"]?/i);
+  const hasData = /(?:^|\s)(?:-d|--data(?:-raw|-binary|-urlencode)?|--json)\s+/.test(flattened);
+  const method = methodMatch ? methodMatch[1].toUpperCase() : hasData ? 'POST' : 'GET';
+  const headerMatches = flattened.match(/(?:^|\s)(?:-H|--header)\s+(?:'[^']*'|"[^"]*")/g) || [];
+  const dataMatch = flattened.match(/(?:^|\s)(?:-d|--data(?:-raw|-binary)?|--json)\s+(?:'([^']*)'|"((?:\\.|[^"])*)")/);
+
+  const rows: SmartInspectionRow[] = [
+    { label: 'Method', value: method, mono: true },
+    { label: 'URL', value: url, mono: true },
+  ];
+  if (headerMatches.length > 0) {
+    rows.push({ label: 'Headers', value: `${headerMatches.length} header${headerMatches.length === 1 ? '' : 's'}`, mono: true });
   }
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (!parsed || typeof parsed !== 'object') return null;
-    const isArray = Array.isArray(parsed);
-    const count = isArray ? parsed.length : Object.keys(parsed).length;
-    const minified = JSON.stringify(parsed);
-    const pretty = JSON.stringify(parsed, null, 2);
-    const isAlreadyMinified = !trimmed.includes('\n');
-    const rows: SmartInspectionRow[] = [
-      {
-        label: 'Structure',
-        value: isArray ? `Array (${count} ${count === 1 ? 'item' : 'items'})` : `Object (${count} ${count === 1 ? 'key' : 'keys'})`,
-      },
-      { label: 'Minified size', value: `${minified.length.toLocaleString()} bytes`, mono: true },
-    ];
-    if (!isArray && count > 0) {
-      const keys = Object.keys(parsed).slice(0, 6).join(', ');
-      rows.push({
-        label: 'Top keys',
-        value: count > 6 ? `${keys} +${count - 6}` : keys,
-        mono: true,
-      });
+
+  let bodyBlock: string | undefined;
+  if (dataMatch) {
+    const rawBody = (dataMatch[1] ?? dataMatch[2] ?? '').replace(/\\"/g, '"').trim();
+    if (rawBody) {
+      try {
+        const parsed = JSON.parse(rawBody);
+        bodyBlock = JSON.stringify(parsed, null, 2);
+      } catch {
+        bodyBlock = rawBody.slice(0, 1200);
+      }
     }
-    return {
-      kind: 'json',
-      title: 'JSON Inspector',
-      badge: { text: 'Valid JSON', tone: 'ok' },
-      rows,
-      copyLabel: isAlreadyMinified ? 'Copy Pretty' : 'Copy Minified',
-      copyValue: isAlreadyMinified ? pretty : minified,
-    };
-  } catch {
+  }
+
+  return {
+    kind: 'curl',
+    title: 'cURL Command',
+    badge: { text: method, tone: 'ok' },
+    rows,
+    codeBlock: bodyBlock,
+    copyLabel: 'Copy URL',
+    copyValue: url,
+  };
+}
+
+function tryInspectJson(trimmed: string): SmartInspection | null {
+  if (trimmed.length < 2 || trimmed.length > MAX_INSPECT_CHARS) return null;
+
+  let candidate = trimmed;
+  let unwrappedFromFence = false;
+  // Support Markdown fenced JSON blocks (```json ... ``` or ``` ... ```)
+  const fenceMatch = trimmed.match(/^```(?:jsonc?|javascript|js)?\s*\r?\n([\s\S]+?)\r?\n```$/i);
+  if (fenceMatch) {
+    candidate = fenceMatch[1].trim();
+    unwrappedFromFence = true;
+  }
+
+  const first = candidate[0];
+  const last = candidate[candidate.length - 1];
+  let parsed: unknown;
+  let wasEscapedString = false;
+
+  if ((first === '{' && last === '}') || (first === '[' && last === ']')) {
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      return null;
+    }
+  } else if (first === '"' && last === '"' && candidate.includes('\\"')) {
+    // Escaped JSON string literal (e.g. `"{\"ok\":true}"`)
+    try {
+      const inner = JSON.parse(candidate);
+      if (typeof inner !== 'string') return null;
+      const innerTrim = inner.trim();
+      if (!((innerTrim.startsWith('{') && innerTrim.endsWith('}')) || (innerTrim.startsWith('[') && innerTrim.endsWith(']')))) {
+        return null;
+      }
+      parsed = JSON.parse(innerTrim);
+      wasEscapedString = true;
+    } catch {
+      return null;
+    }
+  } else {
     return null;
   }
+
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const isArray = Array.isArray(parsed);
+  const count = Array.isArray(parsed) ? parsed.length : Object.keys(parsed).length;
+  const minified = JSON.stringify(parsed);
+  const pretty = JSON.stringify(parsed, null, 2);
+  const isAlreadyMinified = wasEscapedString || unwrappedFromFence || !candidate.includes('\n');
+  const rows: SmartInspectionRow[] = [
+    {
+      label: 'Structure',
+      value: isArray
+        ? `Array (${count} ${count === 1 ? 'item' : 'items'})`
+        : `Object (${count} ${count === 1 ? 'key' : 'keys'})`,
+    },
+    { label: 'Minified size', value: `${minified.length.toLocaleString()} bytes`, mono: true },
+  ];
+  if (!isArray && count > 0) {
+    const keys = Object.keys(parsed).slice(0, 6).join(', ');
+    rows.push({
+      label: 'Top keys',
+      value: count > 6 ? `${keys} +${count - 6}` : keys,
+      mono: true,
+    });
+  }
+
+  return {
+    kind: 'json',
+    title: wasEscapedString ? 'Escaped JSON' : 'JSON Inspector',
+    badge: { text: 'Valid JSON', tone: 'ok' },
+    rows,
+    codeBlock: wasEscapedString ? pretty.slice(0, 2000) : undefined,
+    copyLabel: isAlreadyMinified ? 'Copy Pretty' : 'Copy Minified',
+    copyValue: isAlreadyMinified ? pretty : minified,
+  };
+}
+
+function tryInspectEnv(trimmed: string): SmartInspection | null {
+  if (!trimmed.includes('\n') || trimmed.length > 32_000) return null;
+  const lines = trimmed.split(/\r?\n/);
+  const entries: Array<[string, string]> = [];
+  let nonCommentCount = 0;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    nonCommentCount++;
+    const m = line.match(/^(?:export\s+)?([A-Z][A-Z0-9_]{1,63})\s*=\s*(.*)$/);
+    if (!m) continue;
+    entries.push([m[1], stripOuterQuotes(m[2])]);
+  }
+
+  if (entries.length < 2 || entries.length / Math.max(1, nonCommentCount) < 0.75) {
+    return null;
+  }
+
+  const obj: Record<string, string> = {};
+  for (const [k, v] of entries) obj[k] = v;
+  const keysPreview = entries.slice(0, 6).map(([k]) => k).join(', ');
+
+  return {
+    kind: 'env',
+    title: 'Environment Config',
+    badge: { text: `${entries.length} vars`, tone: 'muted' },
+    rows: [
+      {
+        label: 'Keys',
+        value: entries.length > 6 ? `${keysPreview} +${entries.length - 6}` : keysPreview,
+        mono: true,
+      },
+    ],
+    copyLabel: 'Copy as JSON',
+    copyValue: JSON.stringify(obj, null, 2),
+  };
 }
 
 function tryInspectBase64(trimmed: string): SmartInspection | null {
-  if (trimmed.length < 16 || trimmed.length > 8192) return null;
-  if (trimmed.includes('\n') || trimmed.includes(' ')) return null;
-  if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(trimmed)) return null;
+  if (trimmed.length > 16_384) return null;
+
+  let candidate = trimmed;
+  let labelPrefix = 'Base64 Decoded';
+
+  // `Authorization: Basic ...` or `Basic ...`
+  const basicMatch = trimmed.match(/^(?:Authorization\s*:\s*)?Basic\s+([A-Za-z0-9+/_-]+=*)$/i);
+  if (basicMatch) {
+    candidate = basicMatch[1];
+    labelPrefix = 'HTTP Basic Auth';
+  } else {
+    // `data:text/plain;base64,...` or `data:application/json;base64,...`
+    const dataUriMatch = trimmed.match(/^data:(?:text\/[a-z0-9.+-]+|application\/(?:json|xml|javascript))[^,]*;base64,([A-Za-z0-9+/=\r\n]+)$/i);
+    if (dataUriMatch) {
+      candidate = dataUriMatch[1].replace(/\s+/g, '');
+      labelPrefix = 'Data URI Base64';
+    } else if (trimmed.includes('\n')) {
+      // Multiline wrapped MIME Base64 (every non-empty line must be pure Base64 chars)
+      const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      if (lines.length < 2 || lines.some((l) => !/^[A-Za-z0-9+/]+={0,2}$/.test(l))) return null;
+      candidate = lines.join('');
+    }
+  }
+
+  const minLen = candidate.includes('=') || labelPrefix !== 'Base64 Decoded' ? 12 : 16;
+  if (candidate.length < minLen || candidate.length > 12_288) return null;
+  if (candidate.includes(' ')) return null;
+  if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(candidate)) return null;
   // Reject pure hex hashes (MD5/SHA-1/SHA-256) or UUIDs
-  if (/^[0-9a-fA-F]+$/.test(trimmed)) return null;
-  if (/^[0-9a-fA-F-]{36}$/.test(trimmed)) return null;
-  // Must carry standard padding OR be a clean multiple of 4
-  if (trimmed.length % 4 !== 0 && !trimmed.includes('=') && !trimmed.includes('-') && !trimmed.includes('_')) {
+  if (/^[0-9a-fA-F]+$/.test(candidate)) return null;
+  if (/^[0-9a-fA-F-]{36}$/.test(candidate)) return null;
+  // Must carry standard padding OR be a clean multiple of 4 (unless URL-safe unpadded)
+  if (
+    candidate.length % 4 !== 0 &&
+    !candidate.includes('=') &&
+    !candidate.includes('-') &&
+    !candidate.includes('_')
+  ) {
     return null;
   }
 
-  const decoded = decodeBase64UrlToUtf8(trimmed);
-  if (!decoded || decoded.length < 6) return null;
+  const decoded = decodeBase64UrlToUtf8(candidate);
+  if (!decoded || decoded.length < 5) return null;
 
   // Verify readability: >= 94% printable text & contains realistic text structure
-  // (space, JSON/XML punctuation, or URL scheme) so random base64 tokens/IDs don't false-positive.
+  // so random base64 tokens/IDs don't false-positive.
   let printable = 0;
   for (let i = 0; i < decoded.length; i++) {
     const code = decoded.charCodeAt(i);
@@ -540,12 +1046,72 @@ function tryInspectBase64(trimmed: string): SmartInspection | null {
 
   return {
     kind: 'base64',
-    title: 'Base64 Decoded',
+    title: labelPrefix,
     badge: { text: `${decoded.length} chars`, tone: 'muted' },
     codeBlock: display,
     copyLabel: 'Copy Decoded',
     copyValue: display,
   };
+}
+
+const HTML_ENTITY_MAP: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+};
+
+function tryInspectEscapedText(trimmed: string): SmartInspection | null {
+  if (trimmed.length > 8192) return null;
+
+  const unicodeMatches = trimmed.match(/\\u[0-9a-fA-F]{4}/g);
+  if (unicodeMatches && unicodeMatches.length >= 2) {
+    const decoded = trimmed.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) =>
+      String.fromCharCode(parseInt(hex, 16)),
+    );
+    if (decoded !== trimmed) {
+      return {
+        kind: 'escaped',
+        title: 'Unicode Unescaped',
+        badge: { text: `${unicodeMatches.length} escapes`, tone: 'muted' },
+        codeBlock: decoded,
+        copyLabel: 'Copy Decoded',
+        copyValue: decoded,
+      };
+    }
+  }
+
+  const entityMatches = trimmed.match(/&(?:#x[0-9a-fA-F]{2,6}|#\d{2,6}|amp|lt|gt|quot|apos|nbsp);/gi);
+  if (entityMatches && entityMatches.length >= 2) {
+    const decoded = trimmed.replace(
+      /&(?:#x([0-9a-fA-F]{2,6})|#(\d{2,6})|(amp|lt|gt|quot|apos|nbsp));/gi,
+      (full, hex, dec, named) => {
+        if (hex) {
+          const cp = parseInt(hex, 16);
+          return cp <= 0x10ffff ? String.fromCodePoint(cp) : full;
+        }
+        if (dec) {
+          const cp = parseInt(dec, 10);
+          return cp <= 0x10ffff ? String.fromCodePoint(cp) : full;
+        }
+        return HTML_ENTITY_MAP[String(named).toLowerCase()] ?? full;
+      },
+    );
+    if (decoded !== trimmed) {
+      return {
+        kind: 'escaped',
+        title: 'HTML Entities Decoded',
+        badge: { text: `${entityMatches.length} entities`, tone: 'muted' },
+        codeBlock: decoded,
+        copyLabel: 'Copy Decoded',
+        copyValue: decoded,
+      };
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -558,17 +1124,22 @@ export function inspectClipContent(
 ): SmartInspection | null {
   if (!text) return null;
   const trimmed = text.trim();
-  if (!trimmed || trimmed.length > 16_000) return null;
+  if (!trimmed || trimmed.length > MAX_INSPECT_CHARS) return null;
 
   return (
     tryInspectJwt(trimmed, nowMs) ||
     tryInspectTimestamp(trimmed, nowMs) ||
     tryInspectIsoDate(trimmed, nowMs) ||
     tryInspectColor(trimmed) ||
-    tryInspectUuid(trimmed, nowMs) ||
+    tryInspectUuidOrUlid(trimmed, nowMs) ||
+    tryInspectEmail(trimmed) ||
     tryInspectUrl(trimmed) ||
     tryInspectCron(trimmed) ||
+    tryInspectCidr(trimmed) ||
+    tryInspectCurl(trimmed) ||
     tryInspectJson(trimmed) ||
-    tryInspectBase64(trimmed)
+    tryInspectEnv(trimmed) ||
+    tryInspectBase64(trimmed) ||
+    tryInspectEscapedText(trimmed)
   );
 }
