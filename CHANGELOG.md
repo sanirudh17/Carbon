@@ -2,6 +2,24 @@
 
 All notable changes to [Carbon](https://github.com/sanirudh17/Carbon) are documented here.
 
+## [0.1.23] - 2026-11-22
+
+A focused reliability and UX release delivering universal text drag-and-drop across terminals, coding agents, Electron CLI hosts, and GPUI applications, distinct 3-mode Quick Overlay placement, reliable opt-in post-paste/post-drop deselection in web search bars, and native drag hot-path hardening.
+
+### Added
+
+- **Distinct Center, Caret, and Cursor Quick Overlay placement** — Restored all three distinct placement modes in `Settings -> Behavior` (`Center`, `Caret`, and `Cursor`), with independent geometry calculation so Caret anchors to the live text insertion point while Cursor anchors cleanly around the pointer.
+- **Universal text drag-and-drop fallback** — Extends native OLE text dragging (`text`, `code`, `link`, `email`, `rich_text`, and `color` clips) to terminal emulators, coding-agent TUIs (Claude Code, OpenCode, Codex), Electron CLI hosts (Orca, VS Code, Cursor, Windsurf, GOAT), and GPUI apps (Pebrel, Seek, Zed) whose `IDropTarget` rejects text or returns a phantom `DROPEFFECT_COPY` without reading text formats.
+- **Native OLE COPY drag cursor for fallback targets** — Loads and caches Windows' native `ole32.dll` COPY drag cursor (arrow with drag square and plus badge) over eligible fallback targets while keeping honest no-drop cursors over standalone web browsers' non-text zones, Desktop, Taskbar, and Carbon itself.
+
+### Fixed & Improved
+
+- **GPUI drag-and-drop reliability (Pebrel, Seek, Zed)** — Fixed three GPUI-specific issues: excluded GPUI (`Zed::Window`) windows from WebView2 out-of-process async `GetData` attribution so fast drags never skip text fallback; skipped `OpenClipboard()` in Carbon's clipboard watcher on Carbon's own paste sequence (`LAST_PASTE_SEQ`) so Carbon never contends with GPUI's zero-retry `OpenClipboard(None)`; and added immediate foreground handoff plus GPUI-aware drop-point activation (28px top caption margin for compact search bars like Seek) and focus settle timing.
+- **Quick Overlay dismissal on external drops** — Clears `NATIVE_DRAG_ACTIVE` before dismissing Quick Overlay cleanly via `hide_overlay_window_on_blur` on all external drops (text, images, and files), preventing the overlay from staying open or swallowing keys when dropping into GPUI apps whose `IDropTarget::Drop` does not call `SetForegroundWindow`.
+- **Browser post-paste and post-drop deselect** — Added `KEYEVENTF_EXTENDEDKEY` on `VK_RIGHT`/`VK_LEFT`, wired opt-in `paste_deselect_after` into native OLE text drops, expanded modern browser matching (`comet.exe`, `dia.exe`, `zen.exe`, `arc.exe`, etc.), and added two-pass UI Automation selection verification (`+120ms`, `+160ms`) with proper `CoUninitialize` cleanup so slow SPA inputs such as the YouTube search bar never stay highlighted.
+- **Target-native paste chords & split-pane focus** — Uses `Ctrl+V` for Windows Terminal, Conhost, GPUI, and Electron/Chromium hosts; `Ctrl+Shift+V` for WezTerm/Alacritty/Kitty/Hyper/Tabby/Rio/Ghostty; and `Shift+Insert` for Mintty/PuTTY/ConEmu, with spaced drop-point pane focusing for multi-pane terminals and agent hosts.
+- **Performance & handle-leak hardening** — Replaced leaked `OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ)` calls in `get_window_exe_name` with `PROCESS_QUERY_LIMITED_INFORMATION` + `QueryFullProcessImageNameW` + RAII `CloseHandle`, added a lock-free per-drag root-HWND cache in `GiveFeedback` to eliminate repeated syscalls per mouse move, and made `LAST_PASTE_SEQ` lock handling poison-safe.
+
 ## [0.1.22] - 2026-11-22
 
 A major polish and feature release introducing Caret-anchored Quick Overlay placement, an interactive Reorderable Paste Stack Drawer, an opt-in universal Smart Content Inspector, TinyCast/Linear-inspired frosted-glass refinements, smoother content search, and zero-warning native performance hardening.
