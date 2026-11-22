@@ -145,6 +145,50 @@ fn escape_preview(bytes: &[u8]) -> String {
     s
 }
 
+fn record_served_format(cf: u16) {
+    if let Ok(mut s) = SERVED_FORMATS.lock() {
+        if !s.contains(&cf) {
+            s.push(cf);
+        }
+    }
+}
+
+/// True when the OLE drop target actually rendered a text payload format
+/// (`CF_UNICODETEXT`, `CF_TEXT`, or `HTML Format`) via `GetData` / `GetDataHere`.
+/// Metadata formats like `Preferred DropEffect` (often read by Windows'
+/// `IDropTargetHelper` even when a target only supports `CF_HDROP`, such as
+/// GPUI apps like Pebrel and Zed) do NOT count as text consumption.
+fn served_any_text_payload(served: &[u16], cf_html: u32) -> bool {
+    served.iter().any(|&cf| {
+        let cf32 = cf as u32;
+        cf32 == CF_UNICODETEXT || cf32 == CF_TEXT || (cf_html != 0 && cf32 == cf_html)
+    })
+}
+
+/// Decides whether Carbon's universal text drop-fallback should run after
+/// `DoDragDrop` finishes. Triggers when the user intentionally released the
+/// mouse (not Escape-cancelled) over an eligible target and EITHER:
+/// 1. The target explicitly rejected text (`effect == DROPEFFECT_NONE`), OR
+/// 2. The target returned a "phantom COPY" (`hr == DRAGDROP_S_DROP`,
+///    `effect != DROPEFFECT_NONE`) without ever calling `GetData`/`GetDataHere`
+///    for any text payload format — the exact behavior of GPUI's Windows
+///    `IDropTarget` (`Zed::Window`, used by Pebrel, Zed, and peer GPUI apps),
+///    whose `DragOver`/`Drop` unconditionally set `DROPEFFECT_COPY` while only
+///    inspecting `CF_HDROP` in `DragEnter`.
+fn should_trigger_text_drop_fallback(
+    is_text_payload: bool,
+    hr: HRESULT,
+    effect: DROPEFFECT,
+    served_text_payload: bool,
+    released_by_mouse_up: bool,
+    cancelled_by_escape: bool,
+) -> bool {
+    if !is_text_payload || !released_by_mouse_up || cancelled_by_escape {
+        return false;
+    }
+    effect == DROPEFFECT_NONE || (hr == DRAGDROP_S_DROP && !served_text_payload)
+}
+
 /// v26-F2: serve-time structural proof. Unicode mediums must be even-
 /// length with a trailing double NUL (astral-plane safe: checks units,
 /// not chars); HTML mediums must re-validate. Mismatches log VIOLATIONs
@@ -188,11 +232,7 @@ fn serve_proof(cf: u32, cf_html: u32, bytes: &[u8], h: HGLOBAL) {
             "[NATIVE_DRAG] GetData served cf={cf} tymed=1 (fresh hGlobal)"
         ));
     }
-    if let Ok(mut s) = SERVED_FORMATS.lock() {
-        if !s.contains(&(cf as u16)) {
-            s.push(cf as u16);
-        }
-    }
+    record_served_format(cf as u16);
 }
 
 fn hr_failed(hr: HRESULT) -> bool {
@@ -871,7 +911,7 @@ unsafe extern "system" fn src_feedback(
                 let mut pt = POINT::default();
                 if unsafe { GetCursorPos(&mut pt) }.is_ok() {
                     let hit = unsafe { WindowFromPoint(pt) };
-                    if crate::paste::is_terminal_or_agent_host_window(hit) {
+                    if crate::paste::should_use_text_drop_fallback(hit) {
                         if let Ok(cur) = unsafe { LoadCursorW(None, IDC_ARROW) } {
                             unsafe {
                                 SetCursor(cur);
@@ -1087,6 +1127,7 @@ unsafe extern "system" fn data_getdata_here(
                     }
                     std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
                     let _ = GlobalUnlock(med.u.hGlobal);
+                    record_served_format(fmt.cfFormat);
                     S_OK
                 }
             }
@@ -1467,26 +1508,30 @@ unsafe fn run_modal_drag(
             drag_log("[NATIVE_DRAG] staging retired to deferred cleanup (R7)");
         }
         // v26-F2: drop-result line — formats the target actually rendered.
-        let rendered = SERVED_FORMATS
+        let served_snapshot = SERVED_FORMATS
             .lock()
-            .map(|s| {
-                let mut v = s.clone();
-                v.sort_unstable();
-                v.iter()
-                    .map(|cf| format!("{}({})", format_name(*cf as u32), cf))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
+            .map(|s| s.clone())
             .unwrap_or_default();
+        let served_text_payload = served_any_text_payload(&served_snapshot, cf_html);
+        let rendered = {
+            let mut v = served_snapshot;
+            v.sort_unstable();
+            v.iter()
+                .map(|cf| format!("{}({})", format_name(*cf as u32), cf))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         drag_log(&format!(
-            "[NATIVE_DRAG] DoDragDrop returned hr={hr:?} effect={} rendered=[{}]",
+            "[NATIVE_DRAG] DoDragDrop returned hr={hr:?} effect={} rendered=[{}] served_text={served_text_payload}",
             effect_name(effect.0),
             rendered,
         ));
         if hr_failed(hr) {
             return Err(format!("native drag failed: {hr:?}"));
         }
-        if hr == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE {
+        let genuine_ole_drop =
+            hr == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE && (!is_text_payload || served_text_payload);
+        if genuine_ole_drop {
             if deselect_after && drop_root_raw != 0 {
                 crate::paste::maybe_deselect_after_drop(
                     deselect_after,
@@ -1497,19 +1542,30 @@ unsafe fn run_modal_drag(
             return Ok(effect_name(effect.0).to_string());
         }
         // Universal text drop-fallback: when the user intentionally released
-        // the mouse over an external app (e.g. Windows Terminal / Claude Code
-        // TUI / xterm.js / non-OLE input) that rejected CF_UNICODETEXT with
-        // DROPEFFECT_NONE, deliver via clipboard + target-appropriate paste.
-        if is_text_payload
-            && effect == DROPEFFECT_NONE
-            && released_by_mouse_up.load(Ordering::SeqCst)
-            && !cancelled_by_escape.load(Ordering::SeqCst)
-            && drop_root_raw != 0
+        // the mouse over an external app that EITHER rejected CF_UNICODETEXT
+        // with DROPEFFECT_NONE (e.g. Windows Terminal, Orca, OpenCode, Codex)
+        // OR returned a phantom DROPEFFECT_COPY without ever rendering any
+        // text payload format (e.g. GPUI apps like Pebrel and Zed whose
+        // IDropTarget::DragOver/Drop unconditionally set DROPEFFECT_COPY while
+        // only consuming CF_HDROP), deliver via clipboard + target paste chord.
+        if should_trigger_text_drop_fallback(
+            is_text_payload,
+            hr,
+            effect,
+            served_text_payload,
+            released_by_mouse_up.load(Ordering::SeqCst),
+            cancelled_by_escape.load(Ordering::SeqCst),
+        ) && drop_root_raw != 0
         {
             if let Some(clip_item) = fallback_item {
                 if crate::paste::should_use_text_drop_fallback(HWND(drop_root_raw as *mut _)) {
+                    let reason = if effect == DROPEFFECT_NONE {
+                        "DROPEFFECT_NONE"
+                    } else {
+                        "phantom COPY (0 text payload formats rendered)"
+                    };
                     drag_log(&format!(
-                        "[NATIVE_DRAG] OLE target 0x{:X} returned DROPEFFECT_NONE on release — invoking universal text drop-fallback",
+                        "[NATIVE_DRAG] OLE target 0x{:X} returned {reason} on release — invoking universal text drop-fallback",
                         drop_root_raw as usize
                     ));
                     crate::paste::deliver_text_drop_fallback(
@@ -2348,5 +2404,77 @@ mod conformance_tests {
         let id = register_format("Preferred DropEffect");
         assert_eq!(format_name(id), "Preferred DropEffect");
         assert_eq!(format_name(0xC001), "cf=49153");
+    }
+
+    #[test]
+    fn served_any_text_payload_ignores_metadata_only_reads() {
+        let cf_html = 0xC100u32;
+        let cf_drop_effect = 0xC101u16;
+        // Empty or Preferred DropEffect only (e.g. GPUI IDropTargetHelper) is NOT text consumption.
+        assert!(!served_any_text_payload(&[], cf_html));
+        assert!(!served_any_text_payload(&[cf_drop_effect], cf_html));
+        assert!(!served_any_text_payload(&[CF_HDROP as u16, cf_drop_effect], cf_html));
+        // Actual text formats count as consumed.
+        assert!(served_any_text_payload(&[CF_UNICODETEXT as u16], cf_html));
+        assert!(served_any_text_payload(&[CF_TEXT as u16], cf_html));
+        assert!(served_any_text_payload(&[cf_html as u16], cf_html));
+        assert!(served_any_text_payload(&[cf_drop_effect, CF_UNICODETEXT as u16], cf_html));
+    }
+
+    #[test]
+    fn phantom_copy_triggers_text_drop_fallback_while_real_copy_does_not() {
+        // GPUI (Pebrel, Zed, etc.): DRAGDROP_S_DROP + DROPEFFECT_COPY with 0 text formats served -> fallback!
+        assert!(should_trigger_text_drop_fallback(
+            true,
+            DRAGDROP_S_DROP,
+            DROPEFFECT_COPY,
+            false,
+            true,
+            false,
+        ));
+        // Genuine OLE target (Notepad, Chrome input, VS Code editor): text was served -> NO fallback!
+        assert!(!should_trigger_text_drop_fallback(
+            true,
+            DRAGDROP_S_DROP,
+            DROPEFFECT_COPY,
+            true,
+            true,
+            false,
+        ));
+        // Explicit DROPEFFECT_NONE on mouse release (Windows Terminal, Orca, OpenCode, etc.) -> fallback!
+        assert!(should_trigger_text_drop_fallback(
+            true,
+            DRAGDROP_S_CANCEL,
+            DROPEFFECT_NONE,
+            false,
+            true,
+            false,
+        ));
+        // Escape-cancelled or mouse-not-released -> NEVER fallback!
+        assert!(!should_trigger_text_drop_fallback(
+            true,
+            DRAGDROP_S_DROP,
+            DROPEFFECT_COPY,
+            false,
+            true,
+            true,
+        ));
+        assert!(!should_trigger_text_drop_fallback(
+            true,
+            DRAGDROP_S_DROP,
+            DROPEFFECT_COPY,
+            false,
+            false,
+            false,
+        ));
+        // Non-text (image/file HDROP) drags -> NEVER text fallback!
+        assert!(!should_trigger_text_drop_fallback(
+            false,
+            DRAGDROP_S_DROP,
+            DROPEFFECT_COPY,
+            false,
+            true,
+            false,
+        ));
     }
 }

@@ -232,9 +232,18 @@ test('deselect after paste and drag-drop uses KEYEVENTF_EXTENDEDKEY, web-class m
   );
   assert.ok(
     dragRs.includes('crate::paste::deliver_text_drop_fallback') &&
-      dragRs.includes('is_terminal_or_agent_host_window') &&
-      dragRs.includes('should_use_text_drop_fallback') &&
+      dragRs.includes('crate::paste::should_use_text_drop_fallback(hit)') &&
+      dragRs.includes('crate::paste::should_use_text_drop_fallback(HWND(drop_root_raw as *mut _))') &&
+      dragRs.includes('served_any_text_payload') &&
+      dragRs.includes('should_trigger_text_drop_fallback') &&
       dragRs.includes('released_by_mouse_up'),
-    'native_drag.rs must provide universal text drop-fallback for terminals/coding agents without hijacking image-only browser zones'
+    'native_drag.rs must use should_use_text_drop_fallback for BOTH cursor feedback and drop delivery, and detect GPUI phantom-COPY drops with zero rendered text formats'
+  );
+  assert.ok(
+    pasteRs.includes('fn is_gpui_window_class') &&
+      pasteRs.includes('"Zed::Window"') &&
+      pasteRs.includes('"pebrel.exe"') &&
+      pasteRs.includes('should_click_drop_point_for_fallback'),
+    'paste.rs must recognize GPUI (Zed::Window) and Pebrel for drop-point pane focus'
   );
 });

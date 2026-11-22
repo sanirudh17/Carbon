@@ -153,6 +153,12 @@ fn is_terminal_window(hwnd: HWND) -> bool {
             "conemu64.exe",
             "conemuc64.exe",
             "wsl.exe",
+            "pebrel.exe",
+            "warp.exe",
+            "hyper.exe",
+            "tabby.exe",
+            "rio.exe",
+            "ghostty.exe",
         ];
         if terminal_exes.iter().any(|name| *name == exe_lower) {
             return true;
@@ -1927,7 +1933,24 @@ mod tests {
         assert!(is_external_drop_fallback_class("CASCADIA_HOSTING_WINDOW_CLASS"));
         assert!(is_external_drop_fallback_class("ConsoleWindowClass"));
         assert!(is_external_drop_fallback_class("Chrome_WidgetWin_1"));
+        assert!(is_external_drop_fallback_class("Zed::Window"));
         assert!(is_external_drop_fallback_class("Notepad"));
+    }
+
+    #[test]
+    fn gpui_window_class_matches_zed_and_pebrel_family() {
+        assert!(is_gpui_window_class("Zed::Window"));
+        assert!(is_gpui_window_class("zed::window"));
+        assert!(!is_gpui_window_class("Chrome_WidgetWin_1"));
+        assert!(!is_gpui_window_class("CASCADIA_HOSTING_WINDOW_CLASS"));
+        assert_eq!(
+            terminal_paste_chord_for_class("Zed::Window", Some("pebrel.exe")),
+            PasteChord::CtrlV
+        );
+        assert_eq!(
+            terminal_paste_chord_for_class("Chrome_WidgetWin_1", Some("Orca.exe")),
+            PasteChord::CtrlV
+        );
     }
 
     #[test]
@@ -1938,6 +1961,8 @@ mod tests {
         assert!(is_known_web_browser_exe("zen.exe"));
         assert!(is_known_web_browser_exe("Arc.exe"));
         assert!(!is_known_web_browser_exe("WindowsTerminal.exe"));
+        assert!(!is_known_web_browser_exe("pebrel.exe"));
+        assert!(!is_known_web_browser_exe("Orca.exe"));
         assert!(!is_known_web_browser_exe("notepad.exe"));
     }
 }
@@ -3134,6 +3159,24 @@ pub(crate) fn is_external_drop_fallback_window(hwnd: HWND) -> bool {
     }
 }
 
+/// True when the top-level window class belongs to a GPUI application on
+/// Windows (e.g. Pebrel, Zed, and peer GPUI apps, which all register
+/// `Zed::Window`).
+pub(crate) fn is_gpui_window_class(class: &str) -> bool {
+    class.eq_ignore_ascii_case("Zed::Window")
+}
+
+fn is_gpui_window(hwnd: HWND) -> bool {
+    is_gpui_window_class(&get_window_class_name(hwnd))
+}
+
+/// True when `deliver_text_drop_fallback` should click at the drop coordinates
+/// inside the target body before sending the paste chord, ensuring the exact
+/// terminal split pane or GPUI pane/input under the cursor owns keyboard focus.
+fn should_click_drop_point_for_fallback(hwnd: HWND) -> bool {
+    is_terminal_window(hwnd) || is_gpui_window(hwnd)
+}
+
 /// True when `hwnd` is a terminal emulator or coding-agent / IDE host where
 /// `GiveFeedback` should replace OLE's 🚫 no-drop circle with a clean pointer
 /// during text drags (while leaving image-only browser drop zones untouched).
@@ -3145,7 +3188,7 @@ pub(crate) fn is_terminal_or_agent_host_window(hwnd: HWND) -> bool {
         let r = GetAncestor(hwnd, GA_ROOT);
         if r.0.is_null() { hwnd } else { r }
     };
-    if is_terminal_window(root) {
+    if is_terminal_window(root) || is_gpui_window(root) {
         return true;
     }
     if let Some(exe) = get_window_exe_name(root) {
@@ -3157,6 +3200,8 @@ pub(crate) fn is_terminal_or_agent_host_window(hwnd: HWND) -> bool {
                 | "cursor.exe"
                 | "windsurf.exe"
                 | "zed.exe"
+                | "pebrel.exe"
+                | "orca.exe"
                 | "warp.exe"
                 | "hyper.exe"
                 | "tabby.exe"
@@ -3247,11 +3292,11 @@ pub(crate) fn deliver_text_drop_fallback(
         }
         thread::sleep(Duration::from_millis(60));
 
-        // For split-pane terminal emulators, focus the exact pane under the
-        // drop point (strictly inside the terminal body, away from title/tabs)
-        // so dropping onto an inactive OpenCode / Codex / Claude Code pane
-        // lands in the dropped pane rather than an unrelated split.
-        if is_terminal_window(target) {
+        // For split-pane terminal emulators and GPUI windows (Pebrel, Zed, etc.),
+        // focus the exact pane under the drop point (strictly inside the body,
+        // away from title/tabs) so dropping onto an inactive pane lands in the
+        // dropped pane rather than an unrelated split or unfocused chrome.
+        if should_click_drop_point_for_fallback(target) {
             if let Some((dx, dy)) = drop_pt {
                 let mut rect = RECT::default();
                 if unsafe { GetWindowRect(target, &mut rect) }.is_ok()
